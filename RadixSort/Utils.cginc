@@ -1,12 +1,6 @@
 #ifndef RADIX_SORT_UTILS_CGINC
 #define RADIX_SORT_UTILS_CGINC
 
-uint pcg(uint v) {
-    uint state = v * 747796405u + 2891336453u;
-    uint word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
-    return (word >> 22u) ^ word;
-}
-
 uint InterleaveWithZero(uint word) {
     word = (word ^ (word << 8)) & 0x00ff00ff;
     word = (word ^ (word << 4)) & 0x0f0f0f0f;

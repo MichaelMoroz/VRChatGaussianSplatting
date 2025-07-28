@@ -1,10 +1,16 @@
 #include "../RadixSort/Utils.cginc"
+#include "Random.cginc"
+#include "Packing.cginc"
+#include "Quaternion.cginc"
 
-Texture2D _GS_Positions, _GS_Scales, _GS_Rotations, _GS_Colors;
+Texture2D<float4> _GS_PackedPositions;
+Texture2D<float4> _GS_PackedColors;
+float4 _GS_PackedPositions_TexelSize;
+float4 _GS_PackedColors_TexelSize;
+
 Texture2DArray<float> _GS_RenderOrder;
 Texture2DArray<float> _GS_RenderOrderPrecomputed;
-Texture2D<float> _GS_RenderOrderMirror;
-float4 _GS_Positions_TexelSize;
+//Texture2D<float> _GS_RenderOrderMirror;
 float4 _GS_RenderOrder_TexelSize;
 float4 _GS_RenderOrderPrecomputed_TexelSize;
 float _VRChatCameraMode;
@@ -23,6 +29,7 @@ float _ScaleCutoff;
 float2 _MinMaxSortDistance;
 int _SplatCount;
 int _ActualSplatCount;
+int _ActualSplatCountSqrt;
 int _SplatOffset;
 
 float3 _OKLCHShift;
@@ -94,29 +101,60 @@ float3 shift_color(float3 rgb)
     return pow(rgb, 1.0 / _Gamma);
 }
 
+struct Gaussian {
+    float3 p;
+    float3 s;
+    float4 q;
+};
+
 struct SplatData {
-    float3 mean;
-    float3 scale;
-    float4 quat;
+    Gaussian g;
     float4 color;
     uint id; // for debugging purposes
     bool valid;
 };
 
-SplatData LoadSplatData(uint id) {
-    uint2 coord = uint2(id % uint(_GS_Positions_TexelSize.z), id / uint(_GS_Positions_TexelSize.z));
+uint4 PackGaussian(Gaussian g) {
+    uint4 data;
+    data.xy = packF3U2(g.p);
+    data.z = packF3U1(g.s);
+    data.w = packF3U1(quaternionToAxisAngle(g.q));
+    return data;
+}
 
-    SplatData o;
-    o.mean = _GS_Positions[coord].xyz;
-    // Without a low pass filter some splats can look too "thin", so we try to correct for this.
-    // Only necessary if splats are trained without mip-splatting.
-    o.scale = max(exp2(_Log2MinScale), _GS_Scales[coord].xyz);
-    o.quat = normalize(lerp(-1.0, 1.0, _GS_Rotations[coord]));
-    o.color = _GS_Colors[coord]; // convert to linear space
-    o.color.rgb = shift_color(o.color.rgb) * _Exposure; // apply color shift
-    o.color.a *= _Opacity;
+Gaussian UnpackGaussian(uint4 data) {
+    Gaussian o;
+    o.p = unpackF3U2(data.xy);
+    o.s = unpackF3U1(data.z);
+    o.q = axisAngleToQuaternion(unpackF3U1(data.w));
     return o;
 }
+
+SplatData LoadPackedSplatData(uint id) {
+    uint2 coord = uint2(id % uint(_GS_PackedPositions_TexelSize.z), id / uint(_GS_PackedPositions_TexelSize.z));
+
+    SplatData o;
+    o.g = UnpackGaussian(asuint(_GS_PackedPositions[coord]));
+    o.color = _GS_PackedColors[coord];
+    o.id = id; // store the original ID for debugging purposes
+    o.valid = true; // packed data is always valid
+    return o;
+}
+
+// SplatData LoadSplatData(uint id) {
+//     uint2 coord = uint2(id % uint(_GS_Positions_TexelSize.z), id / uint(_GS_Positions_TexelSize.z));
+
+//     SplatData o;
+//     o.mean = _GS_Positions[coord].xyz;
+//     // Without a low pass filter some splats can look too "thin", so we try to correct for this.
+//     // Only necessary if splats are trained without mip-splatting.
+//     o.scale = max(exp2(_Log2MinScale), _GS_Scales[coord].xyz);
+//     o.quat = normalize(lerp(-1.0, 1.0, _GS_Rotations[coord]));
+//     o.color = _GS_Colors[coord]; // convert to linear space
+//     o.color.rgb = shift_color(o.color.rgb) * _Exposure; // apply color shift
+//     o.color.a *= _Opacity;
+//     return o;
+// }
 
 int GetPrecomputedRenderOrderIndex(uint id, float3 cam_dir) {
     float3 dirs[10] = {
@@ -143,7 +181,7 @@ int GetPrecomputedRenderOrderIndex(uint id, float3 cam_dir) {
 }
 
 SplatData LoadSplatDataRenderOrder(uint id) {
-    bool validOrder = _GS_RenderOrder_TexelSize.z >= _GS_Positions_TexelSize.z;
+    bool validOrder = _GS_RenderOrder_TexelSize.z >= _GS_PackedPositions_TexelSize.z; 
     uint reordered_id = id;
     bool valid = true;
     if(validOrder) { // if valid order texture
@@ -159,7 +197,7 @@ SplatData LoadSplatDataRenderOrder(uint id) {
     } else {
         reordered_id = pcg(reordered_id) % _ActualSplatCount; // randomize order for alpha blending to somewhat work
     }
-    SplatData data = LoadSplatData(reordered_id);
+    SplatData data = LoadPackedSplatData(reordered_id);
     data.id = reordered_id; // store the original ID for debugging purposes
     data.valid = valid;
     return data;
@@ -167,7 +205,7 @@ SplatData LoadSplatDataRenderOrder(uint id) {
 
 SplatData LoadSplatDataPrecomputedOrder(uint id, float3 cam_dir) {
     int precomputedIndex = GetPrecomputedRenderOrderIndex(id, cam_dir);
-    SplatData data = LoadSplatData(precomputedIndex);
+    SplatData data = LoadPackedSplatData(precomputedIndex);
     data.id = precomputedIndex; // store the original ID for debugging purposes
     data.valid = true; // precomputed order is always valid
     return data;

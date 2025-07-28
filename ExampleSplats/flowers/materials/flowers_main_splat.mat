@@ -23,12 +23,12 @@ Material:
   m_SavedProperties:
     serializedVersion: 3
     m_TexEnvs:
-    - _GS_Colors:
-        m_Texture: {fileID: 2800000, guid: 3e0b330374aec274c88dcfea9b99b13a, type: 2}
+    - _GS_PackedColors:
+        m_Texture: {fileID: 2800000, guid: 41fdeccf9b184b842ae0fb5c1219d1bb, type: 2}
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
-    - _GS_Positions:
-        m_Texture: {fileID: 2800000, guid: 0dbd70be03d7c77448b1b73ca4849760, type: 2}
+    - _GS_PackedPositions:
+        m_Texture: {fileID: 2800000, guid: 7c43355cedd8c4447902e5a5646f1676, type: 2}
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
     - _GS_RenderOrder:
@@ -41,14 +41,6 @@ Material:
         m_Offset: {x: 0, y: 0}
     - _GS_RenderOrderPrecomputed:
         m_Texture: {fileID: 0}
-        m_Scale: {x: 1, y: 1}
-        m_Offset: {x: 0, y: 0}
-    - _GS_Rotations:
-        m_Texture: {fileID: 2800000, guid: c0dc0b11024d3734dac581217badb704, type: 2}
-        m_Scale: {x: 1, y: 1}
-        m_Offset: {x: 0, y: 0}
-    - _GS_Scales:
-        m_Texture: {fileID: 2800000, guid: c688a0fd7cceb914e959687d49679617, type: 2}
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
     m_Ints:

@@ -61,9 +61,15 @@ void geo(point v2g input[1], inout TriangleStream<g2f> triStream, uint instanceI
     SplatData splat = LoadSplatDataRenderOrder(id);
     #endif
 
-    if (!splat.valid || (splat.color.a < _AlphaCutoff) || any(splat.scale > _ScaleCutoff)) return; 
+    splat.color.rgb = shift_color(splat.color.rgb) * _Exposure; // apply color shift
+    splat.color.a *= _Opacity; // apply opacity
+    if(all(splat.g.s > 0.0)) splat.g.s = max(exp2(_Log2MinScale), splat.g.s); // ensure scale is not too small
 
-    float3 splatWorldPos = mul(unity_ObjectToWorld, float4(splat.mean, 1)).xyz;
+    if (!splat.valid || (splat.color.a < _AlphaCutoff) || any(splat.g.s > _ScaleCutoff) || any(splat.g.s == 0.0)) {
+        return; // skip invalid splats
+    }
+
+    float3 splatWorldPos = mul(unity_ObjectToWorld, float4(splat.g.p, 1)).xyz;
     float cameraDistance = length(splatWorldPos - _WorldSpaceCameraPos);
     if (_MinMaxSortDistance.x != _MinMaxSortDistance.y  && (cameraDistance < _MinMaxSortDistance.x || cameraDistance > _MinMaxSortDistance.y)) {
         return; // skip splats outside of the sorting distance range
@@ -78,11 +84,15 @@ void geo(point v2g input[1], inout TriangleStream<g2f> triStream, uint instanceI
     #ifdef _FAKE_SRGB
         o.color.rgb = GammaToLinearSpace(o.color.rgb);
     #endif
-    float scale_max = max(splat.scale.x, max(splat.scale.y, splat.scale.z));
-    float3 clamped_scale = clamp(splat.scale, scale_max * _ThinThreshold, scale_max);
+    float scale_max = max(splat.g.s.x, max(splat.g.s.y, splat.g.s.z));
+    float3 clamped_scale = clamp(splat.g.s, scale_max * _ThinThreshold, scale_max);
 
     // Project the ellipsoid onto the screen
-    Ellipse ell = GetProjectedEllipsoid(splat.mean, 2.0 * clamped_scale, splat.quat);
+    Gaussian clamped;
+    clamped.p = splat.g.p;
+    clamped.s = 2.0 * clamped_scale;
+    clamped.q = splat.g.q;
+    Ellipse ell = GetProjectedEllipsoid(clamped);
 
     if(any(ell.size > 1.75)) {
         return;

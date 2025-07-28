@@ -1,26 +1,5 @@
 #include "ExFloat.cginc"
-
-// rotate vector v by quaternion q
-float3 q_rotate(float3 v, float4 q) {
-    float3 t  = 2.0f * cross(q.xyz, v);
-    return v + q.w * t + cross(q.xyz, t);
-}
-
-float4 conj_q(float4 q) {
-    return float4(-q.xyz, q.w);  // conjugate of quaternion
-}
-
-float3 unit_space_to_model(float3 p, float3 pos, float4 rot, float3 rad) {
-    return q_rotate(p * rad, rot) + pos;  // rotate and scale position
-}
-
-float3x3 outer_product(float3 a, float3 b) {
-    return float3x3(a * b.x, a * b.y, a * b.z);
-}
-
-float3x3 unit(float a) {
-    return float3x3(a, 0, 0, 0, a, 0, 0, 0, a);
-}
+#include "SVD.cginc"
 
 #define DIV_EPSILON 1e-6
 
@@ -30,15 +9,6 @@ float safe_divide(float a, float b) {
 
 float safe_sqrt(float a) {
     return (a > 0.0) ? sqrt(a) : 0.0;  // return 0 for negative inputs
-}
-
-float3x3 quat_to_mat(float4 q) {
-    float3 a = float3(-1, 1, 1);
-    float3 u = q.zyz * a * q.w, v = q.xyx * a.xxy * q.w;
-    float3x3 m = float3x3(0, u.x, u.y, u.z, 0, v.x, v.y, v.z, 0) + unit(0.5) + outer_product(q.xyz, q.xyz) * (1.0 - unit(1.0));
-    q *= q;
-    m -= float3x3(q.y + q.z, 0, 0, 0, q.x + q.z, 0, 0, 0, q.x + q.y);
-    return m * 2.0;
 }
 
 struct Ellipse {
@@ -110,16 +80,27 @@ float4x4 Translation(float3 t) {
 }
 
 float4x4 RotationScaleInverse(float4 q, float3 s) {
-    float3x3 R = quat_to_mat(q);
+    float3x3 R = q2m(q);
     float3x3 Rt = transpose(R);
     float3x3 Pinv = float3x3(Rt[0] / s.x, Rt[1] / s.y, Rt[2] / s.z);
     return float4x4(Pinv[0], 0, Pinv[1], 0, Pinv[2], 0, 0, 0, 0, 1);
 }
 
-float4x4 InverseSplat(float3 t, float3 s, float4 q) {
-    float4x4 T_inv = Translation(-t);
-    float4x4 R_inv = RotationScaleInverse(q, s);
+float4x4 InvGaussianTransform(Gaussian g) {
+    float4x4 T_inv = Translation(-g.p);
+    float4x4 R_inv = RotationScaleInverse(g.q, g.s);
     return mul(R_inv, T_inv);
+}
+
+float4x4 RotationScale(float4 q, float3 s) {
+    float3x3 R = q2m(q);
+    return float4x4(R[0] * s.x, 0, R[1] * s.y, 0, R[2] * s.z, 0, 0, 0, 0, 1);
+}
+
+float4x4 GaussianTransform(Gaussian g) {
+    float4x4 T = Translation(g.p);
+    float4x4 R = RotationScale(g.q, g.s);
+    return mul(T, R);
 }
 
 float dotM(float4 a, float4 b)
@@ -128,8 +109,8 @@ float dotM(float4 a, float4 b)
     return dot(a * s, b);
 }
 
-Ellipse GetProjectedEllipsoid(float3 pos, float3 scale, float4 rotation) {
-    float4x4 S_inv   = InverseSplat(pos, scale, rotation);
+Ellipse GetProjectedEllipsoid(Gaussian g) {
+    float4x4 S_inv   = InvGaussianTransform(g);
     float4x4 P_inv   = CreateClipToViewMatrix(); // inverse(UNITY_MATRIX_P)
     float4x4 MV_inv  = transpose(UNITY_MATRIX_IT_MV);
     float4x4 inv = mul(S_inv, mul(MV_inv, P_inv));
@@ -194,3 +175,39 @@ Ellipse GetProjectedEllipsoid(float3 pos, float3 scale, float4 rotation) {
     
     return extractEllipse(_a, _c, _b, _d, _e, _f);
 } 
+
+Gaussian TransformGaussian(Gaussian g, float4x4 M)
+{
+    float3x3 R = q2m(g.q);
+
+    // covariance = R * diag(s²) * Rᵀ
+    float3x3 S2 = float3x3(g.s.x * g.s.x, 0, 0,
+                           0, g.s.y * g.s.y, 0,
+                           0, 0, g.s.z * g.s.z);
+    float3x3 Sigma = mul(R, mul(S2, transpose(R)));
+
+    // split affine
+    float3x3 A = (float3x3)M;
+    float3   t = M[3].xyz;
+
+    // propagate mean
+    float3 pOut = mul(A, g.p) + t;
+
+    // propagate covariance
+    float3x3 SigmaP = mul(A, mul(Sigma, transpose(A)));
+
+    // eigen/SVD: SigmaP = U * diag(D) * Uᵀ
+    float3x3 U, V;
+    float3   D;
+    GetSVD3D(SigmaP, U, D, V);
+
+    // enforce right‑handed frame
+    if (determinant(U) < 0) U[0] = -U[0];
+
+    Gaussian result;
+    result.s = sqrt(D);      // new scales
+    result.q = m2q(U);       // new orientation
+    if (result.q.w < 0) result.q = -result.q;
+    result.p = pOut;         // new mean
+    return result;
+}

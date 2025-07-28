@@ -23,12 +23,12 @@ Material:
   m_SavedProperties:
     serializedVersion: 3
     m_TexEnvs:
-    - _GS_Colors:
-        m_Texture: {fileID: 2800000, guid: fe20fd70b61a21e409cef490d9aa3e42, type: 2}
+    - _GS_PackedColors:
+        m_Texture: {fileID: 2800000, guid: 51598769bc02ade46abc24b96dfc5994, type: 2}
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
-    - _GS_Positions:
-        m_Texture: {fileID: 2800000, guid: 472a5111211007d4089a9bb1db2077e1, type: 2}
+    - _GS_PackedPositions:
+        m_Texture: {fileID: 2800000, guid: b7222cd05da67ad418689016a31b9aad, type: 2}
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
     - _GS_RenderOrder:
@@ -43,14 +43,6 @@ Material:
         m_Texture: {fileID: 0}
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
-    - _GS_Rotations:
-        m_Texture: {fileID: 2800000, guid: aa4f29725e8b6014f9007cb8e398ebee, type: 2}
-        m_Scale: {x: 1, y: 1}
-        m_Offset: {x: 0, y: 0}
-    - _GS_Scales:
-        m_Texture: {fileID: 2800000, guid: d37665715119b7c4795faeb933e806cf, type: 2}
-        m_Scale: {x: 1, y: 1}
-        m_Offset: {x: 0, y: 0}
     m_Ints:
     - _PRECOMPUTED_SORTING: 0
     m_Floats:
@@ -63,7 +55,7 @@ Material:
     - _HACK_UNIFORM: 1
     - _Log2MinScale: -12
     - _Opacity: 1
-    - _QuadScale: 1.1
+    - _QuadScale: 1
     - _ScaleCutoff: 100
     - _SplatCount: 667409
     - _SplatOffset: 0

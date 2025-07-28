@@ -10,8 +10,87 @@ using UnityEngine;
 using GaussianSplatting.Editor.Utils;
 using GaussianSplatting;
 
+
 namespace GaussianSplatting
 {
+    public struct UInt2 { public uint x, y; public UInt2(uint a, uint b){x=a;y=b;} }
+    public struct UInt4 { public uint x, y, z, w; public UInt4(uint a,uint b,uint c,uint d){x=a;y=b;z=c;w=d;} }
+
+    public static class Float3Packing
+    {
+        /* ---------- helpers ---------- */
+
+        private const float  M        = 262143f;      // 2^18-1
+        private const int   MANT_BIAS = 1 << 18;    // 2^18
+        private static int  RoundToInt(float f) => (int)Mathf.Round(f);
+
+        /* =========================================================
+        *  E5 / S9×3  →  uint   (“one word”)   packF3U1 / unpackF3U1
+        * =========================================================*/
+        public static uint packF3U1(Vector3 v)
+        {
+            float maxv  = Mathf.Max(Mathf.Abs(v.x), Mathf.Max(Mathf.Abs(v.y), Mathf.Abs(v.z)));
+            int   e     = Mathf.Clamp(Mathf.CeilToInt(Mathf.Log(maxv, 2f)), -15, 15);
+            float scale = Mathf.Pow(2f, -e);
+
+            uint sx = (uint)(RoundToInt(Mathf.Clamp(v.x * scale, -1f, 1f) * 255f) + 255);
+            uint sy = (uint)(RoundToInt(Mathf.Clamp(v.y * scale, -1f, 1f) * 255f) + 255);
+            uint sz = (uint)(RoundToInt(Mathf.Clamp(v.z * scale, -1f, 1f) * 255f) + 255);
+
+            return  (uint)(e + 15)        |
+                (sx << 5)              |
+                (sy << 14)             |
+                (sz << 23);
+        }
+
+        public static Vector3 unpackF3U1(uint data)
+        {
+            int   e  = (int)(data & 0x1Fu) - 15;
+            uint  sx = (data >>  5) & 0x1FFu;
+            uint  sy = (data >> 14) & 0x1FFu;
+            uint  sz =  data >> 23;
+
+            float scale = Mathf.Pow(2f, e);
+            return (new Vector3(sx, sy, sz) / 255f - Vector3.one) * scale;
+        }
+
+        /* =========================================================
+        *  E7 / S19×3  →  uint2  (“two words”)   packF3U2 / unpackF3U2
+        * =========================================================*/
+        public static UInt2 packF3U2(Vector3 v)
+        {
+            if (v == Vector3.zero) return new UInt2(0, 0); // special case for zero vector
+
+            float maxv  = Mathf.Max(Mathf.Abs(v.x), Mathf.Max(Mathf.Abs(v.y), Mathf.Abs(v.z)));
+            int   e     = Mathf.Clamp(Mathf.CeilToInt(Mathf.Log(maxv, 2f)), -63, 63);
+            float scale = Mathf.Pow(2f, -e);
+
+            uint mx = (uint)(RoundToInt(Mathf.Clamp(v.x * scale, -1f, 1f) * M) + MANT_BIAS);
+            uint my = (uint)(RoundToInt(Mathf.Clamp(v.y * scale, -1f, 1f) * M) + MANT_BIAS);
+            uint mz = (uint)(RoundToInt(Mathf.Clamp(v.z * scale, -1f, 1f) * M) + MANT_BIAS);
+            uint eb = (uint)(e + 63);                         // 7-bit biased exponent
+
+            uint lo =  eb | (mx << 7) | ((my & 0x3Fu) << 26);
+            uint hi = (my >> 6) | (mz << 13);
+
+            return new UInt2(lo, hi);
+        }
+
+        public static Vector3 unpackF3U2(UInt2 data)
+        {
+            uint lo = data.x;
+            uint hi = data.y;
+
+            int  e  = (int)(lo & 0x7Fu) - 63;
+            uint mx = (lo >>  7) & 0x7FFFFu;
+            uint my = ((hi & 0x1FFFu) << 6) | ((lo >> 26) & 0x3Fu);
+            uint mz = (hi >> 13) & 0x7FFFFu;
+
+            float scale = Mathf.Pow(2f, e);
+            return (new Vector3(mx, my, mz) - Vector3.one * 262144f) / M * scale;
+        }
+    }
+
     static public class PointsMesh
     {
         static public Mesh GetMesh(int splat_count, Bounds bbox)
@@ -91,17 +170,51 @@ namespace GaussianSplatting
             return prefab;
         }
 
-        public static void Import(string plyFile, string prefabOutputPath, bool computeBoundingBox, int splatsPerPass, bool precomputeSorting = false, int maxAlphaMaskCount = 1, bool useSRGB = true)
+        static float UIntToFloat(uint v) => BitConverter.Int32BitsToSingle((int)v);
+
+        static Vector3 QuaternionToAxisAngle(Vector4 q)
         {
-            if (!File.Exists(plyFile))
-                throw new FileNotFoundException(plyFile);
+            Vector3 axis = new Vector3(q.x, q.y, q.z);
+            float   len  = axis.magnitude;
+            if (len < 1e-8f) return Vector3.zero;            // degenerates to 0‑angle
+            axis /= len;
+            float angle = Mathf.Atan2(len, q.w) * 2f;
+            return axis * angle;
+        }
 
-            // Read header to learn how many splats we need to allocate for.
-            int count = GaussianFileReader.ReadFileHeader(plyFile);
-            if (count == 0)
-                throw new Exception("Empty or unsupported splat file");
+        public static void Import(
+            string plyFile, string prefabOutputPath, bool computeBoundingBox, 
+            int splatsPerPass, bool precomputeSorting = false, int maxAlphaMaskCount = 1, 
+            bool useSRGB = true, bool animated = false, int animatedSplatCount = 128 * 1024
+        ) {
+            NativeArray<InputSplatData> splats;
+            int count = 0; // number of splats in the file
+            if(!animated) {
+                if (!File.Exists(plyFile)) throw new FileNotFoundException(plyFile);
 
-            GaussianFileReader.ReadFile(plyFile, out NativeArray<InputSplatData> splats);
+                // Read header to learn how many splats we need to allocate for.
+                count = GaussianFileReader.ReadFileHeader(plyFile);
+                if (count == 0)
+                    throw new Exception("Empty or unsupported splat file");
+
+                GaussianFileReader.ReadFile(plyFile, out splats);
+            } else {
+                //Fill with empty splats
+                count = animatedSplatCount;
+                splats = new NativeArray<InputSplatData>(count, Allocator.Temp);
+                for (int i = 0; i < count; ++i)
+                {
+                    splats[i] = new InputSplatData
+                    {
+                        pos     = Vector3.zero,
+                        dc0     = Vector3.zero,
+                        rot     = Quaternion.identity,
+                        scale   = Vector3.one,
+                        opacity = 0f
+                    };
+                }
+            }
+           
             try
             {
                 int side = Mathf.CeilToInt(Mathf.Sqrt(count));
@@ -149,62 +262,61 @@ namespace GaussianSplatting
                 if (size.y == 0) size.y = 1e-6f;
                 if (size.z == 0) size.z = 1e-6f;
 
-                // Prepare Morton keys
-                var keys = new uint[n];
-                Vector3 centerOfMass = Vector3.zero;
-                int validCount = 0;
-                for (int i = 0; i < n; ++i)
-                {
-                    Vector3 pos = data[i].pos;
-                    if (float.IsNaN(pos.x) || float.IsNaN(pos.y) || float.IsNaN(pos.z))
-                    {
-                        Debug.LogWarning($"Skipping splat {i} with NaN position: {pos}");
-                        continue; // skip invalid splats
-                    }
-                    centerOfMass += pos;
-                    ++validCount;
-                    Vector3 np = (pos - min);
-                    np.x /= size.x; np.y /= size.y; np.z /= size.z;
-                    keys[i] = Morton3D(np.x, np.y, np.z);
-                }
-
-                centerOfMass /= validCount; // compute center of mass
-
-                // Compute bounds relative to the center of mass
-                Vector3 maxSize = Vector3.zero;
-                for (int i = 0; i < n; ++i)
-                {
-                    Vector3 pos = data[i].pos;
-                    if (float.IsNaN(pos.x) || float.IsNaN(pos.y) || float.IsNaN(pos.z))
-                        continue; // skip invalid splats
-                    Vector3 relativePos = pos - centerOfMass;
-                    maxSize.x = Mathf.Max(maxSize.x, Mathf.Abs(relativePos.x));
-                    maxSize.y = Mathf.Max(maxSize.y, Mathf.Abs(relativePos.y));
-                    maxSize.z = Mathf.Max(maxSize.z, Mathf.Abs(relativePos.z));
-                }
-
-                // Sort splats by Morton key – in-place for data[]
-                Array.Sort(keys, data);
-
                 Bounds bbox = new Bounds();
-                if (computeBoundingBox)
-                {
-                    // Compute bounding box from splats
-                    bbox.center = centerOfMass;
-                    bbox.extents = new Vector3(maxSize.x, maxSize.y, maxSize.z);
-                    if (bbox.extents.x == 0 || bbox.extents.y == 0 || bbox.extents.z == 0)
+                bbox.center = Vector3.zero;
+                bbox.extents = new Vector3(1000, 1000, 1000);
+                if(!animated) {
+                     // Prepare Morton keys
+                    var keys = new uint[n];
+                    Vector3 centerOfMass = Vector3.zero;
+                    int validCount = 0;
+                    for (int i = 0; i < n; ++i)
                     {
-                        // If the bounding box is zero-sized, set a default size
-                        bbox.extents = new Vector3(1000, 1000, 1000);
-                        Debug.LogWarning("Bounding box is zero-sized, using default size.");
+                        Vector3 pos = data[i].pos;
+                        if (float.IsNaN(pos.x) || float.IsNaN(pos.y) || float.IsNaN(pos.z))
+                        {
+                            Debug.LogWarning($"Skipping splat {i} with NaN position: {pos}");
+                            continue; // skip invalid splats
+                        }
+                        centerOfMass += pos;
+                        ++validCount;
+                        Vector3 np = (pos - min);
+                        np.x /= size.x; np.y /= size.y; np.z /= size.z;
+                        keys[i] = Morton3D(np.x, np.y, np.z);
+                    }
+
+                    centerOfMass /= validCount; // compute center of mass
+
+                    // Compute bounds relative to the center of mass
+                    Vector3 maxSize = Vector3.zero;
+                    for (int i = 0; i < n; ++i)
+                    {
+                        Vector3 pos = data[i].pos;
+                        if (float.IsNaN(pos.x) || float.IsNaN(pos.y) || float.IsNaN(pos.z))
+                            continue; // skip invalid splats
+                        Vector3 relativePos = pos - centerOfMass;
+                        maxSize.x = Mathf.Max(maxSize.x, Mathf.Abs(relativePos.x));
+                        maxSize.y = Mathf.Max(maxSize.y, Mathf.Abs(relativePos.y));
+                        maxSize.z = Mathf.Max(maxSize.z, Mathf.Abs(relativePos.z));
+                    }
+
+                    // Sort splats by Morton key – in-place for data[]
+                    Array.Sort(keys, data);
+
+                    if (computeBoundingBox)
+                    {
+                        // Compute bounding box from splats
+                        bbox.center = centerOfMass;
+                        bbox.extents = new Vector3(maxSize.x, maxSize.y, maxSize.z);
+                        if (bbox.extents.x == 0 || bbox.extents.y == 0 || bbox.extents.z == 0)
+                        {
+                            // If the bounding box is zero-sized, set a default size
+                            bbox.extents = new Vector3(1000, 1000, 1000);
+                            Debug.LogWarning("Bounding box is zero-sized, using default size.");
+                        }
                     }
                 }
-                else
-                {
-                    // Use a default bounding box if not computing from splats
-                    bbox.center = Vector3.zero;
-                    bbox.extents = new Vector3(1000, 1000, 1000);
-                }
+               
 
                 // Get name of the material from the path
                 string materialName = Path.GetFileNameWithoutExtension(prefabOutputPath);
@@ -248,12 +360,6 @@ namespace GaussianSplatting
                     SaveTextureAsset(sortedTex, outputDataFolder, materialName + "_sorted_oct_dirs");
                 }
 
-
-                Texture2D xyzTex     = NewTexture(side, TextureFormat.RGBAFloat, "XYZ");
-                Texture2D colDcTex   = NewTexture(side, TextureFormat.RGBA32, "ColorDC");
-                Texture2D rotTex     = NewTexture(side, TextureFormat.RGBA32, "Rotation");
-                Texture2D scaleTex   = NewTexture(side, TextureFormat.RGB9e5Float, "Scale");
-
                 Shader shader = null;
                 if(useSRGB) {
                     shader = Shader.Find("VRChatGaussianSplatting/GaussianSplatting");
@@ -261,38 +367,54 @@ namespace GaussianSplatting
                     shader = Shader.Find("VRChatGaussianSplatting/GaussianSplattingSimpleBackToFront");
                 }
 
-                var xyzPixels   = new Color[side * side];
-                var colPixels   = new Color[side * side];
-                var rotPixels   = new Color[side * side];
-                var scalePixels = new Color[side * side];
+                Texture2D packedPosTex = null;
+                Texture2D packedColTex = null;
+                RenderTexture packedPosTexRT = null;
+                RenderTexture packedColTexRT = null;
+                if (!animated) {
+                    packedPosTex = NewTexture(side, TextureFormat.RGBAFloat, "PackedPositions");
+                    packedColTex = NewTexture(side, TextureFormat.RGBA32,  "PackedColors");
 
-                for (int i = 0; i < data.Length; ++i) {
-                    var s = data[i];                      
-                    xyzPixels[i]   = new Color(s.pos.x,   s.pos.y,   s.pos.z,   0f);
-                    colPixels[i]   = new Color(s.dc0.x,   s.dc0.y,   s.dc0.z,   s.opacity);
-                    rotPixels[i]   = new Color(0.5f + 0.5f * s.rot.x, 
-                                                0.5f + 0.5f * s.rot.y, 
-                                                0.5f + 0.5f * s.rot.z, 
-                                                0.5f + 0.5f * s.rot.w);
-                    scalePixels[i] = new Color(s.scale.x, s.scale.y, s.scale.z, 0f);
+                    Color[] posPixels = new Color[side * side];
+                    Color[] colPixels = new Color[side * side];
+
+                    for (int i = 0; i < data.Length; ++i)
+                    {
+                        var s     = data[i];
+                        UInt2 pos  = Float3Packing.packF3U2(s.pos);
+                        uint  scl  = Float3Packing.packF3U1(s.scale);
+                        uint  rot  = Float3Packing.packF3U1(QuaternionToAxisAngle(new Vector4(s.rot.x, s.rot.y, s.rot.z, s.rot.w)));
+
+                        // bit‑preserving cast: uint → float
+                        posPixels[i] = new Color
+                        (
+                            UIntToFloat(pos.x),
+                            UIntToFloat(pos.y),
+                            UIntToFloat(scl),
+                            UIntToFloat(rot) 
+                        );
+
+                        colPixels[i] = new Color(s.dc0.x, s.dc0.y, s.dc0.z, s.opacity);
+                    }
+
+                    packedPosTex.SetPixels(posPixels);
+                    packedColTex.SetPixels(colPixels);
+                    packedPosTex.Apply(false, true);
+                    packedColTex.Apply(false, true);
+
+                    SaveTextureAsset(packedPosTex, outputDataFolder, materialName + "_packed_positions");
+                    SaveTextureAsset(packedColTex, outputDataFolder, materialName + "_packed_colors");
+                } else {
+                    packedPosTexRT = NewRenderTexture(side, RenderTextureFormat.ARGBFloat, "PackedPositions");
+                    packedColTexRT = NewRenderTexture(side, RenderTextureFormat.ARGB32, "PackedColors");
+
+                    packedPosTexRT.Create();
+                    packedColTexRT.Create();
+
+                    SaveTextureAsset(packedPosTexRT, outputDataFolder, materialName + "_packed_positions");
+                    SaveTextureAsset(packedColTexRT, outputDataFolder, materialName + "_packed_colors");
                 }
-
-                xyzTex.SetPixels(xyzPixels);
-                colDcTex.SetPixels(colPixels);
-                rotTex.SetPixels(rotPixels);
-                scaleTex.SetPixels(scalePixels);
-
-                xyzTex.Apply(false, true);
-                colDcTex.Apply(false, true);
-                rotTex.Apply(false, true);
-                scaleTex.Apply(false, true);
-
-
-
-                SaveTextureAsset(xyzTex, outputDataFolder, materialName + "_xyz");
-                SaveTextureAsset(colDcTex, outputDataFolder, materialName + "_color_dc");
-                SaveTextureAsset(rotTex, outputDataFolder, materialName + "_rotation");
-                SaveTextureAsset(scaleTex, outputDataFolder, materialName + "_scale");  
+               
                 
                 if(splatsPerPass == 0) splatsPerPass = effectiveCount;
                 splatsPerPass = Mathf.Min(splatsPerPass, effectiveCount);
@@ -327,11 +449,15 @@ namespace GaussianSplatting
                     if(pass == 0) {
                         splatMat = new Material(shader);
                         splatMat.name = splatMatName;
-                        splatMat.SetTexture("_GS_Positions", xyzTex);
-                        splatMat.SetTexture("_GS_Colors", colDcTex);
-                        splatMat.SetTexture("_GS_Rotations", rotTex);
-                        splatMat.SetTexture("_GS_Scales", scaleTex);
+                        if (!animated) {
+                            splatMat.SetTexture("_GS_PackedPositions", packedPosTex);
+                            splatMat.SetTexture("_GS_PackedColors", packedColTex);
+                        } else {
+                            splatMat.SetTexture("_GS_PackedPositions", packedPosTexRT);
+                            splatMat.SetTexture("_GS_PackedColors", packedColTexRT);
+                        }
                         splatMat.SetInt("_ActualSplatCount", n);
+                        splatMat.SetInt("_ActualSplatCountSqrt", side);
                         mainMat = splatMat;
                         if(precomputeSorting)
                         {
@@ -413,6 +539,19 @@ namespace GaussianSplatting
             return tex;
         }
 
+        static RenderTexture NewRenderTexture(int size, RenderTextureFormat format, string name)
+        {
+            var tex = new RenderTexture(size, size, 0, format)
+            {
+                name       = name,
+                wrapMode   = TextureWrapMode.Clamp,
+                filterMode = FilterMode.Point,
+                useMipMap  = false,
+                autoGenerateMips = false
+            };
+            return tex;
+        }
+
         static void SaveTextureAsset(Texture2D tex, string folder, string name)
         {
             string path = Path.Combine(folder, $"{name}.asset");
@@ -421,6 +560,13 @@ namespace GaussianSplatting
         }
 
         static void SaveTextureAsset(Texture2DArray tex, string folder, string name)
+        {
+            string path = Path.Combine(folder, $"{name}.asset");
+            path = AssetDatabase.GenerateUniqueAssetPath(path);
+            AssetDatabase.CreateAsset(tex, path);
+        }
+
+        static void SaveTextureAsset(RenderTexture tex, string folder, string name)
         {
             string path = Path.Combine(folder, $"{name}.asset");
             path = AssetDatabase.GenerateUniqueAssetPath(path);
@@ -441,6 +587,9 @@ namespace GaussianSplatting.Editor.Importers
         bool _precomputeSorting = false; // precompute sorting for octahedral directions
         int _maxAlphaMaskCount = 1; // max number of alpha mask passes
         bool _useSRGB = true; // use sRGB color correction
+
+        bool _animated = false; 
+        int _animatedSplatCount = 512*512;
         Vector2 scrollPosition = Vector2.zero;
         [MenuItem("Gaussian Splatting/Import PLY Splats…")]
         static void Init()
@@ -450,42 +599,47 @@ namespace GaussianSplatting.Editor.Importers
 
         void OnGUI()
         {
-            EditorGUILayout.LabelField("PLY files", EditorStyles.boldLabel);
-            if (GUILayout.Button("Clear All PLYs"))
+            _animated = EditorGUILayout.Toggle("Procedurally Animated", _animated);
+            if (!_animated)
             {
-                _plyPaths.Clear();
-            }
-            scrollPosition = GUILayout.BeginScrollView(scrollPosition, true, true, GUILayout.Height(100));	
-            for (int i = 0; i < _plyPaths.Count; ++i)
-            {
-                EditorGUILayout.BeginHorizontal();
-                _plyPaths[i] = EditorGUILayout.TextField(_plyPaths[i]);
-                if (GUILayout.Button("…", GUILayout.Width(30)))
-                    _plyPaths[i] = EditorUtility.OpenFilePanel("Select PLY file", Application.dataPath, "ply");
-                if (GUILayout.Button("–", GUILayout.Width(20)))
+                EditorGUILayout.LabelField("PLY files", EditorStyles.boldLabel);
+                if (GUILayout.Button("Clear All PLYs"))
                 {
-                    _plyPaths.RemoveAt(i);
-                    --i;
+                    _plyPaths.Clear();
                 }
-                EditorGUILayout.EndHorizontal();
-            }
-            GUILayout.EndScrollView();
-            if (GUILayout.Button("+ Add PLY file")) _plyPaths.Add(string.Empty);
-            if (GUILayout.Button("Add All PLYs in Folder"))
-            {
-                string folder = EditorUtility.OpenFolderPanel("Select Folder with PLY files", Application.dataPath, "");
-                if (!string.IsNullOrEmpty(folder))
+                scrollPosition = GUILayout.BeginScrollView(scrollPosition, true, true, GUILayout.Height(100));	
+                for (int i = 0; i < _plyPaths.Count; ++i)
                 {
-                    string[] files = Directory.GetFiles(folder, "*.ply");
-                    foreach (string file in files)
+                    EditorGUILayout.BeginHorizontal();
+                    _plyPaths[i] = EditorGUILayout.TextField(_plyPaths[i]);
+                    if (GUILayout.Button("…", GUILayout.Width(30)))
+                        _plyPaths[i] = EditorUtility.OpenFilePanel("Select PLY file", Application.dataPath, "ply");
+                    if (GUILayout.Button("–", GUILayout.Width(20)))
                     {
-                        _plyPaths.Add(file);
+                        _plyPaths.RemoveAt(i);
+                        --i;
+                    }
+                    EditorGUILayout.EndHorizontal();
+                }
+                GUILayout.EndScrollView();
+                if (GUILayout.Button("+ Add PLY file")) _plyPaths.Add(string.Empty);
+                if (GUILayout.Button("Add All PLYs in Folder"))
+                {
+                    string folder = EditorUtility.OpenFolderPanel("Select Folder with PLY files", Application.dataPath, "");
+                    if (!string.IsNullOrEmpty(folder))
+                    {
+                        string[] files = Directory.GetFiles(folder, "*.ply");
+                        foreach (string file in files)
+                        {
+                            _plyPaths.Add(file);
+                        }
                     }
                 }
+                EditorGUILayout.HelpBox("At the moment more than 8M splats or .PLY files larger than 2GB don't work. ", MessageType.Info);
+            } else {
+                _animatedSplatCount = EditorGUILayout.IntField("Splat Count", _animatedSplatCount);
             }
-            
-            EditorGUILayout.HelpBox("At the moment more than 8M splats or .PLY files larger than 2GB don't work. ", MessageType.Info);
-
+        
             EditorGUILayout.Space(10);
             EditorGUILayout.LabelField("Output Folder", EditorStyles.boldLabel);
             _outputFolder = EditorGUILayout.TextField(_outputFolder);
@@ -494,7 +648,11 @@ namespace GaussianSplatting.Editor.Importers
 
             EditorGUILayout.Space(15);
             EditorGUILayout.LabelField("Splat settings", EditorStyles.boldLabel);
-            _computeBoundingBox   = EditorGUILayout.Toggle("Compute Bounding Box", _computeBoundingBox);
+            if (!_animated) {
+                _computeBoundingBox = EditorGUILayout.Toggle("Compute Bounding Box", _computeBoundingBox);
+            } else {
+                _computeBoundingBox = false; // disable bounding box computation for animated splats
+            }
             _useSRGB = EditorGUILayout.Toggle("sRGB Color Correction", _useSRGB);
             EditorGUILayout.HelpBox("Color correction requires 2 additional grab passes, for small splats you might want to disable this. Without this enabled back to front rendering will be used, which makes multi-pass rendering not work. sRGB color correction only works correctly if the world has HDR camera render targets.", MessageType.Info);
             if(_useSRGB) {
@@ -512,44 +670,58 @@ namespace GaussianSplatting.Editor.Importers
                     _splatsPerPass = 0; // disable multi-pass rendering
                 }
             }
-            _precomputeSorting = EditorGUILayout.Toggle("Precompute Sorting", _precomputeSorting);
-            if (_precomputeSorting)
-            {
-                EditorGUILayout.HelpBox("Precomputing sorting for octahedral directions, makes the gaussian splatting work standalone, without the GaussianSplatRenderer. However this takes way more texture memory and might have rendering artifacts. THIS WILL NO LONGER WORK WITH GaussianSplatRenderer", MessageType.Warning);
+
+            if (!_animated) {
+                _precomputeSorting = EditorGUILayout.Toggle("Precompute Sorting", _precomputeSorting);
+                if (_precomputeSorting)
+                {
+                    EditorGUILayout.HelpBox("Precomputing sorting for octahedral directions, makes the gaussian splatting work standalone, without the GaussianSplatRenderer. However this takes way more texture memory and might have rendering artifacts. THIS WILL NO LONGER WORK WITH GaussianSplatRenderer", MessageType.Warning);
+                }
+            } else {
+                _precomputeSorting = false; // disable precompute sorting for animated splats
             }
-          
+            
             GUILayout.FlexibleSpace();
 
-            if (GUILayout.Button("Import All PLYs"))
-            {
-                if (!_plyPaths.Any(p => !string.IsNullOrEmpty(p)))
+            if(!_animated) {
+                if (GUILayout.Button("Import All PLYs"))
                 {
-                    EditorUtility.DisplayDialog("PLY Import", "Add at least one PLY path.", "OK");
-                    return;
-                }
+                    if (!_plyPaths.Any(p => !string.IsNullOrEmpty(p)))
+                    {
+                        EditorUtility.DisplayDialog("PLY Import", "Add at least one PLY path.", "OK");
+                        return;
+                    }
 
-                foreach (string ply in _plyPaths.Where(p => !string.IsNullOrEmpty(p)))
-                {
-                    string prefabName = Path.GetFileNameWithoutExtension(ply) + ".prefab";
-                    string relFolder  = FileUtil.GetProjectRelativePath(_outputFolder);
-                    if (string.IsNullOrEmpty(relFolder))
-                        relFolder = "Assets";
-                    string prefabPath = AssetDatabase.GenerateUniqueAssetPath(Path.Combine(relFolder, prefabName));
-                    ImportSingle(ply, prefabPath);
+                    foreach (string ply in _plyPaths.Where(p => !string.IsNullOrEmpty(p)))
+                    {
+                        string plyName = Path.GetFileNameWithoutExtension(ply);
+                        ImportSingle(ply, plyName);
+                    }
+                    AssetDatabase.SaveAssets();
+                    AssetDatabase.Refresh();
+                    EditorUtility.DisplayDialog("PLY Import", "All imports completed.", "OK");
                 }
-                AssetDatabase.SaveAssets();
-                AssetDatabase.Refresh();
-                EditorUtility.DisplayDialog("PLY Import", "All imports completed.", "OK");
+            } else {
+                if (GUILayout.Button("Generate Animated Splat Prefab"))
+                {
+                    string plyName = "procedural_splat_" + _animatedSplatCount;
+                    ImportSingle("", plyName);
+                }
             }
         }
 
-        void ImportSingle(string plyPath, string prefabPath)
+        void ImportSingle(string plyPath, string name)
         {
+            string prefabName = name + ".prefab";
+            string relFolder  = FileUtil.GetProjectRelativePath(_outputFolder);
+            if (string.IsNullOrEmpty(relFolder))
+                relFolder = "Assets";
+            string prefabPath = AssetDatabase.GenerateUniqueAssetPath(Path.Combine(relFolder, prefabName));
             try
             {
                 EditorUtility.DisplayProgressBar("PLY Import",
                     $"Importing {Path.GetFileName(plyPath)}", 0f);
-                PlySplatImporter.Import(plyPath, prefabPath, _computeBoundingBox, _splatsPerPass, _precomputeSorting, _maxAlphaMaskCount, _useSRGB);
+                PlySplatImporter.Import(plyPath, prefabPath, _computeBoundingBox, _splatsPerPass, _precomputeSorting, _maxAlphaMaskCount, _useSRGB, _animated, _animatedSplatCount);
             }
             catch (Exception e)
             {

@@ -2,10 +2,8 @@ Shader "VRChatGaussianSplatting/GaussianSplatting"
 {
     Properties
     {
-        [HideInInspector] _GS_Positions ("Means", 2D) = "" {}
-        [HideInInspector] _GS_Scales ("Scales", 2D) = "" {}
-        [HideInInspector] _GS_Rotations ("Quats", 2D) = "" {}
-        [HideInInspector] _GS_Colors ("Colors", 2D) = "" {}
+        _GS_PackedPositions ("Packed Positions", 2D) = "" {}
+        _GS_PackedColors ("Packed Colors", 2D) = "" {}
         [HideInInspector] _GS_RenderOrder ("Rendering Orders", 2DArray) = "" {}
         [HideInInspector] _GS_RenderOrderMirror ("Rendering Order Mirror", 2D) = "" {}
         [HideInInspector] _MirrorCameraPos ("Mirror Camera Position", Vector) = (0, 0, 0, 0)
@@ -13,6 +11,7 @@ Shader "VRChatGaussianSplatting/GaussianSplatting"
         [HideInInspector] _MinMaxSortDistance ("Min Max Distance", Vector) = (0, 0, 0, 0)
         [HideInInspector] _SplatCount ("Splat Count", Int) = 0
         [HideInInspector] _ActualSplatCount ("Actual Splat Count", Int) = 0
+        [HideInInspector] _ActualSplatCountSqrt ("Actual Splat Count Sqrt", Int) = 0
         [HideInInspector] _SplatOffset ("Splat Offset", Int) = 0
         [HideInInspector] [Toggle] _PRECOMPUTED_SORTING ("Precomputed Sorting", Integer) = 0
         [HideInInspector] _GS_RenderOrderPrecomputed ("Precomputed Render Order", 2DArray) = "" {}
