@@ -1,7 +1,9 @@
 #include "ExFloat.cginc"
 #include "SVD.cginc"
+#include "Linalg.cginc"
 
 #define DIV_EPSILON 1e-6
+#define PI 3.14159265358979323846
 
 float safe_divide(float a, float b) {
     return (abs(b) > DIV_EPSILON) ? a / b : 0.0;
@@ -72,6 +74,42 @@ float4x4 CreateClipToViewMatrix()
     return result;
 }
 
+float dotM(float4 a, float4 b)
+{
+    static const float4 s = float4(1.0, 1.0, 1.0, -1.0);
+    return dot(a * s, b);
+}
+
+void EigenSym2x2(float a, float b, float c,
+    out float2 eval,   // eval.x >= eval.y
+    out float2x2 evec) // columns = eigenvectors
+{
+    float trace = a + c;
+    float det   = a * c - b * b;
+    float disc  = trace * trace * 0.25 - det;
+    disc = (disc < 0.0) ? 0.0 : sqrt(disc);
+
+    float lambda1 = 0.5 * trace + disc;   // larger
+    float lambda2 = 0.5 * trace - disc;
+
+    float2 v1 = float2(b, lambda1 - a);
+    float2 v2 = float2(b, lambda2 - a);
+
+    // near-isotropic fallback avoids divide-by-zero
+    if (abs(b) < 1e-6 && abs(a - c) < 1e-6)
+    {
+    v1 = float2(1.0, 0.0);
+    v2 = float2(0.0, 1.0);
+    }
+
+    v1 = normalize(v1);
+    v2 = float2(-v1.y, v1.x);             // orthogonal
+
+    eval = float2(lambda1, lambda2);
+    evec = float2x2(v1, v2);              // columns
+}
+
+
 float4x4 Translation(float3 t) {
     return float4x4(1, 0, 0, t.x,
                     0, 1, 0, t.y,
@@ -82,31 +120,103 @@ float4x4 Translation(float3 t) {
 float4x4 RotationScaleInverse(float4 q, float3 s) {
     float3x3 R = q2m(q);
     float3x3 Rt = transpose(R);
-    float3x3 Pinv = float3x3(Rt[0] / s.x, Rt[1] / s.y, Rt[2] / s.z);
+    float3x3 S_inv = Scale(float3(1.0 / s.x, 1.0 / s.y, 1.0 / s.z));
+    float3x3 Pinv = mul(S_inv, Rt);
     return float4x4(Pinv[0], 0, Pinv[1], 0, Pinv[2], 0, 0, 0, 0, 1);
 }
 
 float4x4 InvGaussianTransform(Gaussian g) {
     float4x4 T_inv = Translation(-g.p);
-    float4x4 R_inv = RotationScaleInverse(g.q, g.s);
-    return mul(R_inv, T_inv);
+    float4x4 RS_inv = RotationScaleInverse(g.q, g.s);
+    return mul(RS_inv, T_inv);
 }
 
-float4x4 RotationScale(float4 q, float3 s) {
-    float3x3 R = q2m(q);
-    return float4x4(R[0] * s.x, 0, R[1] * s.y, 0, R[2] * s.z, 0, 0, 0, 0, 1);
+float4x4 To4x4(float3x3 m) {
+    return float4x4(m[0], 0, m[1], 0, m[2], 0, 0, 0, 0, 1);
 }
 
 float4x4 GaussianTransform(Gaussian g) {
     float4x4 T = Translation(g.p);
-    float4x4 R = RotationScale(g.q, g.s);
-    return mul(T, R);
+    //float4x4 RS = To4x4(RotationScale(g.q, g.s));
+    float4x4 RS = To4x4(CholeskyFromQS(g.q, g.s)); // Cholesky factorization
+    return mul(T, RS);
 }
 
-float dotM(float4 a, float4 b)
+#define OUTLINE_SAMPLES 6   // 2 points per axis
+
+Ellipse GetProjectedGaussian(GaussianData g)
 {
-    static const float4 s = float4(1.0, 1.0, 1.0, -1.0);
-    return dot(a * s, b);
+    // transforms ------------------------------------------------------
+    float4x4  S     = mul(Translation(g.P), To4x4(g.RS));     // unit gaussian ➜ world
+    float4x4  MVP   = UNITY_MATRIX_MVP;
+    float4x4  SMVP  = mul(MVP, S);              // gaussian ➜ clip
+    float3    camWS = _WorldSpaceCameraPos;
+
+    // six canonical directions in unit gaussian ------------------------
+    static const float SCALE = sqrt(1.5);   //???
+    static const float3 AXIS[OUTLINE_SAMPLES] = {
+        float3( SCALE, 0, 0), float3(-SCALE, 0, 0),
+        float3( 0, SCALE, 0), float3( 0,-SCALE, 0),
+        float3( 0, 0, SCALE), float3( 0, 0,-SCALE)
+    };
+
+    float2 P[OUTLINE_SAMPLES];
+    bool    invalid = false;
+
+    [unroll] for (int i = 0; i < OUTLINE_SAMPLES; ++i)
+    {
+        float4 clip = mul(SMVP, float4(AXIS[i], 1.0));
+        if (clip.w <= 0.0 || clip.z <= 0.0)     // behind near plane
+            invalid = true;
+        P[i] = clip.xy / clip.w;                // NDC xy
+    }
+
+    Ellipse ellipse;
+    ellipse.center = 0.0;
+    ellipse.axis   = float2(1, 0);
+    ellipse.size   = 0.0;
+
+    if (invalid)                // any sample invisible ⇒ discard
+        return ellipse;
+
+    // -----------------------------------------------------------------
+    // 1) centroid
+    float2 mu = 0.0;
+    [loop] for (uint i = 0; i < OUTLINE_SAMPLES; ++i) mu += P[i];
+    mu *= (1.0 / OUTLINE_SAMPLES);
+
+    // 2) second moment  (population scaling: divide by N)
+    float  m00 = 0.0, m01 = 0.0, m11 = 0.0;
+    [loop]
+    for (uint i = 0; i < OUTLINE_SAMPLES; ++i)
+    {
+        float2 d = P[i] - mu;
+        m00 += d.x * d.x;
+        m01 += d.x * d.y;
+        m11 += d.y * d.y;
+    }
+    float s = 1.0 / OUTLINE_SAMPLES;
+    m00 *= s; m01 *= s; m11 *= s;
+
+    // 3) eigen-decomposition of the 2×2 covariance
+    float2  eval;
+    float2x2 evec;
+    EigenSym2x2(m00, m01, m11, eval, evec);     // same helper as before
+
+    float2 axes = sqrt(eval * 2.0);             // perimeter → semi-axes
+    float  ang  = atan2(evec[1][0], evec[0][0]);
+
+    if (axes.y > axes.x)            // enforce a ≥ b
+    {
+        float t = axes.x; axes.x = axes.y; axes.y = t;
+        ang += 1.57079632679;       // +π/2
+    }
+
+    ellipse.center = mu; 
+    ellipse.axis   = float2(sin(ang), cos(ang));
+    ellipse.size   = axes.yx;
+
+    return ellipse;
 }
 
 Ellipse GetProjectedEllipsoid(Gaussian g) {
@@ -176,38 +286,45 @@ Ellipse GetProjectedEllipsoid(Gaussian g) {
     return extractEllipse(_a, _c, _b, _d, _e, _f);
 } 
 
-Gaussian TransformGaussian(Gaussian g, float4x4 M)
+GaussianData TransformGaussian(GaussianData g, float4x4 M)
 {
-    float3x3 R = q2m(g.q);
+    float3x3 A = (float3x3)M; // affine transform matrix
+    g.RS = Triangularize3x3_L(mul(A , g.RS)); // transform RS
+    g.P = mul(M, float4(g.P, 1.0)).xyz; // transform position
+    float volumeScale = abs(determinant(A));
+    g.C.w = g.C.w / max(0.001,volumeScale); // scale color and density by determinant of affine transform
+    return g;
+    // float3x3 R = q2m(g.q);
 
-    // covariance = R * diag(s²) * Rᵀ
-    float3x3 S2 = float3x3(g.s.x * g.s.x, 0, 0,
-                           0, g.s.y * g.s.y, 0,
-                           0, 0, g.s.z * g.s.z);
-    float3x3 Sigma = mul(R, mul(S2, transpose(R)));
+    // // covariance = R * diag(s²) * Rᵀ
+    // float3x3 S2 = float3x3(g.s.x * g.s.x, 0, 0,
+    //                        0, g.s.y * g.s.y, 0,
+    //                        0, 0, g.s.z * g.s.z);
+    // float3x3 Sigma = mul(R, mul(S2, transpose(R)));
 
-    // split affine
-    float3x3 A = (float3x3)M;
-    float3   t = M[3].xyz;
+    // // split affine
+    // float3x3 A = (float3x3)M;
+    // float3   t = M[3].xyz;
 
-    // propagate mean
-    float3 pOut = mul(A, g.p) + t;
+    // // propagate mean
+    // float3 pOut = mul(A, g.p) + t;
 
-    // propagate covariance
-    float3x3 SigmaP = mul(A, mul(Sigma, transpose(A)));
+    // // propagate covariance
+    // float3x3 SigmaP = mul(A, mul(Sigma, transpose(A)));
 
-    // eigen/SVD: SigmaP = U * diag(D) * Uᵀ
-    float3x3 U, V;
-    float3   D;
-    GetSVD3D(SigmaP, U, D, V);
+    // // eigen/SVD: SigmaP = U * diag(D) * Uᵀ
+    // float3x3 U, V;
+    // float3   D;
+    // GetSVD3D(SigmaP, U, D, V);
 
-    // enforce right‑handed frame
-    if (determinant(U) < 0) U[0] = -U[0];
+    // // enforce right‑handed frame
+    // if (determinant(U) < 0) U[0] = -U[0];
 
-    Gaussian result;
-    result.s = sqrt(D);      // new scales
-    result.q = m2q(U);       // new orientation
-    if (result.q.w < 0) result.q = -result.q;
-    result.p = pOut;         // new mean
-    return result;
+    // Gaussian result;
+    // result.s = sqrt(D);      // new scales
+    // result.q = m2q(U);       // new orientation
+    // if (result.q.w < 0) result.q = -result.q;
+    // result.p = pOut;         // new mean
+    // result.a = g.a / max(0.001,abs(determinant(A))); // scale density by determinant of affine transform
+    // return result;
 }

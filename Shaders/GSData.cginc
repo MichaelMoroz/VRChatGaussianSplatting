@@ -2,6 +2,7 @@
 #include "Random.cginc"
 #include "Packing.cginc"
 #include "Quaternion.cginc"
+#include "Linalg.cginc"
 
 Texture2D<float4> _GS_PackedPositions;
 Texture2D<float4> _GS_PackedColors;
@@ -102,9 +103,10 @@ float3 shift_color(float3 rgb)
 }
 
 struct Gaussian {
-    float3 p;
-    float3 s;
-    float4 q;
+    float3 p; // position
+    float3 s; // scale
+    float4 q; // quaternion (rotation)
+    float a; //density
 };
 
 struct SplatData {
@@ -130,31 +132,20 @@ Gaussian UnpackGaussian(uint4 data) {
     return o;
 }
 
-SplatData LoadPackedSplatData(uint id) {
-    uint2 coord = uint2(id % uint(_GS_PackedPositions_TexelSize.z), id / uint(_GS_PackedPositions_TexelSize.z));
-
-    SplatData o;
-    o.g = UnpackGaussian(asuint(_GS_PackedPositions[coord]));
-    o.color = _GS_PackedColors[coord];
-    o.id = id; // store the original ID for debugging purposes
-    o.valid = true; // packed data is always valid
-    return o;
+GaussianData SplatDataToData(SplatData g) {
+    GaussianData data;
+    data.P = g.g.p;
+    data.RS = CholeskyFromQS(g.g.q, g.g.s);
+    data.C = g.color;
+    data = UnpackGaussianData(PackGaussianData(data)); //test if packing works correctly
+    return data;
 }
 
-// SplatData LoadSplatData(uint id) {
-//     uint2 coord = uint2(id % uint(_GS_Positions_TexelSize.z), id / uint(_GS_Positions_TexelSize.z));
+GaussianData LoadPackedSplatData(uint id) {
+    uint2 coord = uint2(id % uint(_GS_PackedPositions_TexelSize.z), id / uint(_GS_PackedPositions_TexelSize.z));
 
-//     SplatData o;
-//     o.mean = _GS_Positions[coord].xyz;
-//     // Without a low pass filter some splats can look too "thin", so we try to correct for this.
-//     // Only necessary if splats are trained without mip-splatting.
-//     o.scale = max(exp2(_Log2MinScale), _GS_Scales[coord].xyz);
-//     o.quat = normalize(lerp(-1.0, 1.0, _GS_Rotations[coord]));
-//     o.color = _GS_Colors[coord]; // convert to linear space
-//     o.color.rgb = shift_color(o.color.rgb) * _Exposure; // apply color shift
-//     o.color.a *= _Opacity;
-//     return o;
-// }
+    return UnpackGaussianData(asuint(_GS_PackedPositions[coord]));
+}
 
 int GetPrecomputedRenderOrderIndex(uint id, float3 cam_dir) {
     float3 dirs[10] = {
@@ -180,7 +171,7 @@ int GetPrecomputedRenderOrderIndex(uint id, float3 cam_dir) {
     return _GS_RenderOrderPrecomputed[int3(coord, best_index)];
 }
 
-SplatData LoadSplatDataRenderOrder(uint id) {
+GaussianData LoadSplatDataRenderOrder(uint id) {
     bool validOrder = _GS_RenderOrder_TexelSize.z >= _GS_PackedPositions_TexelSize.z; 
     uint reordered_id = id;
     bool valid = true;
@@ -197,16 +188,16 @@ SplatData LoadSplatDataRenderOrder(uint id) {
     } else {
         reordered_id = pcg(reordered_id) % _ActualSplatCount; // randomize order for alpha blending to somewhat work
     }
-    SplatData data = LoadPackedSplatData(reordered_id);
-    data.id = reordered_id; // store the original ID for debugging purposes
-    data.valid = valid;
+    GaussianData data = LoadPackedSplatData(reordered_id);
+   // data.id = reordered_id; // store the original ID for debugging purposes
+   // data.valid = valid;
     return data;
 }
 
-SplatData LoadSplatDataPrecomputedOrder(uint id, float3 cam_dir) {
+GaussianData LoadSplatDataPrecomputedOrder(uint id, float3 cam_dir) {
     int precomputedIndex = GetPrecomputedRenderOrderIndex(id, cam_dir);
-    SplatData data = LoadPackedSplatData(precomputedIndex);
-    data.id = precomputedIndex; // store the original ID for debugging purposes
-    data.valid = true; // precomputed order is always valid
+    GaussianData data = LoadPackedSplatData(precomputedIndex);
+   // data.id = precomputedIndex; // store the original ID for debugging purposes
+   // data.valid = true; // precomputed order is always valid
     return data;
 }

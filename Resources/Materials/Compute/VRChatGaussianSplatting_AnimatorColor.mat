@@ -33,7 +33,7 @@ Material:
         m_Offset: {x: 0, y: 0}
     m_Ints: []
     m_Floats:
-    - _ActualSplatCount: 1500625
-    - _ActualSplatCountSqrt: 1225
+    - _ActualSplatCount: 525625
+    - _ActualSplatCountSqrt: 725
     m_Colors: []
   m_BuildTextureStacks: []

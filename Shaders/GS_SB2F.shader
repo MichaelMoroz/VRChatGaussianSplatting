@@ -20,13 +20,14 @@ Shader "VRChatGaussianSplatting/GaussianSplattingSimpleBackToFront"
         _GaussianMul ("Gaussian Scale", Range(0, 2)) = 1.0
         _ThinThreshold ("Thinness Threshold", Range(0, 1)) = 0.005
         _AntiAliasing ("Antialiasing", Range(0, 5.0)) = 1.0
-        _Log2MinScale ("Log2 of Minimum Scale", Range(-20, 10)) = -12.0
+        _Log2MinScale ("Log2 of Minimum Scale", Range(-20, 10)) = -15.0
         _AlphaCutoff ("Alpha Cutoff", Range(0, 1)) = 0.03
         _ScaleCutoff ("Scale Cutoff", Range(0, 100)) = 100.0
         _Exposure ("Exposure", Range(0, 5)) = 1.0
         _Opacity ("Opacity", Range(0, 5)) = 1.0
         _OKLCHShift ("OKLCH Color Shift", Vector) = (0, 0, 0, 0) // Shift for OKLCH color space
         _Gamma ("Gamma", Float) = 1.0 
+        [Toggle] _FAKE_SRGB ("Fake sRGB", Integer) = 0
     }
     SubShader
     {

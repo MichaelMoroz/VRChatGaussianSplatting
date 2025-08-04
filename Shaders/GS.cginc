@@ -2,6 +2,7 @@
 #pragma target 5.0
 #pragma exclude_renderers gles
 #pragma shader_feature_local _PRECOMPUTED_SORTING_ON
+#pragma shader_feature_local _FAKE_SRGB_ON
 #pragma vertex vert
 #pragma fragment frag
 #pragma geometry geo
@@ -37,6 +38,17 @@ v2g vert(appdata v) {
     return o;
 }
 
+float2 ClampSize(float2 size, float minsize, float2 axis, float2 resolution) {
+    float2 axisX = axis; // width direction
+    float2 axisY = float2(-axis.y, axis.x); // perpendicular direction
+
+    // axisX*resolution gives per-UV pixel scaling along that direction
+    float2 pixPerUv = float2(length(axisX * resolution), length(axisY * resolution));
+
+    // clamp the size to ensure it is not smaller than the minimum size
+    return max(size, minsize / pixPerUv);
+}
+
 [maxvertexcount(4)]
 [instance(32)]
 void geo(point v2g input[1], inout TriangleStream<g2f> triStream, uint instanceID : SV_GSInstanceID, uint geoPrimID : SV_PrimitiveID) {
@@ -56,20 +68,19 @@ void geo(point v2g input[1], inout TriangleStream<g2f> triStream, uint instanceI
 
     #if _PRECOMPUTED_SORTING_ON
     float3 cam_dir = mul(transpose(UNITY_MATRIX_IT_MV), float4(0, 0, 1, 0)).xyz; // camera direction in object space
-    SplatData splat = LoadSplatDataPrecomputedOrder(id, cam_dir);
+    GaussianData splat = LoadSplatDataPrecomputedOrder(id, cam_dir);
     #else 
-    SplatData splat = LoadSplatDataRenderOrder(id);
+    GaussianData splat = LoadSplatDataRenderOrder(id);
     #endif
 
-    splat.color.rgb = shift_color(splat.color.rgb) * _Exposure; // apply color shift
-    splat.color.a *= _Opacity; // apply opacity
-    if(all(splat.g.s > 0.0)) splat.g.s = max(exp2(_Log2MinScale), splat.g.s); // ensure scale is not too small
+    splat.C.rgb = shift_color(splat.C.rgb) * _Exposure; // apply color shift
+    splat.C.a *= 0.5 * _Opacity; // apply opacity
 
-    if (!splat.valid || (splat.color.a < _AlphaCutoff) || any(splat.g.s > _ScaleCutoff) || any(splat.g.s == 0.0)) {
+    if (splat.C.a < _AlphaCutoff || any(splat.RS > _ScaleCutoff)) {
         return; // skip invalid splats
     }
 
-    float3 splatWorldPos = mul(unity_ObjectToWorld, float4(splat.g.p, 1)).xyz;
+    float3 splatWorldPos = mul(unity_ObjectToWorld, float4(splat.P, 1)).xyz;
     float cameraDistance = length(splatWorldPos - _WorldSpaceCameraPos);
     if (_MinMaxSortDistance.x != _MinMaxSortDistance.y  && (cameraDistance < _MinMaxSortDistance.x || cameraDistance > _MinMaxSortDistance.y)) {
         return; // skip splats outside of the sorting distance range
@@ -80,26 +91,20 @@ void geo(point v2g input[1], inout TriangleStream<g2f> triStream, uint instanceI
     splatClipPos.xyz /= splatClipPos.w; // perspective divide
     if (all(splatClipPos.xy < -1.0) || all(splatClipPos.xy > 1.0)) return; // outside of view frustum
 
-    o.color = splat.color;
-    #ifdef _FAKE_SRGB
+    o.color = splat.C;
+    #ifdef _FAKE_SRGB_ON
         o.color.rgb = GammaToLinearSpace(o.color.rgb);
     #endif
-    float scale_max = max(splat.g.s.x, max(splat.g.s.y, splat.g.s.z));
-    float3 clamped_scale = clamp(splat.g.s, scale_max * _ThinThreshold, scale_max);
 
-    // Project the ellipsoid onto the screen
-    Gaussian clamped;
-    clamped.p = splat.g.p;
-    clamped.s = 2.0 * clamped_scale;
-    clamped.q = splat.g.q;
-    Ellipse ell = GetProjectedEllipsoid(clamped);
+    splat.RS *= 2.0;
+    Ellipse ell = GetProjectedGaussian(splat);
 
     if(any(ell.size > 1.75)) {
         return;
     }
-
+    
     float area = ell.size.x * ell.size.y;
-    ell.size = max(ell.size * _ScreenParams, 1.75 * _AntiAliasing) / _ScreenParams; // ensure minimum size
+    ell.size = ClampSize(ell.size, 1.75 * _AntiAliasing, ell.axis, _ScreenParams.xy); // ensure minimum size
     float areaPost = ell.size.x * ell.size.y;
     float areaScale = area / areaPost;
     o.color.a *= areaScale; // scale alpha by area ratio
@@ -115,10 +120,10 @@ void geo(point v2g input[1], inout TriangleStream<g2f> triStream, uint instanceI
         o.color = float4(1,0,0,1); // debug color for NaN alpha
     }
 
+    float2x2 rot = float2x2(ell.axis.x, -ell.axis.y, ell.axis.y, ell.axis.x);
     [unroll] for (uint vtxID = 0; vtxID < 4; vtxID ++)
     {
         o.quadPos = float2(vtxID & 1, (vtxID >> 1) & 1) * 2.0 - 1.0;
-        float2x2 rot = float2x2(ell.axis.x, -ell.axis.y, ell.axis.y, ell.axis.x);
         float2 ndc = ell.center + mul(rot, _QuadScale * o.quadPos * ell.size);
         o.position = float4(ndc, splatClipPos.z, 1.0);
         triStream.Append(o);

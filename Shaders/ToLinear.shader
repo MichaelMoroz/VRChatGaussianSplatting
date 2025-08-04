@@ -25,7 +25,7 @@ Shader "VRChatGaussianSplatting/ToLinear"
                 //Fix for front to back splat rendering
                 float4 colPreSplat = UNITY_SAMPLE_SCREENSPACE_TEXTURE(_LinearBackground, i.uv.xy);
                 colPostSplat.rgb -= LinearToGammaSpace(colPreSplat.rgb) * colPostSplat.a; 
-
+                colPostSplat.a = 1.0 - (1.0 - colPreSplat.a) * (1.0 - colPostSplat.a);
                 colPostSplat.rgb = GammaToLinearSpace(colPostSplat.rgb);
                 return colPostSplat;
             }

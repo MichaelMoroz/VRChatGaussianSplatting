@@ -10,6 +10,8 @@ using UnityEngine;
 using GaussianSplatting.Editor.Utils;
 using GaussianSplatting;
 
+using UdonSharpEditor;
+
 
 namespace GaussianSplatting
 {
@@ -19,75 +21,135 @@ namespace GaussianSplatting
     public static class Float3Packing
     {
         /* ---------- helpers ---------- */
-
-        private const float  M        = 262143f;      // 2^18-1
-        private const int   MANT_BIAS = 1 << 18;    // 2^18
-        private static int  RoundToInt(float f) => (int)Mathf.Round(f);
-
-        /* =========================================================
-        *  E5 / S9×3  →  uint   (“one word”)   packF3U1 / unpackF3U1
-        * =========================================================*/
-        public static uint packF3U1(Vector3 v)
+        private static int SignExtend(uint v, int bits)
         {
-            float maxv  = Mathf.Max(Mathf.Abs(v.x), Mathf.Max(Mathf.Abs(v.y), Mathf.Abs(v.z)));
-            int   e     = Mathf.Clamp(Mathf.CeilToInt(Mathf.Log(maxv, 2f)), -15, 15);
-            float scale = Mathf.Pow(2f, -e);
-
-            uint sx = (uint)(RoundToInt(Mathf.Clamp(v.x * scale, -1f, 1f) * 255f) + 255);
-            uint sy = (uint)(RoundToInt(Mathf.Clamp(v.y * scale, -1f, 1f) * 255f) + 255);
-            uint sz = (uint)(RoundToInt(Mathf.Clamp(v.z * scale, -1f, 1f) * 255f) + 255);
-
-            return  (uint)(e + 15)        |
-                (sx << 5)              |
-                (sy << 14)             |
-                (sz << 23);
+            int shift = 32 - bits;
+            return ((int)v << shift) >> shift;
         }
 
-        public static Vector3 unpackF3U1(uint data)
-        {
-            int   e  = (int)(data & 0x1Fu) - 15;
-            uint  sx = (data >>  5) & 0x1FFu;
-            uint  sy = (data >> 14) & 0x1FFu;
-            uint  sz =  data >> 23;
-
-            float scale = Mathf.Pow(2f, e);
-            return (new Vector3(sx, sy, sz) / 255f - Vector3.one) * scale;
+        public static unsafe uint SingleToUInt32Bits(float value) {
+            return *(uint*)(&value);
+        }
+        public static unsafe float UInt32BitsToSingle(uint value) {
+            return *(float*)(&value);
         }
 
-        /* =========================================================
-        *  E7 / S19×3  →  uint2  (“two words”)   packF3U2 / unpackF3U2
-        * =========================================================*/
-        public static UInt2 packF3U2(Vector3 v)
+        private static float ScaleFromExponent(int e)
+            => BitConverter.Int32BitsToSingle((127 + e) << 23);
+
+        private static int GetExponentFromScale(float s)
+            => ((BitConverter.SingleToInt32Bits(s) >> 23) & 0xFF) - 127;
+
+        private static uint UX(int v, int bits)  => (uint)v & ((1u << bits) - 1);
+        private static int  SX(uint v, int bits) => ((int)(v << (32 - bits))) >> (32 - bits);
+
+        // -------------------- constants -----------------------------
+        private const float M9  = 255f;        //  9-bit mantissa (F3U1)
+        private const float M19 = 262143f;     // 19-bit mantissa (F3U2)
+
+        // ============================================================
+        // F3U1  (32-bit)
+        // ============================================================
+        public static uint PackF3U1(Vector3 v)
         {
-            if (v == Vector3.zero) return new UInt2(0, 0); // special case for zero vector
+            float maxv = Mathf.Max(Mathf.Abs(v.x), Mathf.Max(Mathf.Abs(v.y), Mathf.Abs(v.z)));
 
-            float maxv  = Mathf.Max(Mathf.Abs(v.x), Mathf.Max(Mathf.Abs(v.y), Mathf.Abs(v.z)));
-            int   e     = Mathf.Clamp(Mathf.CeilToInt(Mathf.Log(maxv, 2f)), -63, 63);
-            float scale = Mathf.Pow(2f, -e);
+            int e;
+            if (maxv == 0f) e = 0;
+            else
+            {
+                int floorE = GetExponentFromScale(maxv);
+                e = floorE + ((BitConverter.SingleToInt32Bits(maxv) & 0x007FFFFF) != 0 ? 1 : 0);
+                e = Mathf.Clamp(e, -16, 15);
+            }
 
-            uint mx = (uint)(RoundToInt(Mathf.Clamp(v.x * scale, -1f, 1f) * M) + MANT_BIAS);
-            uint my = (uint)(RoundToInt(Mathf.Clamp(v.y * scale, -1f, 1f) * M) + MANT_BIAS);
-            uint mz = (uint)(RoundToInt(Mathf.Clamp(v.z * scale, -1f, 1f) * M) + MANT_BIAS);
-            uint eb = (uint)(e + 63);                         // 7-bit biased exponent
+            float scale = ScaleFromExponent(-e);
 
-            uint lo =  eb | (mx << 7) | ((my & 0x3Fu) << 26);
+            int mxI = Mathf.RoundToInt(Mathf.Clamp(v.x * scale, -1f, 1f) * M9);
+            int myI = Mathf.RoundToInt(Mathf.Clamp(v.y * scale, -1f, 1f) * M9);
+            int mzI = Mathf.RoundToInt(Mathf.Clamp(v.z * scale, -1f, 1f) * M9);
+
+            uint mx = UX(mxI, 9);
+            uint my = UX(myI, 9);
+            uint mz = UX(mzI, 9);
+            uint eb = UX(e,   5);
+
+            return  mx
+                | (my << 9)
+                | ((mz & 0x1Fu) << 18)
+                | (eb << 23)
+                | ((mz >> 5) << 28);
+        }
+
+        public static Vector3 UnpackF3U1(uint w)
+        {
+            if (w == 0u) return Vector3.zero;
+
+            uint mxBits =  w        & 0x1FFu;
+            uint myBits = (w >>  9) & 0x1FFu;
+            uint mzBits = ((w >> 28) & 0xFu) << 5 | ((w >> 18) & 0x1Fu);
+            uint ebBits = (w >> 23) & 0x1Fu;
+
+            int  mx = SX(mxBits, 9);
+            int  my = SX(myBits, 9);
+            int  mz = SX(mzBits, 9);
+            int  e  = SX(ebBits, 5);
+
+            float scale = ScaleFromExponent(e);
+            return new Vector3(mx, my, mz) / M9 * scale;
+        }
+
+        // ============================================================
+        // F3U2  (64-bit → UInt2)
+        // ============================================================
+        public static UInt2 PackF3U2(Vector3 v)
+        {
+            float maxv = Mathf.Max(Mathf.Abs(v.x), Mathf.Max(Mathf.Abs(v.y), Mathf.Abs(v.z)));
+
+            int e;
+            if (maxv == 0f) e = 0;
+            else
+            {
+                int floorE = GetExponentFromScale(maxv);
+                e = floorE + ((BitConverter.SingleToInt32Bits(maxv) & 0x007FFFFF) != 0 ? 1 : 0);
+                e = Mathf.Clamp(e, -64, 63);
+            }
+
+            float scale = ScaleFromExponent(-e);
+
+            int mxI = Mathf.RoundToInt(Mathf.Clamp(v.x * scale, -1f, 1f) * M19);
+            int myI = Mathf.RoundToInt(Mathf.Clamp(v.y * scale, -1f, 1f) * M19);
+            int mzI = Mathf.RoundToInt(Mathf.Clamp(v.z * scale, -1f, 1f) * M19);
+
+            uint mx = UX(mxI, 19);
+            uint my = UX(myI, 19);
+            uint mz = UX(mzI, 19);
+            uint eb = UX(e,   7);
+
+            uint lo =  mx | (eb << 19) | ((my & 0x3Fu) << 26);
             uint hi = (my >> 6) | (mz << 13);
 
             return new UInt2(lo, hi);
         }
 
-        public static Vector3 unpackF3U2(UInt2 data)
+        public static Vector3 UnpackF3U2(UInt2 d)
         {
-            uint lo = data.x;
-            uint hi = data.y;
+            if (d.x == 0 && d.y == 0) return Vector3.zero;
 
-            int  e  = (int)(lo & 0x7Fu) - 63;
-            uint mx = (lo >>  7) & 0x7FFFFu;
-            uint my = ((hi & 0x1FFFu) << 6) | ((lo >> 26) & 0x3Fu);
-            uint mz = (hi >> 13) & 0x7FFFFu;
+            uint lo = d.x, hi = d.y;
 
-            float scale = Mathf.Pow(2f, e);
-            return (new Vector3(mx, my, mz) - Vector3.one * 262144f) / M * scale;
+            uint mxBits =  lo & 0x7FFFFu;
+            uint myBits = ((lo >> 26) & 0x3Fu) | ((hi & 0x1FFFu) << 6);
+            uint mzBits =  (hi >> 13) & 0x7FFFFu;
+            uint ebBits = (lo >> 19) & 0x7Fu;
+
+            int  mx = SX(mxBits, 19);
+            int  my = SX(myBits, 19);
+            int  mz = SX(mzBits, 19);
+            int  e  = SX(ebBits, 7);
+
+            float scale = ScaleFromExponent(e);
+            return new Vector3(mx, my, mz) / M19 * scale;
         }
     }
 
@@ -163,7 +225,7 @@ namespace GaussianSplatting
             if (addGaussianSplatObject) {
                 // Add the GaussianSplatObject component to the GameObject
                 // This is necessary for the prefab to be recognized as a Gaussian Splat Object for the renderer
-                go.AddComponent<GaussianSplatObject>();
+                GaussianSplatObject splatcomponent = go.AddUdonSharpComponent<GaussianSplatObject>();
             }
             var prefab = PrefabUtility.SaveAsPrefabAssetAndConnect(go, assetPath, InteractionMode.AutomatedAction);
             GameObject.DestroyImmediate(go); // clean up the temporary GameObject
@@ -381,17 +443,17 @@ namespace GaussianSplatting
                     for (int i = 0; i < data.Length; ++i)
                     {
                         var s     = data[i];
-                        UInt2 pos  = Float3Packing.packF3U2(s.pos);
-                        uint  scl  = Float3Packing.packF3U1(s.scale);
-                        uint  rot  = Float3Packing.packF3U1(QuaternionToAxisAngle(new Vector4(s.rot.x, s.rot.y, s.rot.z, s.rot.w)));
+                        UInt2 pos  = Float3Packing.PackF3U2(s.pos);
+                        uint  scl  = Float3Packing.PackF3U1(s.scale);
+                        uint  rot  = Float3Packing.PackF3U1(QuaternionToAxisAngle(new Vector4(s.rot.x, s.rot.y, s.rot.z, s.rot.w)));
 
                         // bit‑preserving cast: uint → float
                         posPixels[i] = new Color
                         (
-                            UIntToFloat(pos.x),
-                            UIntToFloat(pos.y),
-                            UIntToFloat(scl),
-                            UIntToFloat(rot) 
+                            Float3Packing.UInt32BitsToSingle(pos.x),
+                            Float3Packing.UInt32BitsToSingle(pos.y),
+                            Float3Packing.UInt32BitsToSingle(scl),
+                            Float3Packing.UInt32BitsToSingle(rot) 
                         );
 
                         colPixels[i] = new Color(s.dc0.x, s.dc0.y, s.dc0.z, s.opacity);
@@ -459,6 +521,11 @@ namespace GaussianSplatting
                         splatMat.SetInt("_ActualSplatCount", n);
                         splatMat.SetInt("_ActualSplatCountSqrt", side);
                         mainMat = splatMat;
+                        if(!useSRGB) {
+                            splatMat.SetInteger("_FAKE_SRGB", 1);
+                            splatMat.EnableKeyword("_FAKE_SRGB");
+                            splatMat.EnableKeyword("_FAKE_SRGB_ON");
+                        }
                         if(precomputeSorting)
                         {
                             splatMat.SetTexture("_GS_RenderOrderPrecomputed", sortedTex);

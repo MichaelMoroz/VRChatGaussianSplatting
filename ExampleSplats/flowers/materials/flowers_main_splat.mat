@@ -44,16 +44,18 @@ Material:
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
     m_Ints:
+    - _FAKE_SRGB: 0
     - _PRECOMPUTED_SORTING: 0
     m_Floats:
     - _ActualSplatCount: 2002225
+    - _ActualSplatCountSqrt: 1415
     - _AlphaCutoff: 0.03
     - _AntiAliasing: 1
     - _Exposure: 1
     - _Gamma: 1
     - _GaussianMul: 1
     - _HACK_UNIFORM: 1
-    - _Log2MinScale: -12
+    - _Log2MinScale: -15
     - _Opacity: 1
     - _QuadScale: 1.1
     - _ScaleCutoff: 100

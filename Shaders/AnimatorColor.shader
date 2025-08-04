@@ -22,14 +22,13 @@ Shader "VRChatGaussianSplatting/AnimatorColor"
             #pragma vertex   vert
             #pragma fragment frag
             #pragma enable_d3d11_debug_symbols
-            #include "BlitCommon.cginc"
-            #include "GSData.cginc"
+            #include "AnimatorCommon.cginc"
 
             float4 frag (v2f i) : SV_Target {
-                uint2 pixel = floor(i.pos.xy);
+                int2 pixel = floor(i.pos.xy);
                 uint id = pixel.x + pixel.y * _ActualSplatCountSqrt;
-                SplatData splat = LoadPackedSplatData(id);
-                return splat.color;
+
+                return 0.0; // clamp alpha to [0, 1]
             }
             ENDCG
         }

@@ -1,3 +1,6 @@
+#ifndef QUATERNION_CGINC
+#define QUATERNION_CGINC
+
 float4 quaternion(float3 axis, float angle) {
     return float4(axis * sin(angle * 0.5), cos(angle * 0.5));
 }
@@ -77,3 +80,5 @@ float4 axisAngleToQuaternion(float3 aa)
     float3 axis = normalize_safe(aa);
     return float4(axis * sin(angle * 0.5), cos(angle * 0.5));
 }
+
+#endif // QUATERNION_CGINC
