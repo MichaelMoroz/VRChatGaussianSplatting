@@ -7,6 +7,10 @@ float3x3 Diag3x3(float3 d) {
     return float3x3(d.x, 0, 0, 0, d.y, 0, 0, 0, d.z);
 }
 
+float FrobeniusNorm3x3(float3x3 m) {
+    return sqrt(dot(m[0], m[0]) + dot(m[1], m[1]) + dot(m[2], m[2]));
+}
+
 // ============================================================================
 // 1)  Cholesky factor — lower-triangular     (A = L · Lᵀ)
 // ============================================================================
@@ -59,6 +63,23 @@ float3x3 Triangularize3x3_L(float3x3 M)  // rows → lower-triangular
     );
 }
 
+
+float3x3 Scale(float3 s) {
+    return float3x3(s.x, 0, 0, 0, s.y, 0, 0, 0, s.z);
+}
+
+float3x3 RotationScale(float4 q, float3 s) {
+    float3x3 R = q2m(q);
+    float3x3 S = Scale(s);
+    return mul(R, S);
+}
+
+float3x3 CholeskyFromQS(float4 q, float3 sigma)
+{
+    return Triangularize3x3_L(RotationScale(q, sigma));
+}
+
+
 // ============================================================================
 // 3)  Inverse of a lower-triangular 3×3
 //     (returns lower-triangular result as well)
@@ -79,21 +100,6 @@ float3x3 Invert3x3_L(float3x3 L)
     // zero upper part just in case
     V[0][1] = V[0][2] = V[1][2] = 0.0;
     return V;
-}
-
-float3x3 Scale(float3 s) {
-    return float3x3(s.x, 0, 0, 0, s.y, 0, 0, 0, s.z);
-}
-
-float3x3 RotationScale(float4 q, float3 s) {
-    float3x3 R = q2m(q);
-    float3x3 S = Scale(s);
-    return mul(R, S);
-}
-
-float3x3 CholeskyFromQS(float4 q, float3 sigma)
-{
-    return Triangularize3x3_L(RotationScale(q, sigma));
 }
 
 #endif // LINALG_CGINC

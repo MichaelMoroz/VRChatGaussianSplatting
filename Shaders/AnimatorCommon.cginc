@@ -2,25 +2,18 @@
 #include "GSData.cginc"
 #include "GSMath.cginc"
 
-float3 sbf(float3 c, float3 w, float s){
-    //float x = sin(pi*c.x*w.x) * cos(pi*c.y*w.y) * cos(pi*c.z*w.z);
-    //float y = sin(pi*c.y*w.y) * cos(pi*c.z*w.z) * cos(pi*c.x*w.x);
-    //float z = sin(pi*c.z*w.z) * cos(pi*c.x*w.x) * cos(pi*c.y*w.y);
-    float3 k = sin(PI*c*w) * cos(PI*c.yzx*w.yzx) * cos(PI*c.zxy*w.zxy);
-    k = lerp(k, k* cross(normalize(w), normalize(float3(2,4,1))), s);
-    return k;
-}
-
 float3 move(float3 p)
 {
     float3 c = p;
-    int iters = 8;
+    int iters = 16;
     int i = 0;
-    const float str = 0.005 * _SinTime.w; // strength of the noise, can be animated
-    const float freq = 3.0;
+    c += 0.025 * os2NoiseWithDerivatives_ImproveXY(c * 2.0).xyz;
+    const float str = 0.02 * _SinTime.w; // strength of the noise, can be animated
+    float freq = 1.0;
     for(; i<iters; i++ )
     {
-        c += str * CurlNoise3D(c, freq);
+        c += str * CurlNoise3D(c, freq) / freq;
+        freq *= 1.2;
     }
     return c;
 }
@@ -78,10 +71,10 @@ float3 ClampScale(float3 s, float maxaniso)
 }
 
 // --- one‑liner: sample‑→‑matrix‑→‑Gaussian ----------------------------------
-GaussianData PropagateGaussianViaMove(GaussianData g)
+GaussianData PropagateGaussianViaMove(GaussianData g, bool transformVolume = true)
 {
     float4x4 M = EstimateAffineFromMove(g);
-    GaussianData n = TransformGaussian(g, M);
+    GaussianData n = TransformGaussian(g, M, transformVolume);
     //n.s = ClampScale(n.s, 50.0);
     return n;
 }
@@ -89,7 +82,7 @@ GaussianData PropagateGaussianViaMove(GaussianData g)
 // -----------------------------------------------------------------------------
 // 1)  Core mapper with explicit lattice dimensions
 // -----------------------------------------------------------------------------
-float3 HexIndexToCoord(uint index, uint3 dims)
+float4 HexIndexToCoord(uint index, uint3 dims)
 {
     // Unpack dimensions
     uint Nx = dims.x, Ny = dims.y, Nz = dims.z;
@@ -124,43 +117,60 @@ float3 HexIndexToCoord(uint index, uint3 dims)
                         (float)(Ny - 1) * DY + Y_OFFSET,
                         (float)(Nz - 1) * DZ);
 
-    // Map to [0,1]³ – guard against degenerate extents
-    return p / max(max(ext.x, ext.y), max(ext.z, 1e-6.xxx));
+    return float4(p - ext * 0.5, 1.0) / max(max(ext.x, ext.y), max(ext.z, 1e-6));
 }
 
-// -----------------------------------------------------------------------------
-// 2)  Convenience overload – infers an almost-cubic lattice from total point count
-// -----------------------------------------------------------------------------
-float3 HexIndexToCoord(uint index, uint totalPoints)
-{
-    // Cube root → side length rounded up
-    uint k = (uint)ceil(pow((float)(totalPoints + 1u), 1.0 / 3.0));
+GaussianData GenerateUniformGrid(uint id, uint count, uint layerssqrt, float4 color, float randomness = 0.0) {
+    uint3 gridsize = uint3(count / layerssqrt, count / layerssqrt, layerssqrt*layerssqrt);
+    float4 gridpos = HexIndexToCoord(id, gridsize);
 
-    // Number of full Z layers actually needed
-    uint Nz = (totalPoints + k * k - 1u) / (k * k);
+    GaussianData g;
+    g.P = gridpos.xyz * 2.0 + randomness * (rand3(id) - 0.5) * gridpos.w;
+    g.RS = Diag3x3(gridpos.w * 0.7);
+    g.C = color;
+    return g;
+}
 
-    return HexIndexToCoord(index, uint3(k, k, Nz));
+float3x3 ClampTransform(float3x3 target, float3x3 source, float maxdist) {
+    float3x3 diff = target - source;
+    float sourceL = FrobeniusNorm3x3(source);
+    float dist = FrobeniusNorm3x3(diff);
+    if (dist > maxdist * sourceL) {
+        float scale = maxdist * sourceL / dist;
+        return source + diff * scale; // clamp the distance
+    } else {
+        return target; // no clamping needed
+    }
+}
+
+float3 AddLight(float3 pos, float3 lpos, float3 col, float falloff, float falloffexp = 0.0) {
+    float lightDistance = length(pos - lpos);
+    float lightFalloff = exp(-falloffexp*lightDistance) / (1.0 + falloff * lightDistance * lightDistance); // simple falloff
+    return col * lightFalloff; // apply light effect
 }
 
 GaussianData GenerateGaussian(uint id) {
-    GaussianData g;
-    uint seed = id;
-    
-    uint zsqrt = 6;
-    uint3 gridsize = uint3(_ActualSplatCountSqrt / zsqrt, _ActualSplatCountSqrt / zsqrt, zsqrt*zsqrt);
-    float3 gridpos = HexIndexToCoord(id, gridsize);
-    g.P = gridpos * 2.0 - 1.0; // random position in [-1,1]^3
-   
-    float4 noise = os2NoiseWithDerivatives_ImproveXY(2.0*g.P);
-    float3 col = abs(noise.w)*1.5*float3(0.7, 0.8, 0.9); // random position in [-1,1]^3
+    GaussianData g = GenerateUniformGrid(id, _ActualSplatCountSqrt, 5, float4(0.25, 0.25, 0.25, 0.1), 0.0);
+
+    float4 noise = os2NoiseWithDerivatives_ImproveXY(5.0*g.P);
+    float3 col = float3(0.7, 0.8, 0.9);
     col = pow(col, 1.2);
    
     const float threshold = 0.95;
-
+    uint seed = id + 123456789u; // unique seed for each Gaussian
     float star = smoothstep(threshold - 0.002, threshold, rand(seed));
-    col += 120.0 * star * ((noise.w > 0.3) ? float3(0.1, 0.4, 1.0) : float3(1.0, 0.4, 0.1)); // blue or orange star color
-    float scale = (star > 0.01) ? 0.0005 : 0.007;
-    g.RS = Diag3x3(scale); // small scale
-    g.C = float4(col, 0.07); // density
+    col += 50.0 * star * ((noise.w > 0.3) ? float3(0.1, 0.4, 1.0) : float3(1.0, 0.4, 0.1)); // blue or orange star color
+    g.C.xyz = col; // density
+    //g.C.w *= 4.0*abs(noise.w);
+
+
+    float3x3 oldRS = g.RS;
+    g = PropagateGaussianViaMove(g, true);
+    g.RS = ClampTransform(g.RS, oldRS, 1.5); // clamp the scale to avoid extreme anisotropy
+    g.C.xyz *= smoothstep(0.3, -0.3, g.P.z) * (0.5 * abs(noise.w) + 0.5);
+    //g.RS = lerp(g.RS, Diag3x3(0.007), 0.5); // small scale
+    g.RS = (star > 0.01) ?  g.RS*0.15 : g.RS * 5.0;
+    g.C = (star > 0.01) ? float4(col, 0.15) : g.C;
+    g.P = (star > 0.01) ? g.P * float3(5.0, 5.0, 2.0) : g.P * 5.0;
     return g;
 }

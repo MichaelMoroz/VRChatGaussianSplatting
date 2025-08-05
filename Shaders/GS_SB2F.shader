@@ -28,6 +28,8 @@ Shader "VRChatGaussianSplatting/GaussianSplattingSimpleBackToFront"
         _OKLCHShift ("OKLCH Color Shift", Vector) = (0, 0, 0, 0) // Shift for OKLCH color space
         _Gamma ("Gamma", Float) = 1.0 
         [Toggle] _FAKE_SRGB ("Fake sRGB", Integer) = 0
+        [Toggle] _VRC_LIGHT_VOLUMES ("VRC Light Volumes support", Integer) = 0
+        _LightVolumeIntensity ("Light Volume Intensity", Range(0, 10)) = 1.0
     }
     SubShader
     {

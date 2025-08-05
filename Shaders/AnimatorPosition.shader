@@ -31,11 +31,6 @@ Shader "VRChatGaussianSplatting/AnimatorPosition"
 
                 //SplatData splat = LoadPackedSplatData(id);
                 GaussianData g = GenerateGaussian(id);
-
-                //Gaussian old = g;
-                g = PropagateGaussianViaMove(g);
-                //g.s = old.s; // keep the original scale
-                //g.q = old.q; // keep the original rotation
                 return asfloat(PackGaussianData(g));
             }
             ENDCG

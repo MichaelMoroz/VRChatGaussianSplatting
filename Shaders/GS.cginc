@@ -3,6 +3,7 @@
 #pragma exclude_renderers gles
 #pragma shader_feature_local _PRECOMPUTED_SORTING_ON
 #pragma shader_feature_local _FAKE_SRGB_ON
+#pragma shader_feature_local _VRC_LIGHT_VOLUMES_ON
 #pragma vertex vert
 #pragma fragment frag
 #pragma geometry geo
@@ -10,6 +11,11 @@
 #include "UnityCG.cginc"
 #include "GSData.cginc"
 #include "GSMath.cginc"
+
+#ifdef _VRC_LIGHT_VOLUMES_ON
+#include "LightVolumes.cginc"
+float _LightVolumeIntensity;
+#endif
 
 struct appdata {
     float4 position : POSITION;
@@ -119,6 +125,17 @@ void geo(point v2g input[1], inout TriangleStream<g2f> triStream, uint instanceI
         ell.size = float2(0.01, 0.01); // set size to a small value
         o.color = float4(1,0,0,1); // debug color for NaN alpha
     }
+
+    #ifdef _VRC_LIGHT_VOLUMES_ON
+    if(LightVolumesEnabled())
+    {
+        float3 L0, L1r, L1g, L1b;
+        LightVolumeSH(splatWorldPos, L0, L1r, L1g, L1b);
+        float3 emissivePart = max(o.color.rgb - 1.0, 0.0);
+        float3 albedoPart = min(o.color.rgb, 1.0);
+        o.color.rgb = albedoPart * L0 * _LightVolumeIntensity + emissivePart;
+    }
+    #endif
 
     float2x2 rot = float2x2(ell.axis.x, -ell.axis.y, ell.axis.y, ell.axis.x);
     [unroll] for (uint vtxID = 0; vtxID < 4; vtxID ++)

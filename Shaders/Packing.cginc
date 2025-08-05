@@ -182,7 +182,7 @@ float3x3 ToLogF3x3(float3x3 v, float minv, float maxv) {
 inline uint Quantize(float v, float mn, float mx, uint bits)
 {
     const float levels = float(1u << bits);
-    return (uint)round(clamp((v - mn) / (mx - mn), 0.0, 1.0) * levels);
+    return (uint)clamp(round((v - mn) / (mx - mn) * levels), 0.0f, levels - 1.0f);
 }
 
 inline float Dequantize(uint q, float mn, float mx, uint bits)

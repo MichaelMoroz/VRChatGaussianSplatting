@@ -11,7 +11,8 @@ Material:
   m_Shader: {fileID: 4800000, guid: f531a645849e0b067b8b09de4f72f60d, type: 3}
   m_Parent: {fileID: 2100000, guid: 900584ece685d8d4f8e7fd717cf0d189, type: 2}
   m_ModifiedSerializedProperties: 16
-  m_ValidKeywords: []
+  m_ValidKeywords:
+  - _VRC_LIGHT_VOLUMES_ON
   m_InvalidKeywords: []
   m_LightmapFlags: 4
   m_EnableInstancingVariants: 0

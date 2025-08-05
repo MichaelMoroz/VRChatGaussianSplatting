@@ -16,140 +16,379 @@ using UdonSharpEditor;
 namespace GaussianSplatting
 {
     public struct UInt2 { public uint x, y; public UInt2(uint a, uint b){x=a;y=b;} }
-    public struct UInt4 { public uint x, y, z, w; public UInt4(uint a,uint b,uint c,uint d){x=a;y=b;z=c;w=d;} }
 
-    public static class Float3Packing
+    public struct UInt4 {
+        public uint x, y, z, w;
+
+        public UInt4(uint x, uint y, uint z, uint w)
+        {
+            this.x = x; this.y = y; this.z = z; this.w = w;
+        }
+
+        public uint this[int i]
+        {
+            readonly get => i switch { 0 => x, 1 => y, 2 => z, 3 => w, _ => 0u };
+            set
+            {
+                switch (i)
+                {
+                    case 0: x = value; break;
+                    case 1: y = value; break;
+                    case 2: z = value; break;
+                    case 3: w = value; break;
+                }
+            }
+        }
+    }
+
+    public struct Matrix3x3
     {
-        /* ---------- helpers ---------- */
-        private static int SignExtend(uint v, int bits)
+        // Row-major
+        public float m00, m01, m02;
+        public float m10, m11, m12;
+        public float m20, m21, m22;
+
+         public Matrix3x3(
+            float m00, float m01, float m02,
+            float m10, float m11, float m12,
+            float m20, float m21, float m22)
         {
-            int shift = 32 - bits;
-            return ((int)v << shift) >> shift;
+            this.m00 = m00; this.m01 = m01; this.m02 = m02;
+            this.m10 = m10; this.m11 = m11; this.m12 = m12;
+            this.m20 = m20; this.m21 = m21; this.m22 = m22;
         }
 
-        public static unsafe uint SingleToUInt32Bits(float value) {
-            return *(uint*)(&value);
-        }
-        public static unsafe float UInt32BitsToSingle(uint value) {
-            return *(float*)(&value);
-        }
+        public Vector3 GetRow(int r) => new Vector3(this[r, 0], this[r, 1], this[r, 2]);
+        public void SetRow(int r, Vector3 v) { this[r, 0] = v.x; this[r, 1] = v.y; this[r, 2] = v.z; }
 
-        private static float ScaleFromExponent(int e)
-            => BitConverter.Int32BitsToSingle((127 + e) << 23);
-
-        private static int GetExponentFromScale(float s)
-            => ((BitConverter.SingleToInt32Bits(s) >> 23) & 0xFF) - 127;
-
-        private static uint UX(int v, int bits)  => (uint)v & ((1u << bits) - 1);
-        private static int  SX(uint v, int bits) => ((int)(v << (32 - bits))) >> (32 - bits);
-
-        // -------------------- constants -----------------------------
-        private const float M9  = 255f;        //  9-bit mantissa (F3U1)
-        private const float M19 = 262143f;     // 19-bit mantissa (F3U2)
-
-        // ============================================================
-        // F3U1  (32-bit)
-        // ============================================================
-        public static uint PackF3U1(Vector3 v)
+        public float this[int r, int c]
         {
-            float maxv = Mathf.Max(Mathf.Abs(v.x), Mathf.Max(Mathf.Abs(v.y), Mathf.Abs(v.z)));
+            readonly get
+            {
+                if (r == 0) return c == 0 ? m00 : (c == 1 ? m01 : m02);
+                if (r == 1) return c == 0 ? m10 : (c == 1 ? m11 : m12);
+                return c == 0 ? m20 : (c == 1 ? m21 : m22);
+            }
+            set
+            {
+                if (r == 0) { if (c == 0) m00 = value; else if (c == 1) m01 = value; else m02 = value; }
+                else if (r == 1) { if (c == 0) m10 = value; else if (c == 1) m11 = value; else m12 = value; }
+                else { if (c == 0) m20 = value; else if (c == 1) m21 = value; else m22 = value; }
+            }
+        }
 
-            int e;
-            if (maxv == 0f) e = 0;
+        public static Matrix3x3 operator *(Matrix3x3 a, float s) => new Matrix3x3
+        {
+            m00 = a.m00 * s, m01 = a.m01 * s, m02 = a.m02 * s,
+            m10 = a.m10 * s, m11 = a.m11 * s, m12 = a.m12 * s,
+            m20 = a.m20 * s, m21 = a.m21 * s, m22 = a.m22 * s,
+        };
+
+        public static Matrix3x3 operator *(float s, Matrix3x3 a) => a * s;
+
+        public Matrix3x3 Abs() => new Matrix3x3
+        {
+            m00 = Mathf.Abs(m00), m01 = Mathf.Abs(m01), m02 = Mathf.Abs(m02),
+            m10 = Mathf.Abs(m10), m11 = Mathf.Abs(m11), m12 = Mathf.Abs(m12),
+            m20 = Mathf.Abs(m20), m21 = Mathf.Abs(m21), m22 = Mathf.Abs(m22),
+        };
+    }
+
+
+    public static class GaussianCodec
+    {
+        // ---- Helpers ----
+
+        // rows → lower-triangular
+        public static Matrix3x3 Triangularize3x3_L(Matrix3x3 M)
+        {
+            const float eps = 1e-8f;
+
+            Vector3 r0 = M.GetRow(0);
+            float l00 = r0.magnitude;                 if (l00 < eps) return default;
+            Vector3 q0 = r0 / l00;
+
+            Vector3 r1 = M.GetRow(1);
+            float l10 = Vector3.Dot(r1, q0);
+            Vector3 v1 = r1 - l10 * q0;
+            float l11 = v1.magnitude;                 if (l11 < eps) return default;
+            Vector3 q1 = v1 / l11;
+
+            Vector3 r2 = M.GetRow(2);
+            float l20 = Vector3.Dot(r2, q0);
+            float l21 = Vector3.Dot(r2, q1);
+            Vector3 v2 = r2 - l20 * q0 - l21 * q1;
+            float l22 = v2.magnitude;                 if (l22 < eps) return default;
+
+            return new Matrix3x3(
+                l00, 0f,  0f,
+                l10, l11, 0f,
+                l20, l21, l22
+            );
+        }
+
+        public static Matrix3x3 Scale(Vector3 s)
+        {
+            return new Matrix3x3(
+                s.x, 0f, 0f,
+                0f,  s.y, 0f,
+                0f,  0f,  s.z
+            );
+        }
+
+        public static Matrix3x3 RotationScale(Quaternion q, Vector3 s)
+        {
+            // R*S where S is diagonal: scale columns of R.
+            Matrix3x3 R = Q2M(q);
+            return new Matrix3x3(
+                R.m00 * s.x, R.m01 * s.y, R.m02 * s.z,
+                R.m10 * s.x, R.m11 * s.y, R.m12 * s.z,
+                R.m20 * s.x, R.m21 * s.y, R.m22 * s.z
+            );
+        }
+
+        public static Matrix3x3 CholeskyFromQS(Quaternion q, Vector3 sigma)
+        {
+            return Triangularize3x3_L(RotationScale(q, sigma));
+        }
+
+        // Quaternion → 3x3 rotation (row-major). Normalizes to avoid drift.
+        static Matrix3x3 Q2M(Quaternion q)
+        {
+            q = q.normalized;
+            float xx = q.x * q.x, yy = q.y * q.y, zz = q.z * q.z;
+            float xy = q.x * q.y, xz = q.x * q.z, yz = q.y * q.z;
+            float xw = q.x * q.w, yw = q.y * q.w, zw = q.z * q.w;
+
+            return new Matrix3x3(
+                1f - 2f * (yy + zz), 2f * (xy - zw),     2f * (xz + yw),
+                2f * (xy + zw),       1f - 2f * (xx + zz), 2f * (yz - xw),
+                2f * (xz - yw),       2f * (yz + xw),     1f - 2f * (xx + yy)
+            );
+        }
+
+        static float Exp2(float x) => Mathf.Pow(2f, x);
+        static float Log2(float x) => Mathf.Log(x, 2f);
+
+        static Vector3 Abs(Vector3 v) => new Vector3(Mathf.Abs(v.x), Mathf.Abs(v.y), Mathf.Abs(v.z));
+        static Vector4 Abs(Vector4 v) => new Vector4(Mathf.Abs(v.x), Mathf.Abs(v.y), Mathf.Abs(v.z), Mathf.Abs(v.w));
+
+        static float MaxC(Vector3 v) => Mathf.Max(Mathf.Max(v.x, v.y), v.z);
+        static float MaxC(Vector4 v) => Mathf.Max(Mathf.Max(Mathf.Max(v.x, v.y), v.z), v.w);
+        static float MaxC(Matrix3x3 m)
+        {
+            var r0 = new Vector3(m.m00, m.m01, m.m02);
+            var r1 = new Vector3(m.m10, m.m11, m.m12);
+            var r2 = new Vector3(m.m20, m.m21, m.m22);
+            return Mathf.Max(Mathf.Max(MaxC(r0), MaxC(r1)), MaxC(r2));
+        }
+
+        // ---- Log mapping ----
+
+        static float FromLog(float lg, float minv, float maxv)
+        {
+            if (lg == 0f) return 0f; 
+            return Exp2(lg * (maxv - minv) + minv) / lg;
+        }
+
+        static float ToLog(float ex, float minv, float maxv)
+        {
+            if (ex == 0f) return 0f;
+            return (Log2(ex) - minv) / (ex * (maxv - minv));
+        }
+
+        static float FromLogF1(float v, float minv, float maxv)
+        {
+            if (v == 0f) return v;
+            float scale = FromLog(v, minv, maxv);
+            return v * scale;
+        }
+
+        static float ToLogF1(float v, float minv, float maxv)
+        {
+            if (v == 0f) return v;
+            float scale = ToLog(v, minv, maxv);
+            return v * scale;
+        }
+
+        static Vector3 FromLogF3(Vector3 v, float minv, float maxv)
+        {
+            float max_v = MaxC(Abs(v));
+            if (max_v == 0f) return v;
+            float scale = FromLog(max_v, minv, maxv);
+            return v * scale;
+        }
+
+        static Vector3 ToLogF3(Vector3 v, float minv, float maxv)
+        {
+            float max_v = MaxC(Abs(v));
+            if (max_v == 0f) return v;
+            float scale = ToLog(max_v, minv, maxv);
+            return v * scale;
+        }
+
+        static Matrix3x3 FromLogF3x3(Matrix3x3 v, float minv, float maxv)
+        {
+            float max_v = MaxC(v.Abs());
+            if (max_v == 0f) return v;
+            float scale = FromLog(max_v, minv, maxv);
+            return v * scale;
+        }
+
+        static Matrix3x3 ToLogF3x3(Matrix3x3 v, float minv, float maxv)
+        {
+            float max_v = MaxC(v.Abs());
+            if (max_v == 0f) return v;
+            float scale = ToLog(max_v, minv, maxv);
+            return v * scale;
+        }
+
+        // ---- Quantize / Dequantize ----
+        static uint Quantize(float v, float mn, float mx, uint bits)
+        {
+            float levels = (float)(1u << (int)bits);
+            float t = Mathf.Clamp01((v - mn) / (mx - mn));
+            return (uint)Mathf.Clamp(Mathf.RoundToInt(t * levels), 0.0f, levels - 1.0f);
+        }
+
+        static float Dequantize(uint q, float mn, float mx, uint bits)
+        {
+            float levels = (float)(1u << (int)bits);
+            return ((float)q / levels) * (mx - mn) + mn;
+        }
+
+        // ---- Bit packing ----
+        static void WriteDataAt(ref UInt4 info, ref int bitOffset, uint data, uint dataBits)
+        {
+            int wordIndex = bitOffset >> 5;
+            int wordBit = bitOffset & 31;
+            int dataBitsStart = (int)(32u - dataBits);
+            int dataBitsOffset = dataBitsStart - wordBit;
+
+            if (dataBitsOffset >= 0)
+            {
+                info[wordIndex] |= data << dataBitsOffset;
+            }
             else
             {
-                int floorE = GetExponentFromScale(maxv);
-                e = floorE + ((BitConverter.SingleToInt32Bits(maxv) & 0x007FFFFF) != 0 ? 1 : 0);
-                e = Mathf.Clamp(e, -16, 15);
+                info[wordIndex] |= data >> (-dataBitsOffset);
+                info[wordIndex + 1] |= data << (dataBitsOffset + 32);
             }
-
-            float scale = ScaleFromExponent(-e);
-
-            int mxI = Mathf.RoundToInt(Mathf.Clamp(v.x * scale, -1f, 1f) * M9);
-            int myI = Mathf.RoundToInt(Mathf.Clamp(v.y * scale, -1f, 1f) * M9);
-            int mzI = Mathf.RoundToInt(Mathf.Clamp(v.z * scale, -1f, 1f) * M9);
-
-            uint mx = UX(mxI, 9);
-            uint my = UX(myI, 9);
-            uint mz = UX(mzI, 9);
-            uint eb = UX(e,   5);
-
-            return  mx
-                | (my << 9)
-                | ((mz & 0x1Fu) << 18)
-                | (eb << 23)
-                | ((mz >> 5) << 28);
+            bitOffset += (int)dataBits;
         }
 
-        public static Vector3 UnpackF3U1(uint w)
+        static uint ReadDataAt(UInt4 info, ref int bitOffset, uint dataBits)
         {
-            if (w == 0u) return Vector3.zero;
+            int wordIndex = bitOffset >> 5;
+            int wordBit = bitOffset & 31;
+            int dataBitsStart = (int)(32u - dataBits);
+            int dataBitsOffset = dataBitsStart - wordBit;
 
-            uint mxBits =  w        & 0x1FFu;
-            uint myBits = (w >>  9) & 0x1FFu;
-            uint mzBits = ((w >> 28) & 0xFu) << 5 | ((w >> 18) & 0x1Fu);
-            uint ebBits = (w >> 23) & 0x1Fu;
-
-            int  mx = SX(mxBits, 9);
-            int  my = SX(myBits, 9);
-            int  mz = SX(mzBits, 9);
-            int  e  = SX(ebBits, 5);
-
-            float scale = ScaleFromExponent(e);
-            return new Vector3(mx, my, mz) / M9 * scale;
-        }
-
-        // ============================================================
-        // F3U2  (64-bit → UInt2)
-        // ============================================================
-        public static UInt2 PackF3U2(Vector3 v)
-        {
-            float maxv = Mathf.Max(Mathf.Abs(v.x), Mathf.Max(Mathf.Abs(v.y), Mathf.Abs(v.z)));
-
-            int e;
-            if (maxv == 0f) e = 0;
+            uint data;
+            if (dataBitsOffset >= 0)
+            {
+                data = info[wordIndex] >> dataBitsOffset;
+            }
             else
             {
-                int floorE = GetExponentFromScale(maxv);
-                e = floorE + ((BitConverter.SingleToInt32Bits(maxv) & 0x007FFFFF) != 0 ? 1 : 0);
-                e = Mathf.Clamp(e, -64, 63);
+                data = info[wordIndex] << (-dataBitsOffset);
+                data |= info[wordIndex + 1] >> (dataBitsOffset + 32);
             }
-
-            float scale = ScaleFromExponent(-e);
-
-            int mxI = Mathf.RoundToInt(Mathf.Clamp(v.x * scale, -1f, 1f) * M19);
-            int myI = Mathf.RoundToInt(Mathf.Clamp(v.y * scale, -1f, 1f) * M19);
-            int mzI = Mathf.RoundToInt(Mathf.Clamp(v.z * scale, -1f, 1f) * M19);
-
-            uint mx = UX(mxI, 19);
-            uint my = UX(myI, 19);
-            uint mz = UX(mzI, 19);
-            uint eb = UX(e,   7);
-
-            uint lo =  mx | (eb << 19) | ((my & 0x3Fu) << 26);
-            uint hi = (my >> 6) | (mz << 13);
-
-            return new UInt2(lo, hi);
+            bitOffset += (int)dataBits;
+            return data & ((1u << (int)dataBits) - 1u);
         }
 
-        public static Vector3 UnpackF3U2(UInt2 d)
+        // ---- Public constants ----
+
+        public const float MIN_POS_LOG2    = -15f;
+        public const float MAX_POS_LOG2    =   4f;
+        public const float MIN_SCALE_LOG2  = -15f;
+        public const float MAX_SCALE_LOG2  =  -2f;
+        public const float MIN_COLOR_LOG2  =  -7f;
+        public const float MAX_COLOR_LOG2  =   7f;
+        public const float MIN_DENSITY_LOG2 = -10f;
+        public const float MAX_DENSITY_LOG2 =   0f;
+
+        // ---- Data layout ----
+
+        public struct GaussianData
         {
-            if (d.x == 0 && d.y == 0) return Vector3.zero;
+            public Vector3 P;     // position
+            public Matrix3x3 RS;  // Cholesky factor of covariance (rotation * scale)
+            public Vector4 C;     // color.xyz (positive), density.w (positive)
+        }
 
-            uint lo = d.x, hi = d.y;
+        public static UInt4 PackGaussianData(GaussianData g)
+        {
+            var data = new UInt4(0, 0, 0, 0);
+            int bitOffset = 0;
 
-            uint mxBits =  lo & 0x7FFFFu;
-            uint myBits = ((lo >> 26) & 0x3Fu) | ((hi & 0x1FFFu) << 6);
-            uint mzBits =  (hi >> 13) & 0x7FFFFu;
-            uint ebBits = (lo >> 19) & 0x7Fu;
+            Vector3 Plog2 = ToLogF3(g.P, MIN_POS_LOG2, MAX_POS_LOG2);
+            uint Px = Quantize(Plog2.x, -1f, 1f, 16);
+            uint Py = Quantize(Plog2.y, -1f, 1f, 16);
+            uint Pz = Quantize(Plog2.z, -1f, 1f, 16);
+            WriteDataAt(ref data, ref bitOffset, Px, 16);
+            WriteDataAt(ref data, ref bitOffset, Py, 16);
+            WriteDataAt(ref data, ref bitOffset, Pz, 16);
 
-            int  mx = SX(mxBits, 19);
-            int  my = SX(myBits, 19);
-            int  mz = SX(mzBits, 19);
-            int  e  = SX(ebBits, 7);
+            Matrix3x3 RSlog2 = ToLogF3x3(g.RS, MIN_SCALE_LOG2, MAX_SCALE_LOG2);
+            uint RS00 = Quantize(RSlog2[0, 0],  0f, 1f, 8);
+            uint RS11 = Quantize(RSlog2[1, 1],  0f, 1f, 8);
+            uint RS22 = Quantize(RSlog2[2, 2],  0f, 1f, 8);
+            uint RS10 = Quantize(RSlog2[1, 0], -1f, 1f, 8);
+            uint RS20 = Quantize(RSlog2[2, 0], -1f, 1f, 8);
+            uint RS21 = Quantize(RSlog2[2, 1], -1f, 1f, 8);
+            WriteDataAt(ref data, ref bitOffset, RS00, 8);
+            WriteDataAt(ref data, ref bitOffset, RS10, 8);
+            WriteDataAt(ref data, ref bitOffset, RS20, 8);
+            WriteDataAt(ref data, ref bitOffset, RS11, 8);
+            WriteDataAt(ref data, ref bitOffset, RS21, 8);
+            WriteDataAt(ref data, ref bitOffset, RS22, 8);
 
-            float scale = ScaleFromExponent(e);
-            return new Vector3(mx, my, mz) / M19 * scale;
+            Vector3 Clog2 = ToLogF3(new Vector3(g.C.x, g.C.y, g.C.z), MIN_COLOR_LOG2, MAX_COLOR_LOG2);
+            uint C0 = Quantize(Clog2.x, 0f, 1f, 8);
+            uint C1 = Quantize(Clog2.y, 0f, 1f, 8);
+            uint C2 = Quantize(Clog2.z, 0f, 1f, 8);
+            WriteDataAt(ref data, ref bitOffset, C0, 8);
+            WriteDataAt(ref data, ref bitOffset, C1, 8);
+            WriteDataAt(ref data, ref bitOffset, C2, 8);
+
+            float Clog2w = ToLogF1(g.C.w, MIN_DENSITY_LOG2, MAX_DENSITY_LOG2);
+            uint C3 = Quantize(Clog2w, 0f, 1f, 8);
+            WriteDataAt(ref data, ref bitOffset, C3, 8);
+
+            return data;
+        }
+
+        public static GaussianData UnpackGaussianData(UInt4 data)
+        {
+            GaussianData g = default;
+            int bitOffset = 0;
+
+            g.P.x = Dequantize(ReadDataAt(data, ref bitOffset, 16), -1f, 1f, 16);
+            g.P.y = Dequantize(ReadDataAt(data, ref bitOffset, 16), -1f, 1f, 16);
+            g.P.z = Dequantize(ReadDataAt(data, ref bitOffset, 16), -1f, 1f, 16);
+            g.P = FromLogF3(g.P, MIN_POS_LOG2, MAX_POS_LOG2);
+
+            Matrix3x3 RS = default;
+            RS[0, 0] = Dequantize(ReadDataAt(data, ref bitOffset, 8),  0f, 1f, 8);
+            RS[1, 0] = Dequantize(ReadDataAt(data, ref bitOffset, 8), -1f, 1f, 8);
+            RS[2, 0] = Dequantize(ReadDataAt(data, ref bitOffset, 8), -1f, 1f, 8);
+            RS[1, 1] = Dequantize(ReadDataAt(data, ref bitOffset, 8),  0f, 1f, 8);
+            RS[2, 1] = Dequantize(ReadDataAt(data, ref bitOffset, 8), -1f, 1f, 8);
+            RS[2, 2] = Dequantize(ReadDataAt(data, ref bitOffset, 8),  0f, 1f, 8);
+            g.RS = FromLogF3x3(RS, MIN_SCALE_LOG2, MAX_SCALE_LOG2);
+
+            float cx = Dequantize(ReadDataAt(data, ref bitOffset, 8), 0f, 1f, 8);
+            float cy = Dequantize(ReadDataAt(data, ref bitOffset, 8), 0f, 1f, 8);
+            float cz = Dequantize(ReadDataAt(data, ref bitOffset, 8), 0f, 1f, 8);
+            var cxyz = FromLogF3(new Vector3(cx, cy, cz), MIN_COLOR_LOG2, MAX_COLOR_LOG2);
+            g.C.x = cxyz.x; g.C.y = cxyz.y; g.C.z = cxyz.z;
+
+            g.C.w = Dequantize(ReadDataAt(data, ref bitOffset, 8), 0f, 1f, 8);
+            g.C.w = FromLogF1(g.C.w, MIN_DENSITY_LOG2, MAX_DENSITY_LOG2);
+
+            return g;
         }
     }
 
@@ -435,33 +674,41 @@ namespace GaussianSplatting
                 RenderTexture packedColTexRT = null;
                 if (!animated) {
                     packedPosTex = NewTexture(side, TextureFormat.RGBAFloat, "PackedPositions");
-                    packedColTex = NewTexture(side, TextureFormat.RGBA32,  "PackedColors");
-
-                    Color[] posPixels = new Color[side * side];
-                    Color[] colPixels = new Color[side * side];
+                    uint[]  posRaw = new uint[data.Length * 4];
 
                     for (int i = 0; i < data.Length; ++i)
                     {
+                        var s = data[i];
+
+                        Matrix3x3 cholesky = GaussianCodec.CholeskyFromQS(s.rot, s.scale);
+                        var gData = new GaussianCodec.GaussianData
+                        {
+                            P  = s.pos,
+                            RS = cholesky,
+                            C  = new Vector4(s.dc0.x, s.dc0.y, s.dc0.z, s.opacity)
+                        };
+
+                        UInt4 packed = GaussianCodec.PackGaussianData(gData);
+
+                        int o = i << 2;
+                        posRaw[o + 0] = packed.x;
+                        posRaw[o + 1] = packed.y;
+                        posRaw[o + 2] = packed.z;
+                        posRaw[o + 3] = packed.w;
+                    }
+
+                    packedPosTex.SetPixelData(posRaw, 0);
+                    packedPosTex.Apply(false, true);
+                    
+                    packedColTex = NewTexture(side, TextureFormat.RGBA32,  "PackedColors");
+                    Color[] colPixels = new Color[side * side];
+                    for (int i = 0; i < data.Length; ++i)
+                    {
                         var s     = data[i];
-                        UInt2 pos  = Float3Packing.PackF3U2(s.pos);
-                        uint  scl  = Float3Packing.PackF3U1(s.scale);
-                        uint  rot  = Float3Packing.PackF3U1(QuaternionToAxisAngle(new Vector4(s.rot.x, s.rot.y, s.rot.z, s.rot.w)));
-
-                        // bit‑preserving cast: uint → float
-                        posPixels[i] = new Color
-                        (
-                            Float3Packing.UInt32BitsToSingle(pos.x),
-                            Float3Packing.UInt32BitsToSingle(pos.y),
-                            Float3Packing.UInt32BitsToSingle(scl),
-                            Float3Packing.UInt32BitsToSingle(rot) 
-                        );
-
                         colPixels[i] = new Color(s.dc0.x, s.dc0.y, s.dc0.z, s.opacity);
                     }
 
-                    packedPosTex.SetPixels(posPixels);
                     packedColTex.SetPixels(colPixels);
-                    packedPosTex.Apply(false, true);
                     packedColTex.Apply(false, true);
 
                     SaveTextureAsset(packedPosTex, outputDataFolder, materialName + "_packed_positions");

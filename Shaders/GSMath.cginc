@@ -286,45 +286,16 @@ Ellipse GetProjectedEllipsoid(Gaussian g) {
     return extractEllipse(_a, _c, _b, _d, _e, _f);
 } 
 
-GaussianData TransformGaussian(GaussianData g, float4x4 M)
+GaussianData TransformGaussian(GaussianData g, float4x4 M, bool transformVolume = true)
 {
-    float3x3 A = (float3x3)M; // affine transform matrix
-    g.RS = Triangularize3x3_L(mul(A , g.RS)); // transform RS
     g.P = mul(M, float4(g.P, 1.0)).xyz; // transform position
-    float volumeScale = abs(determinant(A));
-    g.C.w = g.C.w / max(0.001,volumeScale); // scale color and density by determinant of affine transform
+
+    if(transformVolume)
+    {
+        float3x3 A = (float3x3)M; // affine transform matrix
+        float volumeScale = abs(determinant(A));
+        //g.C.w = clamp(g.C.w / max(0.001,volumeScale), 0.0, 1.0); // scale color and density by determinant of affine transform
+        g.RS = Triangularize3x3_L(mul(A, g.RS)); // transform RS
+    }
     return g;
-    // float3x3 R = q2m(g.q);
-
-    // // covariance = R * diag(s²) * Rᵀ
-    // float3x3 S2 = float3x3(g.s.x * g.s.x, 0, 0,
-    //                        0, g.s.y * g.s.y, 0,
-    //                        0, 0, g.s.z * g.s.z);
-    // float3x3 Sigma = mul(R, mul(S2, transpose(R)));
-
-    // // split affine
-    // float3x3 A = (float3x3)M;
-    // float3   t = M[3].xyz;
-
-    // // propagate mean
-    // float3 pOut = mul(A, g.p) + t;
-
-    // // propagate covariance
-    // float3x3 SigmaP = mul(A, mul(Sigma, transpose(A)));
-
-    // // eigen/SVD: SigmaP = U * diag(D) * Uᵀ
-    // float3x3 U, V;
-    // float3   D;
-    // GetSVD3D(SigmaP, U, D, V);
-
-    // // enforce right‑handed frame
-    // if (determinant(U) < 0) U[0] = -U[0];
-
-    // Gaussian result;
-    // result.s = sqrt(D);      // new scales
-    // result.q = m2q(U);       // new orientation
-    // if (result.q.w < 0) result.q = -result.q;
-    // result.p = pOut;         // new mean
-    // result.a = g.a / max(0.001,abs(determinant(A))); // scale density by determinant of affine transform
-    // return result;
 }
