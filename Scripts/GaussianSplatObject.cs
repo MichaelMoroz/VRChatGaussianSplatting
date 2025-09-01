@@ -28,8 +28,7 @@ namespace GaussianSplatting
         [SerializeField] public Texture2D colorData;
 
         [Header("Dynamic Render Resources")]
-        [SerializeField] public Material positionAnimator;
-        [SerializeField] public Material colorAnimator;
+        [SerializeField] public Material animator;
         [SerializeField] public RenderTexture positionBuffer0;
         [SerializeField] public RenderTexture positionBuffer1;
         [SerializeField] public RenderTexture colorBuffer0;
@@ -37,17 +36,26 @@ namespace GaussianSplatting
 
         [Header("Multiple Dynamic Splats")]
         [SerializeField] public GameObject[] splatObjects;
-        
+
+        public MRTBlit blitter;
+
         void Update() {
             if(renderMode == RenderMode.ProceduralSplat) {
                 int sideLength = positionBuffer0.width;
-                positionAnimator.SetInt("_ActualSplatCountSqrt", sideLength);
-                positionAnimator.SetInt("_ActualSplatCount", sideLength * sideLength);
-                colorAnimator.SetInt("_ActualSplatCountSqrt", sideLength);
-                colorAnimator.SetInt("_ActualSplatCount", sideLength * sideLength);
+                animator.SetInt("_ActualSplatCountSqrt", sideLength);
+                animator.SetInt("_ActualSplatCount", sideLength * sideLength);
 
-                VRCGraphics.Blit(null, positionBuffer0, positionAnimator);
-                VRCGraphics.Blit(null, colorBuffer0, colorAnimator);
+                RenderTexture[] outputs = new RenderTexture[2] { positionBuffer0, colorBuffer0 };
+                blitter.Blit(animator, outputs);
+            }
+        }
+
+        void Start() {
+            if(renderMode == RenderMode.ProceduralSplat) {
+                if(!animator || !positionBuffer0 || !colorBuffer0 || !blitter) {
+                    Debug.LogError("GaussianSplatObject: Missing resources for ProceduralSplat mode.");
+                    return;
+                }
             }
         }
     }

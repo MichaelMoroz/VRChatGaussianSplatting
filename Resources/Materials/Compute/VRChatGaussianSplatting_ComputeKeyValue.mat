@@ -37,8 +37,9 @@ Material:
     - _ElementCount: 525625
     - _KeyScale: 65535
     m_Colors:
-    - _CameraPos: {r: -3.140818, g: 1.1760316, b: 6.5716596, a: 0}
+    - _CameraPos: {r: 1.0335956, g: 1.0994991, b: 4.969578, a: 0}
     - _MinMaxSortDistance: {r: 0, g: 350, b: 0, a: 0}
+    - _SplatScalesLOG2: {r: -15, g: 15, b: -16, a: 4}
     - _SplatToWorld0: {r: 0, g: 0, b: 0, a: 0}
     - _SplatToWorld1: {r: 0, g: 0, b: 0, a: 0}
     - _SplatToWorld2: {r: 0, g: 0, b: 0, a: 0}

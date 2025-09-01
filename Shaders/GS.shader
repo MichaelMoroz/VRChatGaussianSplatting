@@ -7,7 +7,6 @@ Shader "VRChatGaussianSplatting/GaussianSplatting"
         [HideInInspector] _GS_RenderOrder ("Rendering Orders", 2DArray) = "" {}
         [HideInInspector] _GS_RenderOrderMirror ("Rendering Order Mirror", 2D) = "" {}
         [HideInInspector] _MirrorCameraPos ("Mirror Camera Position", Vector) = (0, 0, 0, 0)
-        [HideInInspector] _HACK_UNIFORM ("hack (must be 1.0)", Float) = 1.0 // HACK to avoid compiler optimizing out double precision
         [HideInInspector] _MinMaxSortDistance ("Min Max Distance", Vector) = (0, 0, 0, 0)
         [HideInInspector] _SplatCount ("Splat Count", Int) = 0
         [HideInInspector] _ActualSplatCount ("Actual Splat Count", Int) = 0
@@ -28,8 +27,9 @@ Shader "VRChatGaussianSplatting/GaussianSplatting"
         _OKLCHShift ("OKLCH Color Shift", Vector) = (0, 0, 0, 0) // Shift for OKLCH color space
         _Gamma ("Gamma", Float) = 1.0 
         [Toggle] _FAKE_SRGB ("Fake sRGB", Integer) = 0
-        [Toggle] _VRC_LIGHT_VOLUMES ("VRC Light Volumes support", Integer) = 0
+        [Toggle] _VRC_LIGHT_VOLUMES ("Use VRC Light Volumes", Integer) = 0
         _LightVolumeIntensity ("Light Volume Intensity", Range(0, 10)) = 1.0
+        _SplatScalesLOG2 ("Splat Scales (log2)", Vector) = ( -15, 15, -16, 4 )
     }
     SubShader
     {

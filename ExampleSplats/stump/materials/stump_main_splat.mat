@@ -46,6 +46,7 @@ Material:
     m_Ints:
     - _FAKE_SRGB: 0
     - _PRECOMPUTED_SORTING: 0
+    - _VRC_LIGHT_VOLUMES: 0
     m_Floats:
     - _ActualSplatCount: 2002225
     - _ActualSplatCountSqrt: 1415
@@ -54,7 +55,7 @@ Material:
     - _Exposure: 1
     - _Gamma: 1
     - _GaussianMul: 1
-    - _HACK_UNIFORM: 1
+    - _LightVolumeIntensity: 1
     - _Log2MinScale: -15
     - _Opacity: 1
     - _QuadScale: 1.1
@@ -66,4 +67,5 @@ Material:
     - _MinMaxSortDistance: {r: 0, g: 0, b: 0, a: 0}
     - _MirrorCameraPos: {r: 0, g: 0, b: 0, a: 0}
     - _OKLCHShift: {r: 0, g: 0, b: 0, a: 0}
+    - _SplatScalesLOG2: {r: -15, g: 15, b: -16, a: 4}
   m_BuildTextureStacks: []

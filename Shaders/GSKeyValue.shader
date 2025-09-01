@@ -6,6 +6,7 @@ Shader "VRChatGaussianSplatting/ComputeKeyValue" {
         [HideInInspector] _ElementCount ("Element Count", Int) = 0
         [HideInInspector] _KeyScale ("Key Scale", Float) = 1.0
         _CameraPosQuantization ("Camera Position Quantization", Range(0, 0.1)) = 0.01
+        _SplatScalesLOG2 ("Splat Scales (log2)", Vector) = ( -15, 15, -16, 4 )
     }
     SubShader {
         Tags { "RenderType"="Opaque" "Queue"="Overlay" }

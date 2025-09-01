@@ -163,10 +163,13 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         }
 
         Texture positions = null;
+        Vector4 scalesLog2 = new Vector4(1, 1, 1, 1);
         if(splatMats.Length > 1) { // Color correction is (probably) enabled, so first splat chunk material is 1
             positions = splatMats[1].GetTexture("_GS_PackedPositions");
+            scalesLog2 = splatMats[1].GetVector("_SplatScalesLOG2");
         } else { // Only one material, so use it directly
             positions = splatMats[0].GetTexture("_GS_PackedPositions");
+            scalesLog2 = splatMats[0].GetVector("_SplatScalesLOG2");
         }
         
         _radixSort.elementCount = positions.width * positions.height;
@@ -176,7 +179,7 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         keyValueMat.SetVector("_MinMaxSortDistance", minMaxSortDistance);
         keyValueMat.SetFloat("_KeyScale", (float)((1 << (sortingSteps * 4)) - 1));
         keyValueMat.SetMatrix("_SplatToWorld", splatObject.transform.localToWorldMatrix);
-
+        keyValueMat.SetVector("_SplatScalesLOG2", scalesLog2);
     }
 
     void SortCamera(Vector3 cameraPos, int cameraID, bool forceUpdate = false)

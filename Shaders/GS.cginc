@@ -102,7 +102,7 @@ void geo(point v2g input[1], inout TriangleStream<g2f> triStream, uint instanceI
         o.color.rgb = GammaToLinearSpace(o.color.rgb);
     #endif
 
-    splat.RS *= 2.0;
+    splat.RS *= 2.0 * sqrt(2.0);
     Ellipse ell = GetProjectedGaussian(splat);
 
     if(any(ell.size > 1.75)) {
@@ -133,7 +133,7 @@ void geo(point v2g input[1], inout TriangleStream<g2f> triStream, uint instanceI
         LightVolumeSH(splatWorldPos, L0, L1r, L1g, L1b);
         float3 emissivePart = max(o.color.rgb - 1.0, 0.0);
         float3 albedoPart = min(o.color.rgb, 1.0);
-        o.color.rgb = albedoPart * L0 * _LightVolumeIntensity + emissivePart;
+        o.color.rgb = albedoPart * LinearToGammaSpace(abs(L0)) * _LightVolumeIntensity + emissivePart;
     }
     #endif
 
@@ -141,7 +141,7 @@ void geo(point v2g input[1], inout TriangleStream<g2f> triStream, uint instanceI
     [unroll] for (uint vtxID = 0; vtxID < 4; vtxID ++)
     {
         o.quadPos = float2(vtxID & 1, (vtxID >> 1) & 1) * 2.0 - 1.0;
-        float2 ndc = ell.center + mul(rot, _QuadScale * o.quadPos * ell.size);
+        float2 ndc = ell.center + mul(rot, _QuadScale * o.quadPos * ell.size / sqrt(2.0));
         o.position = float4(ndc, splatClipPos.z, 1.0);
         triStream.Append(o);
     }

@@ -298,98 +298,101 @@ namespace GaussianSplatting
             return data & ((1u << (int)dataBits) - 1u);
         }
 
-        // ---- Public constants ----
-
-        public const float MIN_POS_LOG2    = -15f;
-        public const float MAX_POS_LOG2    =   4f;
-        public const float MIN_SCALE_LOG2  = -15f;
-        public const float MAX_SCALE_LOG2  =  -2f;
-        public const float MIN_COLOR_LOG2  =  -7f;
-        public const float MAX_COLOR_LOG2  =   7f;
-        public const float MIN_DENSITY_LOG2 = -10f;
-        public const float MAX_DENSITY_LOG2 =   0f;
-
-        // ---- Data layout ----
+         // ---- Bit layout (sums to 128) ----
+        public const uint X_POS_BITS = 21;
+        public const uint Y_POS_BITS = 21;
+        public const uint Z_POS_BITS = 21;
+        public const uint XX_RS_BITS = 11;
+        public const uint YY_RS_BITS = 11;
+        public const uint ZZ_RS_BITS = 10;
+        public const uint XY_RS_BITS = 11;
+        public const uint XZ_RS_BITS = 11;
+        public const uint YZ_RS_BITS = 11;
 
         public struct GaussianData
         {
-            public Vector3 P;     // position
-            public Matrix3x3 RS;  // Cholesky factor of covariance (rotation * scale)
-            public Vector4 C;     // color.xyz (positive), density.w (positive)
+            public Vector3   P;   // position
+            public Matrix3x3 RS;  // Cholesky factor (rotation * scale)
+            public Vector4   C;   // color.xyz, density.w (not packed here)
+        }
+        // Signed in [-1,1]
+        static void WriteQuantizedSigned(ref UInt4 data, ref int bitOffset, float v, uint bits)
+        {
+            uint q = Quantize(v, -1f, 1f, bits);
+            WriteDataAt(ref data, ref bitOffset, q, bits);
         }
 
-        public static UInt4 PackGaussianData(GaussianData g)
+        // Unsigned in [0,1]
+        static void WriteQuantizedUnsigned(ref UInt4 data, ref int bitOffset, float v, uint bits)
+        {
+            uint q = Quantize(v, 0f, 1f, bits);
+            WriteDataAt(ref data, ref bitOffset, q, bits);
+        }
+
+        static float ReadQuantizedSigned(UInt4 data, ref int bitOffset, uint bits)
+        {
+            uint q = ReadDataAt(data, ref bitOffset, bits);
+            return Dequantize(q, -1f, 1f, bits);
+        }
+
+        static float ReadQuantizedUnsigned(UInt4 data, ref int bitOffset, uint bits)
+        {
+            uint q = ReadDataAt(data, ref bitOffset, bits);
+            return Dequantize(q, 0f, 1f, bits);
+        }
+
+        static float SafeDist(Vector3 p) => MathF.Max(1e-8f, MathF.Sqrt(p.x * p.x + p.y * p.y + p.z * p.z));
+
+        public static UInt4 PackGaussianData(GaussianData g, Vector4 ScalesLOG2)
         {
             var data = new UInt4(0, 0, 0, 0);
             int bitOffset = 0;
 
-            Vector3 Plog2 = ToLogF3(g.P, MIN_POS_LOG2, MAX_POS_LOG2);
-            uint Px = Quantize(Plog2.x, -1f, 1f, 16);
-            uint Py = Quantize(Plog2.y, -1f, 1f, 16);
-            uint Pz = Quantize(Plog2.z, -1f, 1f, 16);
-            WriteDataAt(ref data, ref bitOffset, Px, 16);
-            WriteDataAt(ref data, ref bitOffset, Py, 16);
-            WriteDataAt(ref data, ref bitOffset, Pz, 16);
+            float dist = SafeDist(g.P);
+            Vector3   Plog2 = ToLogF3(g.P, ScalesLOG2.x, ScalesLOG2.y);
+            Matrix3x3 RSlog2 = ToLogF3x3(g.RS * (1f / dist), ScalesLOG2.z, ScalesLOG2.w); // store RS relative to |P|
 
-            Matrix3x3 RSlog2 = ToLogF3x3(g.RS, MIN_SCALE_LOG2, MAX_SCALE_LOG2);
-            uint RS00 = Quantize(RSlog2[0, 0],  0f, 1f, 8);
-            uint RS11 = Quantize(RSlog2[1, 1],  0f, 1f, 8);
-            uint RS22 = Quantize(RSlog2[2, 2],  0f, 1f, 8);
-            uint RS10 = Quantize(RSlog2[1, 0], -1f, 1f, 8);
-            uint RS20 = Quantize(RSlog2[2, 0], -1f, 1f, 8);
-            uint RS21 = Quantize(RSlog2[2, 1], -1f, 1f, 8);
-            WriteDataAt(ref data, ref bitOffset, RS00, 8);
-            WriteDataAt(ref data, ref bitOffset, RS10, 8);
-            WriteDataAt(ref data, ref bitOffset, RS20, 8);
-            WriteDataAt(ref data, ref bitOffset, RS11, 8);
-            WriteDataAt(ref data, ref bitOffset, RS21, 8);
-            WriteDataAt(ref data, ref bitOffset, RS22, 8);
+            WriteQuantizedSigned  (ref data, ref bitOffset, Plog2.x, X_POS_BITS);
+            WriteQuantizedSigned  (ref data, ref bitOffset, Plog2.y, Y_POS_BITS);
+            WriteQuantizedSigned  (ref data, ref bitOffset, Plog2.z, Z_POS_BITS);
 
-            Vector3 Clog2 = ToLogF3(new Vector3(g.C.x, g.C.y, g.C.z), MIN_COLOR_LOG2, MAX_COLOR_LOG2);
-            uint C0 = Quantize(Clog2.x, 0f, 1f, 8);
-            uint C1 = Quantize(Clog2.y, 0f, 1f, 8);
-            uint C2 = Quantize(Clog2.z, 0f, 1f, 8);
-            WriteDataAt(ref data, ref bitOffset, C0, 8);
-            WriteDataAt(ref data, ref bitOffset, C1, 8);
-            WriteDataAt(ref data, ref bitOffset, C2, 8);
+            WriteQuantizedUnsigned(ref data, ref bitOffset, RSlog2[0, 0], XX_RS_BITS);
+            WriteQuantizedUnsigned(ref data, ref bitOffset, RSlog2[1, 1], YY_RS_BITS);
+            WriteQuantizedUnsigned(ref data, ref bitOffset, RSlog2[2, 2], ZZ_RS_BITS);
 
-            float Clog2w = ToLogF1(g.C.w, MIN_DENSITY_LOG2, MAX_DENSITY_LOG2);
-            uint C3 = Quantize(Clog2w, 0f, 1f, 8);
-            WriteDataAt(ref data, ref bitOffset, C3, 8);
+            WriteQuantizedSigned  (ref data, ref bitOffset, RSlog2[1, 0], XY_RS_BITS);
+            WriteQuantizedSigned  (ref data, ref bitOffset, RSlog2[2, 0], XZ_RS_BITS);
+            WriteQuantizedSigned  (ref data, ref bitOffset, RSlog2[2, 1], YZ_RS_BITS);
 
             return data;
         }
 
-        public static GaussianData UnpackGaussianData(UInt4 data)
+        public static GaussianData UnpackGaussianData(UInt4 data, Vector4 ScalesLOG2)
         {
             GaussianData g = default;
             int bitOffset = 0;
 
-            g.P.x = Dequantize(ReadDataAt(data, ref bitOffset, 16), -1f, 1f, 16);
-            g.P.y = Dequantize(ReadDataAt(data, ref bitOffset, 16), -1f, 1f, 16);
-            g.P.z = Dequantize(ReadDataAt(data, ref bitOffset, 16), -1f, 1f, 16);
-            g.P = FromLogF3(g.P, MIN_POS_LOG2, MAX_POS_LOG2);
+            g.P.x = ReadQuantizedSigned(data, ref bitOffset, X_POS_BITS);
+            g.P.y = ReadQuantizedSigned(data, ref bitOffset, Y_POS_BITS);
+            g.P.z = ReadQuantizedSigned(data, ref bitOffset, Z_POS_BITS);
 
             Matrix3x3 RS = default;
-            RS[0, 0] = Dequantize(ReadDataAt(data, ref bitOffset, 8),  0f, 1f, 8);
-            RS[1, 0] = Dequantize(ReadDataAt(data, ref bitOffset, 8), -1f, 1f, 8);
-            RS[2, 0] = Dequantize(ReadDataAt(data, ref bitOffset, 8), -1f, 1f, 8);
-            RS[1, 1] = Dequantize(ReadDataAt(data, ref bitOffset, 8),  0f, 1f, 8);
-            RS[2, 1] = Dequantize(ReadDataAt(data, ref bitOffset, 8), -1f, 1f, 8);
-            RS[2, 2] = Dequantize(ReadDataAt(data, ref bitOffset, 8),  0f, 1f, 8);
-            g.RS = FromLogF3x3(RS, MIN_SCALE_LOG2, MAX_SCALE_LOG2);
+            RS[0, 0] = ReadQuantizedUnsigned(data, ref bitOffset, XX_RS_BITS);
+            RS[1, 1] = ReadQuantizedUnsigned(data, ref bitOffset, YY_RS_BITS);
+            RS[2, 2] = ReadQuantizedUnsigned(data, ref bitOffset, ZZ_RS_BITS);
+            RS[1, 0] = ReadQuantizedSigned  (data, ref bitOffset, XY_RS_BITS);
+            RS[2, 0] = ReadQuantizedSigned  (data, ref bitOffset, XZ_RS_BITS);
+            RS[2, 1] = ReadQuantizedSigned  (data, ref bitOffset, YZ_RS_BITS);
 
-            float cx = Dequantize(ReadDataAt(data, ref bitOffset, 8), 0f, 1f, 8);
-            float cy = Dequantize(ReadDataAt(data, ref bitOffset, 8), 0f, 1f, 8);
-            float cz = Dequantize(ReadDataAt(data, ref bitOffset, 8), 0f, 1f, 8);
-            var cxyz = FromLogF3(new Vector3(cx, cy, cz), MIN_COLOR_LOG2, MAX_COLOR_LOG2);
-            g.C.x = cxyz.x; g.C.y = cxyz.y; g.C.z = cxyz.z;
+            g.P  = FromLogF3 (g.P,  ScalesLOG2.x, ScalesLOG2.y);
+            g.RS = FromLogF3x3(RS,   ScalesLOG2.z, ScalesLOG2.w);
+            g.RS = g.RS * SafeDist(g.P); // restore RS scale using |P|
 
-            g.C.w = Dequantize(ReadDataAt(data, ref bitOffset, 8), 0f, 1f, 8);
-            g.C.w = FromLogF1(g.C.w, MIN_DENSITY_LOG2, MAX_DENSITY_LOG2);
+            g.C = default; // unchanged
 
             return g;
         }
+
     }
 
     static public class PointsMesh
@@ -486,7 +489,8 @@ namespace GaussianSplatting
         public static void Import(
             string plyFile, string prefabOutputPath, bool computeBoundingBox, 
             int splatsPerPass, bool precomputeSorting = false, int maxAlphaMaskCount = 1, 
-            bool useSRGB = true, bool animated = false, int animatedSplatCount = 128 * 1024
+            bool useSRGB = true, bool animated = false, int animatedSplatCount = 128 * 1024,
+            int renderQueue = 3500
         ) {
             NativeArray<InputSplatData> splats;
             int count = 0; // number of splats in the file
@@ -672,6 +676,9 @@ namespace GaussianSplatting
                 Texture2D packedColTex = null;
                 RenderTexture packedPosTexRT = null;
                 RenderTexture packedColTexRT = null;
+                
+                //TODO estimate scales from splat data
+                Vector4 scalesLOG2 = new Vector4( -15, 15, -16, 4 );
                 if (!animated) {
                     packedPosTex = NewTexture(side, TextureFormat.RGBAFloat, "PackedPositions");
                     uint[]  posRaw = new uint[data.Length * 4];
@@ -688,7 +695,7 @@ namespace GaussianSplatting
                             C  = new Vector4(s.dc0.x, s.dc0.y, s.dc0.z, s.opacity)
                         };
 
-                        UInt4 packed = GaussianCodec.PackGaussianData(gData);
+                        UInt4 packed = GaussianCodec.PackGaussianData(gData, scalesLOG2);
 
                         int o = i << 2;
                         posRaw[o + 0] = packed.x;
@@ -704,7 +711,7 @@ namespace GaussianSplatting
                     Color[] colPixels = new Color[side * side];
                     for (int i = 0; i < data.Length; ++i)
                     {
-                        var s     = data[i];
+                        var s = data[i];
                         colPixels[i] = new Color(s.dc0.x, s.dc0.y, s.dc0.z, s.opacity);
                     }
 
@@ -767,6 +774,7 @@ namespace GaussianSplatting
                         }
                         splatMat.SetInt("_ActualSplatCount", n);
                         splatMat.SetInt("_ActualSplatCountSqrt", side);
+                        splatMat.SetVector("_GS_ScalesLOG2", scalesLOG2);
                         mainMat = splatMat;
                         if(!useSRGB) {
                             splatMat.SetInteger("_FAKE_SRGB", 1);
@@ -812,7 +820,7 @@ namespace GaussianSplatting
                 Directory.CreateDirectory(outputDataFolder + "/materials");
                 for (int i = 0; i < materials.Count; ++i) {
                     Material splatMat = materials[i];
-                    splatMat.renderQueue = 3500 + i;
+                    splatMat.renderQueue = renderQueue + i;
                     string matPath = Path.Combine(outputDataFolder + "/materials", splatMat.name + ".mat");
                     AssetDatabase.CreateAsset(splatMat, matPath);
                 }
@@ -904,6 +912,7 @@ namespace GaussianSplatting.Editor.Importers
 
         bool _animated = false; 
         int _animatedSplatCount = 512*512;
+        int _renderQueue = 3500;
         Vector2 scrollPosition = Vector2.zero;
         [MenuItem("Gaussian Splatting/Import PLY Splats…")]
         static void Init()
@@ -967,6 +976,7 @@ namespace GaussianSplatting.Editor.Importers
             } else {
                 _computeBoundingBox = false; // disable bounding box computation for animated splats
             }
+            _renderQueue = EditorGUILayout.IntField("Base Render Queue", _renderQueue);
             _useSRGB = EditorGUILayout.Toggle("sRGB Color Correction", _useSRGB);
             EditorGUILayout.HelpBox("Color correction requires 2 additional grab passes, for small splats you might want to disable this. Without this enabled back to front rendering will be used, which makes multi-pass rendering not work. sRGB color correction only works correctly if the world has HDR camera render targets.", MessageType.Info);
             if(_useSRGB) {
@@ -1035,7 +1045,7 @@ namespace GaussianSplatting.Editor.Importers
             {
                 EditorUtility.DisplayProgressBar("PLY Import",
                     $"Importing {Path.GetFileName(plyPath)}", 0f);
-                PlySplatImporter.Import(plyPath, prefabPath, _computeBoundingBox, _splatsPerPass, _precomputeSorting, _maxAlphaMaskCount, _useSRGB, _animated, _animatedSplatCount);
+                PlySplatImporter.Import(plyPath, prefabPath, _computeBoundingBox, _splatsPerPass, _precomputeSorting, _maxAlphaMaskCount, _useSRGB, _animated, _animatedSplatCount, _renderQueue);
             }
             catch (Exception e)
             {
