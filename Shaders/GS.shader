@@ -42,8 +42,8 @@ Shader "VRChatGaussianSplatting/GaussianSplatting"
             Cull Off
             ZWrite Off
             Stencil {
-                Ref 1
-                Comp NotEqual  // skip pixels where alpha mask pass wrote 1
+                Ref 9
+                Comp NotEqual
             }
             CGPROGRAM
         	#include "GS.cginc"

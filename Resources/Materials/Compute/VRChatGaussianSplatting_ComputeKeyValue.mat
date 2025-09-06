@@ -24,7 +24,7 @@ Material:
     serializedVersion: 3
     m_TexEnvs:
     - _GS_PackedPositions:
-        m_Texture: {fileID: 8400000, guid: 4464803a554dd6c4689db831c0fedce4, type: 2}
+        m_Texture: {fileID: 8400000, guid: 524f59ad9ff57b84d8d1e4e4c2f2a37b, type: 2}
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
     - _GS_Positions:
@@ -34,10 +34,10 @@ Material:
     m_Ints: []
     m_Floats:
     - _CameraPosQuantization: 0.075
-    - _ElementCount: 525625
+    - _ElementCount: 262144
     - _KeyScale: 65535
     m_Colors:
-    - _CameraPos: {r: 1.0335956, g: 1.0994991, b: 4.969578, a: 0}
+    - _CameraPos: {r: -0.68719244, g: 0.8965119, b: 0.86145884, a: 0}
     - _MinMaxSortDistance: {r: 0, g: 350, b: 0, a: 0}
     - _SplatScalesLOG2: {r: -15, g: 15, b: -16, a: 4}
     - _SplatToWorld0: {r: 0, g: 0, b: 0, a: 0}

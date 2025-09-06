@@ -455,8 +455,12 @@ namespace GaussianSplatting
             return Part1By2(x) | (Part1By2(y) << 1) | (Part1By2(z) << 2);
         }
 
-        public static GameObject CreatePrefab(List<Material> materials, Mesh mesh, string assetPath, string name, bool addGaussianSplatObject = true)
-        {
+        public static GameObject CreatePrefab(
+            List<Material> materials, Material mainMaterial, Mesh mesh,
+            Texture2D packedPosTex, Texture2D packedColTex, RenderTexture packedPosTexRT0, 
+            RenderTexture packedColTexRT0, RenderTexture packedPosTexRT1, RenderTexture packedColTexRT1, 
+            string assetPath, string name,  bool addGaussianSplatObject = true
+        ) {
             var go = new GameObject(name);
             go.transform.SetPositionAndRotation(Vector3.zero, Quaternion.identity);
             go.transform.localScale = new Vector3(1, -1, 1); // flip Y to match unity's coordinate system
@@ -468,6 +472,13 @@ namespace GaussianSplatting
                 // Add the GaussianSplatObject component to the GameObject
                 // This is necessary for the prefab to be recognized as a Gaussian Splat Object for the renderer
                 GaussianSplatObject splatcomponent = go.AddUdonSharpComponent<GaussianSplatObject>();
+                splatcomponent.mainMaterial = mainMaterial;
+                splatcomponent.positionData = packedPosTex;
+                splatcomponent.colorData = packedColTex;
+                splatcomponent.positionBuffer0 = packedPosTexRT0;
+                splatcomponent.colorBuffer0 = packedColTexRT0;
+                splatcomponent.positionBuffer1 = packedPosTexRT1;
+                splatcomponent.colorBuffer1 = packedColTexRT1;
             }
             var prefab = PrefabUtility.SaveAsPrefabAssetAndConnect(go, assetPath, InteractionMode.AutomatedAction);
             GameObject.DestroyImmediate(go); // clean up the temporary GameObject
@@ -674,8 +685,10 @@ namespace GaussianSplatting
 
                 Texture2D packedPosTex = null;
                 Texture2D packedColTex = null;
-                RenderTexture packedPosTexRT = null;
-                RenderTexture packedColTexRT = null;
+                RenderTexture packedPosTexRT0 = null;
+                RenderTexture packedColTexRT0 = null;
+                RenderTexture packedPosTexRT1 = null;
+                RenderTexture packedColTexRT1 = null;
                 
                 //TODO estimate scales from splat data
                 Vector4 scalesLOG2 = new Vector4( -15, 15, -16, 4 );
@@ -721,14 +734,19 @@ namespace GaussianSplatting
                     SaveTextureAsset(packedPosTex, outputDataFolder, materialName + "_packed_positions");
                     SaveTextureAsset(packedColTex, outputDataFolder, materialName + "_packed_colors");
                 } else {
-                    packedPosTexRT = NewRenderTexture(side, RenderTextureFormat.ARGBFloat, "PackedPositions");
-                    packedColTexRT = NewRenderTexture(side, RenderTextureFormat.ARGB32, "PackedColors");
-
-                    packedPosTexRT.Create();
-                    packedColTexRT.Create();
-
-                    SaveTextureAsset(packedPosTexRT, outputDataFolder, materialName + "_packed_positions");
-                    SaveTextureAsset(packedColTexRT, outputDataFolder, materialName + "_packed_colors");
+                    packedPosTexRT0 = NewRenderTexture(side, RenderTextureFormat.ARGBFloat, "PackedPositions");
+                    packedColTexRT0 = NewRenderTexture(side, RenderTextureFormat.ARGBHalf, "PackedColors");
+                    packedPosTexRT0.Create();
+                    packedColTexRT0.Create();
+                    packedPosTexRT1 = NewRenderTexture(side, RenderTextureFormat.ARGBFloat, "PackedPositions");
+                    packedColTexRT1 = NewRenderTexture(side, RenderTextureFormat.ARGBHalf, "PackedColors");
+                    packedPosTexRT1.Create();
+                    packedColTexRT1.Create();
+                    
+                    SaveTextureAsset(packedPosTexRT0, outputDataFolder, materialName + "_packed_positions_rt0");
+                    SaveTextureAsset(packedColTexRT0, outputDataFolder, materialName + "_packed_colors_rt0");
+                    SaveTextureAsset(packedPosTexRT1, outputDataFolder, materialName + "_packed_positions_rt1");
+                    SaveTextureAsset(packedColTexRT1, outputDataFolder, materialName + "_packed_colors_rt1");
                 }
                
                 
@@ -769,8 +787,8 @@ namespace GaussianSplatting
                             splatMat.SetTexture("_GS_PackedPositions", packedPosTex);
                             splatMat.SetTexture("_GS_PackedColors", packedColTex);
                         } else {
-                            splatMat.SetTexture("_GS_PackedPositions", packedPosTexRT);
-                            splatMat.SetTexture("_GS_PackedColors", packedColTexRT);
+                            splatMat.SetTexture("_GS_PackedPositions", packedPosTexRT0);
+                            splatMat.SetTexture("_GS_PackedColors", packedColTexRT0);
                         }
                         splatMat.SetInt("_ActualSplatCount", n);
                         splatMat.SetInt("_ActualSplatCountSqrt", side);
@@ -828,7 +846,9 @@ namespace GaussianSplatting
                 Mesh pointMesh = PointsMesh.GetMultiPassMesh(indexCounts, topologies, bbox);
                 AssetDatabase.CreateAsset(pointMesh, Path.Combine(outputDataFolder, materialName + "_mesh.asset"));
                 // Create prefab with the splat material and mesh
-                GameObject prefab = CreatePrefab(materials, pointMesh, prefabOutputPath, materialName, !precomputeSorting);
+                GameObject prefab = CreatePrefab(materials, mainMat, pointMesh, 
+                    packedPosTex, packedColTex, packedPosTexRT0, packedColTexRT0, packedPosTexRT1, packedColTexRT1,
+                    prefabOutputPath, materialName, !precomputeSorting);
                 AssetDatabase.SaveAssets();
             }
             finally
@@ -985,7 +1005,7 @@ namespace GaussianSplatting.Editor.Importers
                 {
                     _splatsPerPass = EditorGUILayout.IntField("Splat Count Per Pass", _splatsPerPass);
                     EditorGUILayout.HelpBox("The rendering of the splat is split into multiple sequential chunks, can help with VR rendering performance.", MessageType.Info);
-                    _splatsPerPass = Mathf.Clamp(_splatsPerPass, 128 * 1024, 8 * 1024 * 1024);
+                    _splatsPerPass = Mathf.Clamp(_splatsPerPass, 16 * 1024, 8 * 1024 * 1024);
                     _maxAlphaMaskCount = EditorGUILayout.IntField("Max Alpha Mask Count", _maxAlphaMaskCount);
                     EditorGUILayout.HelpBox("After each chunk is rendered an optional alpha mask pass is added using a grab pass and stencil. This will occlude the following chunks if they are behind opaque objects. This can help performance, but grab pass can be expensive, so use it with care. If you have more than 4M splats you might want to have more than 1 alpha mask pass.", MessageType.Info);
                 }

@@ -20,14 +20,14 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
     private RadixSort _radixSort;
     private MeshRenderer _meshRenderer;
     private Material keyValueMat;
-    private GameObject splatObject;
+    private GaussianSplatObject splatObject;
     private int prevSplatObjectIndex = -1; // To track the previous splat object index
 
     [Header("Gaussian Splat Object")]
     [UdonSynced, Tooltip("The index of the currently rendered splat object in the splatObjects array.")]
     public int splatObjectIndex = 0; // Index of the current splat object in the splatObjects array
     [Tooltip("The GameObject that contains the Gaussian Splat mesh. This should have a MeshRenderer component with a material that uses the Gaussian Splat shader.")]
-    public GameObject[] splatObjects;
+    public GaussianSplatObject[] splatObjects;
 
     [Header("Render Settings")]
     [Tooltip("Minimum distance for sorting splats. Splat positions closer than this will not be sorted. The smaller the minmax range the more accurate the sorting")]
@@ -64,7 +64,7 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
     {
         for (int i = 0; i < splatObjects.Length; i++)
         {
-            GameObject splatObj = splatObjects[i];
+            GameObject splatObj = splatObjects[i].gameObject;
             if (splatObj != null)
             {
                 splatObj.SetActive(false);
@@ -97,10 +97,10 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
             Debug.LogError($"Splat object at index {splatObjectIndex} is null. Please ensure the splatObjects array is populated correctly.");
             return;
         }
-        splatObject.SetActive(true); // Activate the new splat object
+        splatObject.gameObject.SetActive(true); // Activate the new splat object
     }
 
-    public GameObject GetObjectByIndex(int index)
+    public GaussianSplatObject GetObjectByIndex(int index)
     {
         if (index < 0 || index >= splatObjects.Length)
         {
@@ -172,6 +172,12 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
             scalesLog2 = splatMats[0].GetVector("_SplatScalesLOG2");
         }
         
+        Texture[] state = splatObject.GetSplatData();
+        if (state != null && state.Length == 2)
+        {
+            positions = state[0];
+        }
+
         _radixSort.elementCount = positions.width * positions.height;
         _radixSort.maxKeyBits = sortingSteps * 4; // Each sorting step sorts 4 bits, so total bits = steps * 4
         keyValueMat = _radixSort.computeKeyValues;
@@ -251,7 +257,7 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
 
             for (int i = 0; i < renderer.splatObjects.Length; i++)
             {
-                GameObject splatObj = renderer.splatObjects[i];
+                GaussianSplatObject splatObj = renderer.splatObjects[i];
                 if (splatObj != null)
                 {
                     GameObject toggleObject = GameObject.CreatePrimitive(PrimitiveType.Cube);
@@ -306,14 +312,14 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         foreach (var renderer in renderers)
         {
             List<GaussianSplatObject> objectsInScene = GetAllObjectsOnlyInScene();
-            renderer.splatObjects = new GameObject[objectsInScene.Count];
+            renderer.splatObjects = new GaussianSplatObject[objectsInScene.Count];
 
             for (int i = 0; i < objectsInScene.Count; i++)
             {
                 GaussianSplatObject go = objectsInScene[i];
                 if (go != null)
                 {
-                    renderer.splatObjects[i] = go.gameObject;
+                    renderer.splatObjects[i] = go;
                 }
                 else
                 {

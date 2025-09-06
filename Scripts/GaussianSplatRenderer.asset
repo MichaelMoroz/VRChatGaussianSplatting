@@ -284,13 +284,13 @@ MonoBehaviour:
       Data: 16|System.RuntimeType, mscorlib
     - Name: 
       Entry: 1
-      Data: UnityEngine.GameObject, UnityEngine.CoreModule
+      Data: GaussianSplatting.GaussianSplatObject, GaussianSplatting
     - Name: 
       Entry: 8
       Data: 
     - Name: <SystemType>k__BackingField
       Entry: 9
-      Data: 16
+      Data: 7
     - Name: <SyncMode>k__BackingField
       Entry: 7
       Data: System.Nullable`1[[UdonSharp.UdonSyncMode, UdonSharp.Runtime]], mscorlib
@@ -465,13 +465,19 @@ MonoBehaviour:
       Data: 27|System.RuntimeType, mscorlib
     - Name: 
       Entry: 1
-      Data: UnityEngine.GameObject[], UnityEngine.CoreModule
+      Data: GaussianSplatting.GaussianSplatObject[], GaussianSplatting
     - Name: 
       Entry: 8
       Data: 
     - Name: <SystemType>k__BackingField
-      Entry: 9
-      Data: 27
+      Entry: 7
+      Data: 28|System.RuntimeType, mscorlib
+    - Name: 
+      Entry: 1
+      Data: UnityEngine.Component[], UnityEngine.CoreModule
+    - Name: 
+      Entry: 8
+      Data: 
     - Name: <SyncMode>k__BackingField
       Entry: 7
       Data: System.Nullable`1[[UdonSharp.UdonSyncMode, UdonSharp.Runtime]], mscorlib
@@ -486,13 +492,13 @@ MonoBehaviour:
       Data: true
     - Name: _fieldAttributes
       Entry: 7
-      Data: 28|System.Collections.Generic.List`1[[System.Attribute, mscorlib]], mscorlib
+      Data: 29|System.Collections.Generic.List`1[[System.Attribute, mscorlib]], mscorlib
     - Name: 
       Entry: 12
       Data: 1
     - Name: 
       Entry: 7
-      Data: 29|UnityEngine.TooltipAttribute, UnityEngine.CoreModule
+      Data: 30|UnityEngine.TooltipAttribute, UnityEngine.CoreModule
     - Name: tooltip
       Entry: 1
       Data: The GameObject that contains the Gaussian Splat mesh. This should have
@@ -520,13 +526,13 @@ MonoBehaviour:
       Data: minSortDistance
     - Name: $v
       Entry: 7
-      Data: 30|UdonSharp.Compiler.FieldDefinition, UdonSharp.Editor
+      Data: 31|UdonSharp.Compiler.FieldDefinition, UdonSharp.Editor
     - Name: <Name>k__BackingField
       Entry: 1
       Data: minSortDistance
     - Name: <UserType>k__BackingField
       Entry: 7
-      Data: 31|System.RuntimeType, mscorlib
+      Data: 32|System.RuntimeType, mscorlib
     - Name: 
       Entry: 1
       Data: System.Single, mscorlib
@@ -535,7 +541,7 @@ MonoBehaviour:
       Data: 
     - Name: <SystemType>k__BackingField
       Entry: 9
-      Data: 31
+      Data: 32
     - Name: <SyncMode>k__BackingField
       Entry: 7
       Data: System.Nullable`1[[UdonSharp.UdonSyncMode, UdonSharp.Runtime]], mscorlib
@@ -550,13 +556,13 @@ MonoBehaviour:
       Data: true
     - Name: _fieldAttributes
       Entry: 7
-      Data: 32|System.Collections.Generic.List`1[[System.Attribute, mscorlib]], mscorlib
+      Data: 33|System.Collections.Generic.List`1[[System.Attribute, mscorlib]], mscorlib
     - Name: 
       Entry: 12
       Data: 3
     - Name: 
       Entry: 7
-      Data: 33|UnityEngine.HeaderAttribute, UnityEngine.CoreModule
+      Data: 34|UnityEngine.HeaderAttribute, UnityEngine.CoreModule
     - Name: header
       Entry: 1
       Data: Render Settings
@@ -565,7 +571,7 @@ MonoBehaviour:
       Data: 
     - Name: 
       Entry: 7
-      Data: 34|UnityEngine.TooltipAttribute, UnityEngine.CoreModule
+      Data: 35|UnityEngine.TooltipAttribute, UnityEngine.CoreModule
     - Name: tooltip
       Entry: 1
       Data: Minimum distance for sorting splats. Splat positions closer than this
@@ -575,7 +581,7 @@ MonoBehaviour:
       Data: 
     - Name: 
       Entry: 7
-      Data: 35|UnityEngine.SerializeField, UnityEngine.CoreModule
+      Data: 36|UnityEngine.SerializeField, UnityEngine.CoreModule
     - Name: 
       Entry: 8
       Data: 
@@ -599,16 +605,16 @@ MonoBehaviour:
       Data: maxSortDistance
     - Name: $v
       Entry: 7
-      Data: 36|UdonSharp.Compiler.FieldDefinition, UdonSharp.Editor
+      Data: 37|UdonSharp.Compiler.FieldDefinition, UdonSharp.Editor
     - Name: <Name>k__BackingField
       Entry: 1
       Data: maxSortDistance
     - Name: <UserType>k__BackingField
       Entry: 9
-      Data: 31
+      Data: 32
     - Name: <SystemType>k__BackingField
       Entry: 9
-      Data: 31
+      Data: 32
     - Name: <SyncMode>k__BackingField
       Entry: 7
       Data: System.Nullable`1[[UdonSharp.UdonSyncMode, UdonSharp.Runtime]], mscorlib
@@ -623,13 +629,13 @@ MonoBehaviour:
       Data: true
     - Name: _fieldAttributes
       Entry: 7
-      Data: 37|System.Collections.Generic.List`1[[System.Attribute, mscorlib]], mscorlib
+      Data: 38|System.Collections.Generic.List`1[[System.Attribute, mscorlib]], mscorlib
     - Name: 
       Entry: 12
       Data: 2
     - Name: 
       Entry: 7
-      Data: 38|UnityEngine.TooltipAttribute, UnityEngine.CoreModule
+      Data: 39|UnityEngine.TooltipAttribute, UnityEngine.CoreModule
     - Name: tooltip
       Entry: 1
       Data: Maximum distance for sorting splats. Splat positions further than this
@@ -639,7 +645,7 @@ MonoBehaviour:
       Data: 
     - Name: 
       Entry: 7
-      Data: 39|UnityEngine.SerializeField, UnityEngine.CoreModule
+      Data: 40|UnityEngine.SerializeField, UnityEngine.CoreModule
     - Name: 
       Entry: 8
       Data: 
@@ -663,16 +669,16 @@ MonoBehaviour:
       Data: cameraPositionQuantization
     - Name: $v
       Entry: 7
-      Data: 40|UdonSharp.Compiler.FieldDefinition, UdonSharp.Editor
+      Data: 41|UdonSharp.Compiler.FieldDefinition, UdonSharp.Editor
     - Name: <Name>k__BackingField
       Entry: 1
       Data: cameraPositionQuantization
     - Name: <UserType>k__BackingField
       Entry: 9
-      Data: 31
+      Data: 32
     - Name: <SystemType>k__BackingField
       Entry: 9
-      Data: 31
+      Data: 32
     - Name: <SyncMode>k__BackingField
       Entry: 7
       Data: System.Nullable`1[[UdonSharp.UdonSyncMode, UdonSharp.Runtime]], mscorlib
@@ -687,13 +693,13 @@ MonoBehaviour:
       Data: true
     - Name: _fieldAttributes
       Entry: 7
-      Data: 41|System.Collections.Generic.List`1[[System.Attribute, mscorlib]], mscorlib
+      Data: 42|System.Collections.Generic.List`1[[System.Attribute, mscorlib]], mscorlib
     - Name: 
       Entry: 12
       Data: 2
     - Name: 
       Entry: 7
-      Data: 42|UnityEngine.TooltipAttribute, UnityEngine.CoreModule
+      Data: 43|UnityEngine.TooltipAttribute, UnityEngine.CoreModule
     - Name: tooltip
       Entry: 1
       Data: Quantization of camera position to avoid unnecessary updates and jitter.
@@ -703,7 +709,7 @@ MonoBehaviour:
       Data: 
     - Name: 
       Entry: 7
-      Data: 43|UnityEngine.SerializeField, UnityEngine.CoreModule
+      Data: 44|UnityEngine.SerializeField, UnityEngine.CoreModule
     - Name: 
       Entry: 8
       Data: 
@@ -727,13 +733,13 @@ MonoBehaviour:
       Data: alwaysUpdate
     - Name: $v
       Entry: 7
-      Data: 44|UdonSharp.Compiler.FieldDefinition, UdonSharp.Editor
+      Data: 45|UdonSharp.Compiler.FieldDefinition, UdonSharp.Editor
     - Name: <Name>k__BackingField
       Entry: 1
       Data: alwaysUpdate
     - Name: <UserType>k__BackingField
       Entry: 7
-      Data: 45|System.RuntimeType, mscorlib
+      Data: 46|System.RuntimeType, mscorlib
     - Name: 
       Entry: 1
       Data: System.Boolean, mscorlib
@@ -742,7 +748,7 @@ MonoBehaviour:
       Data: 
     - Name: <SystemType>k__BackingField
       Entry: 9
-      Data: 45
+      Data: 46
     - Name: <SyncMode>k__BackingField
       Entry: 7
       Data: System.Nullable`1[[UdonSharp.UdonSyncMode, UdonSharp.Runtime]], mscorlib
@@ -757,13 +763,13 @@ MonoBehaviour:
       Data: true
     - Name: _fieldAttributes
       Entry: 7
-      Data: 46|System.Collections.Generic.List`1[[System.Attribute, mscorlib]], mscorlib
+      Data: 47|System.Collections.Generic.List`1[[System.Attribute, mscorlib]], mscorlib
     - Name: 
       Entry: 12
       Data: 2
     - Name: 
       Entry: 7
-      Data: 47|UnityEngine.TooltipAttribute, UnityEngine.CoreModule
+      Data: 48|UnityEngine.TooltipAttribute, UnityEngine.CoreModule
     - Name: tooltip
       Entry: 1
       Data: If true, the splat render order will be updated every frame. Useful for
@@ -773,7 +779,7 @@ MonoBehaviour:
       Data: 
     - Name: 
       Entry: 7
-      Data: 48|UnityEngine.SerializeField, UnityEngine.CoreModule
+      Data: 49|UnityEngine.SerializeField, UnityEngine.CoreModule
     - Name: 
       Entry: 8
       Data: 
@@ -797,7 +803,7 @@ MonoBehaviour:
       Data: sortingSteps
     - Name: $v
       Entry: 7
-      Data: 49|UdonSharp.Compiler.FieldDefinition, UdonSharp.Editor
+      Data: 50|UdonSharp.Compiler.FieldDefinition, UdonSharp.Editor
     - Name: <Name>k__BackingField
       Entry: 1
       Data: sortingSteps
@@ -821,13 +827,13 @@ MonoBehaviour:
       Data: true
     - Name: _fieldAttributes
       Entry: 7
-      Data: 50|System.Collections.Generic.List`1[[System.Attribute, mscorlib]], mscorlib
+      Data: 51|System.Collections.Generic.List`1[[System.Attribute, mscorlib]], mscorlib
     - Name: 
       Entry: 12
       Data: 3
     - Name: 
       Entry: 7
-      Data: 51|UnityEngine.TooltipAttribute, UnityEngine.CoreModule
+      Data: 52|UnityEngine.TooltipAttribute, UnityEngine.CoreModule
     - Name: tooltip
       Entry: 1
       Data: Number of sorting steps for the radix sort. The more steps the more bits
@@ -839,7 +845,7 @@ MonoBehaviour:
       Data: 
     - Name: 
       Entry: 7
-      Data: 52|UnityEngine.RangeAttribute, UnityEngine.CoreModule
+      Data: 53|UnityEngine.RangeAttribute, UnityEngine.CoreModule
     - Name: min
       Entry: 4
       Data: 2
@@ -851,7 +857,7 @@ MonoBehaviour:
       Data: 
     - Name: 
       Entry: 7
-      Data: 53|UnityEngine.SerializeField, UnityEngine.CoreModule
+      Data: 54|UnityEngine.SerializeField, UnityEngine.CoreModule
     - Name: 
       Entry: 8
       Data: 
@@ -875,13 +881,13 @@ MonoBehaviour:
       Data: splatRenderOrder
     - Name: $v
       Entry: 7
-      Data: 54|UdonSharp.Compiler.FieldDefinition, UdonSharp.Editor
+      Data: 55|UdonSharp.Compiler.FieldDefinition, UdonSharp.Editor
     - Name: <Name>k__BackingField
       Entry: 1
       Data: splatRenderOrder
     - Name: <UserType>k__BackingField
       Entry: 7
-      Data: 55|System.RuntimeType, mscorlib
+      Data: 56|System.RuntimeType, mscorlib
     - Name: 
       Entry: 1
       Data: UnityEngine.RenderTexture, UnityEngine.CoreModule
@@ -890,7 +896,7 @@ MonoBehaviour:
       Data: 
     - Name: <SystemType>k__BackingField
       Entry: 9
-      Data: 55
+      Data: 56
     - Name: <SyncMode>k__BackingField
       Entry: 7
       Data: System.Nullable`1[[UdonSharp.UdonSyncMode, UdonSharp.Runtime]], mscorlib
@@ -905,13 +911,13 @@ MonoBehaviour:
       Data: true
     - Name: _fieldAttributes
       Entry: 7
-      Data: 56|System.Collections.Generic.List`1[[System.Attribute, mscorlib]], mscorlib
+      Data: 57|System.Collections.Generic.List`1[[System.Attribute, mscorlib]], mscorlib
     - Name: 
       Entry: 12
       Data: 1
     - Name: 
       Entry: 7
-      Data: 57|UnityEngine.TooltipAttribute, UnityEngine.CoreModule
+      Data: 58|UnityEngine.TooltipAttribute, UnityEngine.CoreModule
     - Name: tooltip
       Entry: 1
       Data: Render texture used to store the sorted splat render order. This should
@@ -940,16 +946,16 @@ MonoBehaviour:
       Data: overrideMaterialProperties
     - Name: $v
       Entry: 7
-      Data: 58|UdonSharp.Compiler.FieldDefinition, UdonSharp.Editor
+      Data: 59|UdonSharp.Compiler.FieldDefinition, UdonSharp.Editor
     - Name: <Name>k__BackingField
       Entry: 1
       Data: overrideMaterialProperties
     - Name: <UserType>k__BackingField
       Entry: 9
-      Data: 45
+      Data: 46
     - Name: <SystemType>k__BackingField
       Entry: 9
-      Data: 45
+      Data: 46
     - Name: <SyncMode>k__BackingField
       Entry: 7
       Data: System.Nullable`1[[UdonSharp.UdonSyncMode, UdonSharp.Runtime]], mscorlib
@@ -964,13 +970,13 @@ MonoBehaviour:
       Data: true
     - Name: _fieldAttributes
       Entry: 7
-      Data: 59|System.Collections.Generic.List`1[[System.Attribute, mscorlib]], mscorlib
+      Data: 60|System.Collections.Generic.List`1[[System.Attribute, mscorlib]], mscorlib
     - Name: 
       Entry: 12
       Data: 2
     - Name: 
       Entry: 7
-      Data: 60|UnityEngine.TooltipAttribute, UnityEngine.CoreModule
+      Data: 61|UnityEngine.TooltipAttribute, UnityEngine.CoreModule
     - Name: tooltip
       Entry: 1
       Data: If true, the material properties will be overridden with the values set
@@ -981,7 +987,7 @@ MonoBehaviour:
       Data: 
     - Name: 
       Entry: 7
-      Data: 61|UnityEngine.SerializeField, UnityEngine.CoreModule
+      Data: 62|UnityEngine.SerializeField, UnityEngine.CoreModule
     - Name: 
       Entry: 8
       Data: 
@@ -1005,16 +1011,16 @@ MonoBehaviour:
       Data: quadScale
     - Name: $v
       Entry: 7
-      Data: 62|UdonSharp.Compiler.FieldDefinition, UdonSharp.Editor
+      Data: 63|UdonSharp.Compiler.FieldDefinition, UdonSharp.Editor
     - Name: <Name>k__BackingField
       Entry: 1
       Data: quadScale
     - Name: <UserType>k__BackingField
       Entry: 9
-      Data: 31
+      Data: 32
     - Name: <SystemType>k__BackingField
       Entry: 9
-      Data: 31
+      Data: 32
     - Name: <SyncMode>k__BackingField
       Entry: 7
       Data: System.Nullable`1[[UdonSharp.UdonSyncMode, UdonSharp.Runtime]], mscorlib
@@ -1029,13 +1035,13 @@ MonoBehaviour:
       Data: true
     - Name: _fieldAttributes
       Entry: 7
-      Data: 63|System.Collections.Generic.List`1[[System.Attribute, mscorlib]], mscorlib
+      Data: 64|System.Collections.Generic.List`1[[System.Attribute, mscorlib]], mscorlib
     - Name: 
       Entry: 12
       Data: 2
     - Name: 
       Entry: 7
-      Data: 64|UnityEngine.RangeAttribute, UnityEngine.CoreModule
+      Data: 65|UnityEngine.RangeAttribute, UnityEngine.CoreModule
     - Name: min
       Entry: 4
       Data: 0
@@ -1047,7 +1053,7 @@ MonoBehaviour:
       Data: 
     - Name: 
       Entry: 7
-      Data: 65|UnityEngine.SerializeField, UnityEngine.CoreModule
+      Data: 66|UnityEngine.SerializeField, UnityEngine.CoreModule
     - Name: 
       Entry: 8
       Data: 
@@ -1071,16 +1077,16 @@ MonoBehaviour:
       Data: gaussianScale
     - Name: $v
       Entry: 7
-      Data: 66|UdonSharp.Compiler.FieldDefinition, UdonSharp.Editor
+      Data: 67|UdonSharp.Compiler.FieldDefinition, UdonSharp.Editor
     - Name: <Name>k__BackingField
       Entry: 1
       Data: gaussianScale
     - Name: <UserType>k__BackingField
       Entry: 9
-      Data: 31
+      Data: 32
     - Name: <SystemType>k__BackingField
       Entry: 9
-      Data: 31
+      Data: 32
     - Name: <SyncMode>k__BackingField
       Entry: 7
       Data: System.Nullable`1[[UdonSharp.UdonSyncMode, UdonSharp.Runtime]], mscorlib
@@ -1095,13 +1101,13 @@ MonoBehaviour:
       Data: true
     - Name: _fieldAttributes
       Entry: 7
-      Data: 67|System.Collections.Generic.List`1[[System.Attribute, mscorlib]], mscorlib
+      Data: 68|System.Collections.Generic.List`1[[System.Attribute, mscorlib]], mscorlib
     - Name: 
       Entry: 12
       Data: 2
     - Name: 
       Entry: 7
-      Data: 68|UnityEngine.RangeAttribute, UnityEngine.CoreModule
+      Data: 69|UnityEngine.RangeAttribute, UnityEngine.CoreModule
     - Name: min
       Entry: 4
       Data: 0
@@ -1113,7 +1119,7 @@ MonoBehaviour:
       Data: 
     - Name: 
       Entry: 7
-      Data: 69|UnityEngine.SerializeField, UnityEngine.CoreModule
+      Data: 70|UnityEngine.SerializeField, UnityEngine.CoreModule
     - Name: 
       Entry: 8
       Data: 

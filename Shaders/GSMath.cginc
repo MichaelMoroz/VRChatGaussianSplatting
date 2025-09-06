@@ -131,7 +131,7 @@ Ellipse GetProjectedGaussian(GaussianData g)
     float3    camWS = _WorldSpaceCameraPos;
 
     // six canonical directions in unit gaussian ------------------------
-    static const float SCALE = sqrt(3.0);   //???
+    static const float SCALE = sqrt(1.5);   //???
     static const float3 AXIS[OUTLINE_SAMPLES] = {
         float3( SCALE, 0, 0), float3(-SCALE, 0, 0),
         float3( 0, SCALE, 0), float3( 0,-SCALE, 0),

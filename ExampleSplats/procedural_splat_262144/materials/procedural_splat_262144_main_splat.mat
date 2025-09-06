@@ -1,0 +1,72 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!21 &2100000
+Material:
+  serializedVersion: 8
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_Name: procedural_splat_262144_main_splat
+  m_Shader: {fileID: 4800000, guid: f531a645849e0b067b8b09de4f72f60d, type: 3}
+  m_Parent: {fileID: 0}
+  m_ModifiedSerializedProperties: 0
+  m_ValidKeywords:
+  - _VRC_LIGHT_VOLUMES_ON
+  m_InvalidKeywords: []
+  m_LightmapFlags: 4
+  m_EnableInstancingVariants: 0
+  m_DoubleSidedGI: 0
+  m_CustomRenderQueue: 3501
+  stringTagMap: {}
+  disabledShaderPasses: []
+  m_LockedProperties: 
+  m_SavedProperties:
+    serializedVersion: 3
+    m_TexEnvs:
+    - _GS_PackedColors:
+        m_Texture: {fileID: 8400000, guid: 612d397e4b2cd6740a7e48042676528a, type: 2}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _GS_PackedPositions:
+        m_Texture: {fileID: 8400000, guid: 524f59ad9ff57b84d8d1e4e4c2f2a37b, type: 2}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _GS_RenderOrder:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _GS_RenderOrderMirror:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _GS_RenderOrderPrecomputed:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    m_Ints:
+    - _FAKE_SRGB: 0
+    - _PRECOMPUTED_SORTING: 0
+    - _VRC_LIGHT_VOLUMES: 1
+    m_Floats:
+    - _ActualSplatCount: 262144
+    - _ActualSplatCountSqrt: 512
+    - _AlphaCutoff: 0.001
+    - _AntiAliasing: 1
+    - _Exposure: 1
+    - _Gamma: 1
+    - _GaussianMul: 1
+    - _LightVolumeIntensity: 1
+    - _Log2MinScale: -15
+    - _Opacity: 1
+    - _QuadScale: 1.1
+    - _ScaleCutoff: 100
+    - _SplatCount: 43691
+    - _SplatOffset: 0
+    - _ThinThreshold: 0.005
+    m_Colors:
+    - _MinMaxSortDistance: {r: 0, g: 0, b: 0, a: 0}
+    - _MirrorCameraPos: {r: 0, g: 0, b: 0, a: 0}
+    - _OKLCHShift: {r: 0, g: 0, b: 0, a: 0}
+    - _SplatScalesLOG2: {r: -15, g: 15, b: -16, a: 4}
+  m_BuildTextureStacks: []

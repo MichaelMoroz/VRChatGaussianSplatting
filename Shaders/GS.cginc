@@ -80,7 +80,7 @@ void geo(point v2g input[1], inout TriangleStream<g2f> triStream, uint instanceI
     #endif
 
     splat.C.rgb = shift_color(splat.C.rgb) * _Exposure; // apply color shift
-    splat.C.a *= 0.5 * _Opacity; // apply opacity
+    splat.C.a *= _Opacity; // apply opacity
 
     if (splat.C.a < _AlphaCutoff || any(splat.RS > _ScaleCutoff)) {
         return; // skip invalid splats
@@ -110,7 +110,7 @@ void geo(point v2g input[1], inout TriangleStream<g2f> triStream, uint instanceI
     }
     
     float area = ell.size.x * ell.size.y;
-    ell.size = ClampSize(ell.size, 1.75 * _AntiAliasing, ell.axis, _ScreenParams.xy); // ensure minimum size
+    ell.size = ClampSize(ell.size, 2.5 * _AntiAliasing, ell.axis, _ScreenParams.xy); // ensure minimum size
     float areaPost = ell.size.x * ell.size.y;
     float areaScale = area / areaPost;
     o.color.a *= areaScale; // scale alpha by area ratio

@@ -12,9 +12,9 @@ Shader "VRChatGaussianSplatting/AlphaDepthMask"
             Cull Off
             ColorMask 0
             Stencil {
-                Ref 1
+                Ref 9
                 Comp Always
-                Pass Replace   // write 1 into stencil
+                Pass Replace
             }
             CGPROGRAM
             #include "FullscreenCommon.cginc"

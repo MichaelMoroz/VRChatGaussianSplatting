@@ -18,7 +18,7 @@ public class TurnOnToggle : UdonSharpBehaviour
 
     public void Start()
     {
-        GameObject targetObject = gaussianSplatRenderer.GetObjectByIndex(enableObjectIndex);
+        GaussianSplatObject targetObject = gaussianSplatRenderer.GetObjectByIndex(enableObjectIndex);
         this.InteractionText = targetObject.name;
     }
 
