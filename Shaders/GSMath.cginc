@@ -1,5 +1,3 @@
-#include "ExFloat.cginc"
-
 // rotate vector v by quaternion q
 float3 q_rotate(float3 v, float4 q) {
     float3 t  = 2.0f * cross(q.xyz, v);
@@ -23,6 +21,12 @@ float3x3 unit(float a) {
 }
 
 #define DIV_EPSILON 1e-6
+#define FINITE_LIMIT 1e8
+#define SAFE_NDC_LIMIT 8.0
+#define SAFE_AXIS_LIMIT 4.0
+#define SAFE_ELLIPSE_SIZE_LIMIT 2.0
+#define SAFE_NORM_POINT_LIMIT 4.0
+#define SAFE_RENORM_LIMIT 16.0
 
 float safe_divide(float a, float b) {
     return (abs(b) > DIV_EPSILON) ? a / b : 0.0;
@@ -30,6 +34,21 @@ float safe_divide(float a, float b) {
 
 float safe_sqrt(float a) {
     return (a > 0.0) ? sqrt(a) : 0.0;  // return 0 for negative inputs
+}
+
+bool valid_float(float x)
+{
+    return x > -FINITE_LIMIT && x < FINITE_LIMIT;
+}
+
+bool valid_float2(float2 v)
+{
+    return valid_float(v.x) && valid_float(v.y);
+}
+
+bool valid_float3(float3 v)
+{
+    return valid_float(v.x) && valid_float(v.y) && valid_float(v.z);
 }
 
 float3x3 quat_to_mat(float4 q) {
@@ -46,6 +65,21 @@ struct Ellipse {
     float2 axis;
     float2 size;
 };
+
+bool valid_ellipse(Ellipse ellipse)
+{
+    return valid_float2(ellipse.center)
+        && valid_float2(ellipse.axis)
+        && valid_float2(ellipse.size)
+        && abs(ellipse.center.x) < SAFE_NDC_LIMIT
+        && abs(ellipse.center.y) < SAFE_NDC_LIMIT
+        && abs(ellipse.axis.x) < SAFE_AXIS_LIMIT
+        && abs(ellipse.axis.y) < SAFE_AXIS_LIMIT
+        && ellipse.size.x > 0.0
+        && ellipse.size.y > 0.0
+        && ellipse.size.x < SAFE_ELLIPSE_SIZE_LIMIT
+        && ellipse.size.y < SAFE_ELLIPSE_SIZE_LIMIT;
+}
 
 Ellipse extractEllipse(float a, float b, float c, float d, float e, float f) {
     float delta = c * c - 4.0 * a * b;
@@ -78,119 +112,157 @@ Ellipse extractEllipse(float a, float b, float c, float d, float e, float f) {
     return ellipse;
 }
 
-float4x4 CreateClipToViewMatrix()
+float2 project_object_to_ndc(float3 p)
 {
-    float4x4 flipZ = float4x4(1, 0, 0, 0,
-                              0, 1, 0, 0,
-                              0, 0, -1, 1,
-                              0, 0, 0, 1);
-    float4x4 scaleZ = float4x4(1, 0, 0, 0,
-                               0, 1, 0, 0,
-                               0, 0, 2, -1,
-                               0, 0, 0, 1);
-    float4x4 invP = unity_CameraInvProjection;
-    float4x4 flipY = float4x4(1, 0, 0, 0,
-                              0, _ProjectionParams.x, 0, 0,
-                              0, 0, 1, 0,
-                              0, 0, 0, 1);
-
-    float4x4 result = mul(scaleZ, flipZ);
-    result = mul(invP, result);
-    result = mul(flipY, result);
-    result._24 *= _ProjectionParams.x;
-    result._42 *= -1;
-    return result;
+    float4 clip = UnityObjectToClipPos(float4(p, 1.0));
+    return clip.xy / clip.w;
 }
 
-float4x4 Translation(float3 t) {
-    return float4x4(1, 0, 0, t.x,
-                    0, 1, 0, t.y,
-                    0, 0, 1, t.z,
-                    0, 0, 0, 1);
-}
-
-float4x4 RotationScaleInverse(float4 q, float3 s) {
-    float3x3 R = quat_to_mat(q);
-    float3x3 Rt = transpose(R);
-    float3x3 Pinv = float3x3(Rt[0] / s.x, Rt[1] / s.y, Rt[2] / s.z);
-    return float4x4(Pinv[0], 0, Pinv[1], 0, Pinv[2], 0, 0, 0, 0, 1);
-}
-
-float4x4 InverseSplat(float3 t, float3 s, float4 q) {
-    float4x4 T_inv = Translation(-t);
-    float4x4 R_inv = RotationScaleInverse(q, s);
-    return mul(R_inv, T_inv);
-}
-
-float dotM(float4 a, float4 b)
+Ellipse fit_outline_ellipse_5(float2 points[5], float2 centerNdc)
 {
-    static const float4 s = float4(1.0, 1.0, 1.0, -1.0);
-    return dot(a * s, b);
+    Ellipse ellipse;
+    ellipse.center = 0.0;
+    ellipse.axis = float2(1.0, 0.0);
+    ellipse.size = 0.0;
+
+    float2 p0 = points[0];
+    float2 p1 = points[1];
+    float2 p2 = points[2];
+    float2 p3 = points[3];
+    float2 p4 = points[4];
+    float2 outlineMin = min(min(min(min(p0, p1), p2), p3), min(p4, centerNdc));
+    float2 outlineMax = max(max(max(max(p0, p1), p2), p3), max(p4, centerNdc));
+    float2 bboxCenter = 0.5 * (outlineMin + outlineMax);
+    float2 bboxHalfExtent = max(0.5 * (outlineMax - outlineMin), float2(DIV_EPSILON, DIV_EPSILON));
+    float2 n0 = (p0 - bboxCenter) / bboxHalfExtent;
+    float2 n1 = (p1 - bboxCenter) / bboxHalfExtent;
+    float2 n2 = (p2 - bboxCenter) / bboxHalfExtent;
+    float2 n3 = (p3 - bboxCenter) / bboxHalfExtent;
+    float2 n4 = (p4 - bboxCenter) / bboxHalfExtent;
+
+    float sx = n0.x - n1.x;
+    float sy = n1.y - n0.y;
+    if (abs(sx) <= DIV_EPSILON || abs(sy) <= DIV_EPSILON) return ellipse;
+
+    float invSx = 1.0 / sx;
+    float invSy = 1.0 / sy;
+    float offsetX = n1.x;
+    float offsetY = n0.y;
+    float u2 = (n2.x - offsetX) * invSx;
+    float v2 = (n2.y - offsetY) * invSy;
+    float u3 = (n3.x - offsetX) * invSx;
+    float v3 = (n3.y - offsetY) * invSy;
+    float u4 = (n4.x - offsetX) * invSx;
+    float v4 = (n4.y - offsetY) * invSy;
+    float m00 = u2 * u2 - u2;
+    float m01 = 2.0 * u2 * v2;
+    float m02 = v2 * v2 - v2;
+    float r0 = u2 + v2 - 1.0;
+    float m10 = u3 * u3 - u3;
+    float m11 = 2.0 * u3 * v3;
+    float m12 = v3 * v3 - v3;
+    float r1 = u3 + v3 - 1.0;
+    float m20 = u4 * u4 - u4;
+    float m21 = 2.0 * u4 * v4;
+    float m22 = v4 * v4 - v4;
+    float r2 = u4 + v4 - 1.0;
+
+    if (abs(m00) <= DIV_EPSILON) return ellipse;
+    float invM00 = 1.0 / m00;
+    m01 *= invM00;
+    m02 *= invM00;
+    r0 *= invM00;
+    m11 -= m10 * m01;
+    m12 -= m10 * m02;
+    r1 -= m10 * r0;
+    m21 -= m20 * m01;
+    m22 -= m20 * m02;
+    r2 -= m20 * r0;
+    if (abs(m11) <= DIV_EPSILON) return ellipse;
+    float invM11 = 1.0 / m11;
+    m12 *= invM11;
+    r1 *= invM11;
+    m22 -= m21 * m12;
+    r2 -= m21 * r1;
+    if (abs(m22) <= DIV_EPSILON) return ellipse;
+    r2 /= m22;
+
+    float conicC = r2;
+    float conicB = r1 - m12 * conicC;
+    float conicA = r0 - m01 * conicB - m02 * conicC;
+    float conicD = -(conicA + 1.0);
+    float conicE = -(conicC + 1.0);
+    float invSx2 = invSx * invSx;
+    float invSy2 = invSy * invSy;
+    float invSxSy = invSx * invSy;
+    float coeffA = conicA * invSx2;
+    float coeffB = conicB * invSxSy;
+    float coeffC = conicC * invSy2;
+    float coeffD = -2.0 * coeffA * offsetX - 2.0 * coeffB * offsetY + conicD * invSx;
+    float coeffE = -2.0 * coeffB * offsetX - 2.0 * coeffC * offsetY + conicE * invSy;
+    float coeffF = coeffA * offsetX * offsetX + 2.0 * coeffB * offsetX * offsetY + coeffC * offsetY * offsetY - conicD * invSx * offsetX - conicE * invSy * offsetY + 1.0;
+    float invF = -safe_divide(1.0, coeffF);
+    if (invF == 0.0) return ellipse;
+
+    float ellipseA = coeffA * invF;
+    float ellipseB = coeffC * invF;
+    float ellipseC = 2.0 * coeffB * invF;
+    float ellipseD = coeffD * invF;
+    float ellipseE = coeffE * invF;
+    float invHx = safe_divide(1.0, bboxHalfExtent.x);
+    float invHy = safe_divide(1.0, bboxHalfExtent.y);
+    float invHx2 = invHx * invHx;
+    float invHy2 = invHy * invHy;
+    float invHxHy = invHx * invHy;
+    float bboxX = bboxCenter.x;
+    float bboxY = bboxCenter.y;
+    float finalA = ellipseA * invHx2;
+    float finalB = ellipseB * invHy2;
+    float finalC = ellipseC * invHxHy;
+    float finalD = ellipseD * invHx - 2.0 * ellipseA * bboxX * invHx2 - ellipseC * bboxY * invHxHy;
+    float finalE = ellipseE * invHy - 2.0 * ellipseB * bboxY * invHy2 - ellipseC * bboxX * invHxHy;
+    float finalF = ellipseA * bboxX * bboxX * invHx2 + ellipseB * bboxY * bboxY * invHy2 + ellipseC * bboxX * bboxY * invHxHy - ellipseD * bboxX * invHx - ellipseE * bboxY * invHy - 1.0;
+    if (abs(finalF) <= DIV_EPSILON) return ellipse;
+
+    float invConicF = -safe_divide(1.0, finalF);
+    if (invConicF == 0.0) return ellipse;
+    finalA *= invConicF;
+    finalB *= invConicF;
+    finalC *= invConicF;
+    finalD *= invConicF;
+    finalE *= invConicF;
+
+    return extractEllipse(finalA, finalB, finalC, finalD, finalE, -1.0);
 }
 
-Ellipse GetProjectedEllipsoid(float3 pos, float3 scale, float4 rotation) {
-    float4x4 S_inv   = InverseSplat(pos, scale, rotation);
-    float4x4 P_inv   = CreateClipToViewMatrix(); // inverse(UNITY_MATRIX_P)
-    float4x4 MV_inv  = transpose(UNITY_MATRIX_IT_MV);
-    float4x4 inv = mul(S_inv, mul(MV_inv, P_inv));
+Ellipse GetProjectedEllipsoid(float3 pos, float3 scale, float4 rotation)
+{
+    Ellipse ellipse;
+    ellipse.center = 0.0;
+    ellipse.axis = float2(1.0, 0.0);
+    ellipse.size = 0.0;
 
-    float4x4 Q0 = float4x4(
-        1,0,0,0,
-        0,1,0,0,
-        0,0,1,0,
-        0,0,0,-1
-    );
+    float2 centerNdc = project_object_to_ndc(pos);
+    float3 cameraObjectPos = mul(unity_WorldToObject, float4(_WorldSpaceCameraPos, 1.0)).xyz;
+    float3 invScale = 1.0 / max(scale, float3(DIV_EPSILON, DIV_EPSILON, DIV_EPSILON));
+    float3 viewOriginLocal = q_rotate(cameraObjectPos - pos, conj_q(rotation)) * invScale;
+    float viewDistance = length(viewOriginLocal);
+    float3 viewDirLocal = viewOriginLocal / viewDistance;
+    float3 tangentCircleCenter = viewDirLocal / viewDistance;
+    float tangentCircleRadius = sqrt(max(1.0 - 1.0 / (viewDistance * viewDistance), 0.0));
+    float3 tangentAxis = abs(viewDirLocal.z) < 0.999 ? float3(0.0, 0.0, 1.0) : float3(0.0, 1.0, 0.0);
+    float3 tangentBasisU = cross(tangentAxis, viewDirLocal);
+    float tangentBasisULength = length(tangentBasisU);
+    tangentBasisU /= tangentBasisULength;
+    float3 tangentBasisV = cross(viewDirLocal, tangentBasisU);
 
-    double_4x4 Q_df = dmat_mul(to_dmat(transpose(inv)), to_dmat(mul(Q0, inv)));
-
-    // 1) extract the 1×1 scalar A and the 3-vector B from Q_df
-    float2 A_df = Q_df.m[2][2];
-    float2 B0   = Q_df.m[0][2];
-    float2 B1   = Q_df.m[1][2];
-    float2 B2   = Q_df.m[3][2];
-
-    // 2) extract the 3×3 submatrix C
-    float2 C_df[3][3];
-    C_df[0][0] = Q_df.m[0][0];  C_df[0][1] = Q_df.m[0][1];  C_df[0][2] = Q_df.m[0][3];
-    C_df[1][0] = Q_df.m[1][0];  C_df[1][1] = Q_df.m[1][1];  C_df[1][2] = Q_df.m[1][3];
-    C_df[2][0] = Q_df.m[3][0];  C_df[2][1] = Q_df.m[3][1];  C_df[2][2] = Q_df.m[3][3];
-
-    // 3) compute outer = B ⊗ B, and scalarC = A * C, then C2 = outer - scalarC
-    float2 outer_df[3][3];
-    float2 scalarC_df[3][3];
-    float2 C2_df[3][3];
-
-    [unroll]
-    for (uint i = 0; i < 3; ++i) {
-        // pick the i-th component of B
-        float2 Bi = (i == 0 ? B0 : (i == 1 ? B1 : B2));
-
-        // outer product row i
-        outer_df[i][0] = df64_mul(Bi, B0);
-        outer_df[i][1] = df64_mul(Bi, B1);
-        outer_df[i][2] = df64_mul(Bi, B2);
-
-        // A * C row i
-        scalarC_df[i][0] = df64_mul(A_df, C_df[i][0]);
-        scalarC_df[i][1] = df64_mul(A_df, C_df[i][1]);
-        scalarC_df[i][2] = df64_mul(A_df, C_df[i][2]);
-
-        // difference row i
-        C2_df[i][0] = df64_sub(outer_df[i][0], scalarC_df[i][0]);
-        C2_df[i][1] = df64_sub(outer_df[i][1], scalarC_df[i][1]);
-        C2_df[i][2] = df64_sub(outer_df[i][2], scalarC_df[i][2]);
+    float2 points[5];
+    [unroll] for (uint i = 0; i < 5; i++)
+    {
+        float theta = 6.2831853 * float(i) / 5.0;
+        float3 localPoint = tangentCircleCenter + tangentCircleRadius * (cos(theta) * tangentBasisU + sin(theta) * tangentBasisV);
+        points[i] = project_object_to_ndc(unit_space_to_model(localPoint, pos, rotation, scale));
     }
 
-    // 4) pull off the six scalar coefficients (hi-parts) and call extractEllipse
-
-    // normalize the coefficients to avoid numerical issues
-    float _max = 1.0 / max(C2_df[0][0].x, C2_df[1][1].x); 
-    float _a = C2_df[0][0].x * _max;
-    float _b = C2_df[0][1].x * 2.0 * _max;
-    float _c = C2_df[1][1].x * _max;
-    float _d = C2_df[0][2].x * 2.0 * _max;
-    float _e = C2_df[1][2].x * 2.0 * _max;
-    float _f = C2_df[2][2].x * _max;
-    
-    return extractEllipse(_a, _c, _b, _d, _e, _f);
-} 
+    return fit_outline_ellipse_5(points, centerNdc);
+}

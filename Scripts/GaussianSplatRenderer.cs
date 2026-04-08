@@ -45,8 +45,8 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
 
     [Tooltip("If true, the material properties will be overridden with the values set in this script. If false, the material properties will be set to their default values.")]
     [SerializeField] public bool overrideMaterialProperties = false;
-    [Range(0.0f, 2.0f)] [SerializeField] public float quadScale = 1.1f;
     [Range(0.0f, 2.0f)] [SerializeField] public float gaussianScale = 1.0f;
+    [Range(0.0f, 1.0f)] [SerializeField] public float alphaCutoff = 0.03f;
 
     // [Header("Optional Mirror")]
     // [Tooltip("Optional mirror GameObject. If set, the script will also sort splats for the mirror camera position.")]
@@ -156,9 +156,8 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
             splatMat.SetVector("_MinMaxSortDistance", minMaxSortDistance);
             if (overrideMaterialProperties)
             {
-                // Override material properties if specified
-                splatMat.SetFloat("_QuadScale", quadScale);
                 splatMat.SetFloat("_GaussianMul", gaussianScale);
+                splatMat.SetFloat("_AlphaCutoff", alphaCutoff);
             }
         }
 

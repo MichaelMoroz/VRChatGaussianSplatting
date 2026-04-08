@@ -10,7 +10,6 @@ float4 _GS_RenderOrderPrecomputed_TexelSize;
 float _VRChatCameraMode;
 float _VRChatMirrorMode;
 float3 _MirrorCameraPos, _VRChatMirrorCameraPos;
-float _QuadScale;
 float _GaussianMul;
 float _ThinThreshold;
 float _AntiAliasing;

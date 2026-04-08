@@ -25,6 +25,7 @@ struct g2f {
     float4 position: SV_POSITION;
     float2 quadPos: TEXCOORD0;
     nointerpolation float4 color: TEXCOORD1;
+    nointerpolation float gaussianExp: TEXCOORD2;
     UNITY_VERTEX_OUTPUT_STEREO
 };
 
@@ -78,11 +79,14 @@ void geo(point v2g input[1], inout TriangleStream<g2f> triStream, uint instanceI
     #ifdef _FAKE_SRGB
         o.color.rgb = GammaToLinearSpace(o.color.rgb);
     #endif
+    float peakAlpha = o.color.a;
+    float cutoffSigmaRadius = sqrt(max(-2.0 * log(_AlphaCutoff / peakAlpha), 0.0));
     float scale_max = max(splat.scale.x, max(splat.scale.y, splat.scale.z));
     float3 clamped_scale = clamp(splat.scale, scale_max * _ThinThreshold, scale_max);
+    float supportScale = _GaussianMul * cutoffSigmaRadius;
 
     // Project the ellipsoid onto the screen
-    Ellipse ell = GetProjectedEllipsoid(splat.mean, 2.0 * clamped_scale, splat.quat);
+    Ellipse ell = GetProjectedEllipsoid(splat.mean, supportScale * clamped_scale, splat.quat);
 
     if(any(ell.size > 1.75)) {
         return;
@@ -93,6 +97,7 @@ void geo(point v2g input[1], inout TriangleStream<g2f> triStream, uint instanceI
     float areaPost = ell.size.x * ell.size.y;
     float areaScale = area / areaPost;
     o.color.a *= areaScale; // scale alpha by area ratio
+    o.gaussianExp = 0.5 * cutoffSigmaRadius * cutoffSigmaRadius;
 
     if (o.color.a < _AlphaCutoff) {
         return; // skip splats with too small area or invalid alpha
@@ -109,14 +114,11 @@ void geo(point v2g input[1], inout TriangleStream<g2f> triStream, uint instanceI
     {
         o.quadPos = float2(vtxID & 1, (vtxID >> 1) & 1) * 2.0 - 1.0;
         float2x2 rot = float2x2(ell.axis.x, -ell.axis.y, ell.axis.y, ell.axis.x);
-        float2 ndc = ell.center + mul(rot, _QuadScale * o.quadPos * ell.size);
+        float2 ndc = ell.center + mul(rot, o.quadPos * ell.size);
         o.position = float4(ndc, splatClipPos.z, 1.0);
         triStream.Append(o);
     }
 }
-
-#define SMOOTHSTEP_0 0.98
-#define SMOOTHSTEP_1 1.02
 
 //#define DEBUG_OUTLINES
 
@@ -126,10 +128,7 @@ float4 frag(g2f input) : SV_Target {
 #ifdef DEBUG_OUTLINES
     return (dist2 < 1.0) ? float4(1, 0, 0, 1) : float4(0, 0, 0, 1); // red outline for debugging
 #endif
-    if (dist2 > SMOOTHSTEP_1) discard;  // skip outside of the ellipse
-    float rho0 = exp(- 2.0 * dist2 * _GaussianMul * (_QuadScale * _QuadScale));
-    float rho1 = smoothstep(SMOOTHSTEP_1, SMOOTHSTEP_0, dist2);
-    float rho = input.color.a * rho1 * rho0;
-    if (rho < 0.001) discard;  // skip regions with low density
+    if (dist2 > 1.0) discard;  // skip outside of the cutoff ellipse
+    float rho = input.color.a * exp(-input.gaussianExp * dist2);
     return float4(input.color.rgb * rho, rho);
 }
