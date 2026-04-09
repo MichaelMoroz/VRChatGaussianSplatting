@@ -43,9 +43,9 @@ namespace GaussianSplatting
             for (int i = 0; i < indexCounts.Count; i++)
             {
                 int[] indices = new int[indexCounts[i]];
-                indices[0] = 0;
-                indices[1] = 1; 
-                indices[2] = 2; 
+                if (indices.Length > 0) indices[0] = 0;
+                if (indices.Length > 1) indices[1] = 1;
+                if (indices.Length > 2) indices[2] = 2;
                 mesh.SetIndices(indices, topologies[i], i, false, 0);
             }
             
@@ -157,19 +157,71 @@ namespace GaussianSplatting
             };
         }
 
-        public static GameObject CreatePrefab(List<Material> materials, Mesh mesh, string assetPath, string name, bool addGaussianSplatObject = true)
+        static MeshRenderer CreateRendererChild(Transform parent, string name, Mesh mesh, List<Material> materials)
+        {
+            GameObject child = new GameObject(name);
+            child.transform.SetParent(parent, false);
+            child.AddComponent<MeshFilter>().sharedMesh = mesh;
+            MeshRenderer meshRenderer = child.AddComponent<MeshRenderer>();
+            meshRenderer.sharedMaterials = materials.ToArray();
+            meshRenderer.allowOcclusionWhenDynamic = false;
+            return meshRenderer;
+        }
+
+        static void ConfigureSplatMaterialTextures(Material splatMat, Texture2D xyzTex, Texture2D colDcTex, Texture2D rotTex, Texture2D scaleTex, Texture2D[] shTex, int importedSHCoeffCount, Vector3[] shMin, Vector3[] shRange, float shRangeEpsilon, int actualSplatCount, SHBand defaultSHBand)
+        {
+            splatMat.SetTexture("_GS_Positions", xyzTex);
+            splatMat.SetTexture("_GS_Colors", colDcTex);
+            splatMat.SetTexture("_GS_Rotations", rotTex);
+            splatMat.SetTexture("_GS_Scales", scaleTex);
+            if (importedSHCoeffCount > 0)
+            {
+                for (int coeff = 0; coeff < importedSHCoeffCount; ++coeff)
+                {
+                    string prop = GetSHPropertyName(coeff);
+                    Vector3 range = shRange[coeff];
+                    splatMat.SetTexture(prop, shTex[coeff]);
+                    splatMat.SetVector(prop + "_Min", new Vector4(shMin[coeff].x, shMin[coeff].y, shMin[coeff].z, 0f));
+                    splatMat.SetVector(prop + "_Range", new Vector4(
+                        Mathf.Max(range.x, shRangeEpsilon),
+                        Mathf.Max(range.y, shRangeEpsilon),
+                        Mathf.Max(range.z, shRangeEpsilon),
+                        0f
+                    ));
+                }
+            }
+            splatMat.SetInt("_ActualSplatCount", actualSplatCount);
+            SetMaterialSHBand(splatMat, defaultSHBand);
+        }
+
+        public static GameObject CreatePrefab(List<Material> materials, Mesh mesh, string assetPath, string name, bool addGaussianSplatObject = true, List<Material> stochasticMaterials = null, Mesh stochasticMesh = null)
         {
             var go = new GameObject(name);
             go.transform.SetPositionAndRotation(Vector3.zero, Quaternion.identity);
             go.transform.localScale = new Vector3(1, -1, 1); // flip Y to match unity's coordinate system
-            go.AddComponent<MeshFilter>().sharedMesh = mesh;
-            MeshRenderer meshRenderer = go.AddComponent<MeshRenderer>();
-            meshRenderer.sharedMaterials = materials.ToArray();
-            meshRenderer.allowOcclusionWhenDynamic = false;
-            if (addGaussianSplatObject) {
-                // Add the GaussianSplatObject component to the GameObject
-                // This is necessary for the prefab to be recognized as a Gaussian Splat Object for the renderer
-                go.AddComponent<GaussianSplatObject>();
+            if (addGaussianSplatObject && stochasticMaterials != null && stochasticMesh != null)
+            {
+                GaussianSplatObject splatObject = go.AddComponent<GaussianSplatObject>();
+                MeshRenderer sortedRenderer = CreateRendererChild(go.transform, "Sorted", mesh, materials);
+                MeshRenderer stochasticRenderer = CreateRendererChild(go.transform, "Stochastic", stochasticMesh, stochasticMaterials);
+                sortedRenderer.gameObject.SetActive(false);
+                stochasticRenderer.gameObject.SetActive(true);
+                splatObject.sortedObject = sortedRenderer.gameObject;
+                splatObject.stochasticObject = stochasticRenderer.gameObject;
+                splatObject.sortedRenderer = sortedRenderer;
+                splatObject.stochasticRenderer = stochasticRenderer;
+            }
+            else
+            {
+                go.AddComponent<MeshFilter>().sharedMesh = mesh;
+                MeshRenderer meshRenderer = go.AddComponent<MeshRenderer>();
+                meshRenderer.sharedMaterials = materials.ToArray();
+                meshRenderer.allowOcclusionWhenDynamic = false;
+                if (addGaussianSplatObject) {
+                    // Add the GaussianSplatObject component to the GameObject
+                    // This is necessary for the prefab to be recognized as a Gaussian Splat Object for the renderer
+                    go.AddComponent<GaussianSplatObject>();
+                }
             }
             var prefab = PrefabUtility.SaveAsPrefabAssetAndConnect(go, assetPath, InteractionMode.AutomatedAction);
             GameObject.DestroyImmediate(go); // clean up the temporary GameObject
@@ -496,28 +548,7 @@ namespace GaussianSplatting
                     if(pass == 0) {
                         splatMat = new Material(shader);
                         splatMat.name = splatMatName;
-                        splatMat.SetTexture("_GS_Positions", xyzTex);
-                        splatMat.SetTexture("_GS_Colors", colDcTex);
-                        splatMat.SetTexture("_GS_Rotations", rotTex);
-                        splatMat.SetTexture("_GS_Scales", scaleTex);
-                        if (importedSHCoeffCount > 0)
-                        {
-                            for (int coeff = 0; coeff < importedSHCoeffCount; ++coeff)
-                            {
-                                string prop = GetSHPropertyName(coeff);
-                                Vector3 range = shRange[coeff];
-                                splatMat.SetTexture(prop, shTex[coeff]);
-                                splatMat.SetVector(prop + "_Min", new Vector4(shMin[coeff].x, shMin[coeff].y, shMin[coeff].z, 0f));
-                                splatMat.SetVector(prop + "_Range", new Vector4(
-                                    Mathf.Max(range.x, shRangeEpsilon),
-                                    Mathf.Max(range.y, shRangeEpsilon),
-                                    Mathf.Max(range.z, shRangeEpsilon),
-                                    0f
-                                ));
-                            }
-                        }
-                        splatMat.SetInt("_ActualSplatCount", n);
-                        SetMaterialSHBand(splatMat, effectiveDefaultSHBand);
+                        ConfigureSplatMaterialTextures(splatMat, xyzTex, colDcTex, rotTex, scaleTex, shTex, importedSHCoeffCount, shMin, shRange, shRangeEpsilon, n, effectiveDefaultSHBand);
                         mainMat = splatMat;
                         if(precomputeSorting)
                         {
@@ -546,6 +577,44 @@ namespace GaussianSplatting
                     materials.Add(splatMat);
                 }
 
+                List<Material> stochasticMaterials = null;
+                Mesh stochasticMesh = null;
+                if (!precomputeSorting)
+                {
+                    stochasticMaterials = new List<Material>();
+                    List<int> stochasticIndexCounts = new List<int>();
+                    List<MeshTopology> stochasticTopologies = new List<MeshTopology>();
+                    Shader stochasticShader = Shader.Find("VRChatGaussianSplatting/GaussianSplattingStochastic");
+                    Material stochasticMainMat = null;
+                    for (int i = 0; i < effectiveCount; i += splatsPerPass)
+                    {
+                        int passCount = Mathf.Min(splatsPerPass, effectiveCount - i);
+                        int pass = i / splatsPerPass;
+                        Material stochasticMat = null;
+                        string stochasticMatName = materialName + (pass > 0 ? $"_pass_{pass}" : "_main") + "_stochastic";
+                        if (pass == 0)
+                        {
+                            stochasticMat = new Material(stochasticShader);
+                            stochasticMat.name = stochasticMatName;
+                            ConfigureSplatMaterialTextures(stochasticMat, xyzTex, colDcTex, rotTex, scaleTex, shTex, importedSHCoeffCount, shMin, shRange, shRangeEpsilon, n, effectiveDefaultSHBand);
+                            stochasticMainMat = stochasticMat;
+                        }
+                        else
+                        {
+                            stochasticMat = new Material(stochasticMainMat);
+                            stochasticMat.parent = stochasticMainMat;
+                        }
+                        stochasticMat.name = stochasticMatName;
+                        stochasticMat.SetInt("_SplatCount", passCount);
+                        stochasticMat.SetInt("_SplatOffset", i);
+                        stochasticIndexCounts.Add((passCount + 31) / 32);
+                        stochasticTopologies.Add(MeshTopology.Points);
+                        stochasticMaterials.Add(stochasticMat);
+                    }
+                    stochasticMesh = PointsMesh.GetMultiPassMesh(stochasticIndexCounts, stochasticTopologies, bbox);
+                    AssetDatabase.CreateAsset(stochasticMesh, Path.Combine(outputDataFolder, materialName + "_stochastic_mesh.asset"));
+                }
+
                 if(useSRGB) {
                     // Convert screen colors back to linear
                     indexCounts.Add(3);
@@ -562,11 +631,21 @@ namespace GaussianSplatting
                     string matPath = Path.Combine(outputDataFolder + "/materials", splatMat.name + ".mat");
                     AssetDatabase.CreateAsset(splatMat, matPath);
                 }
+                if (stochasticMaterials != null)
+                {
+                    for (int i = 0; i < stochasticMaterials.Count; ++i)
+                    {
+                        Material splatMat = stochasticMaterials[i];
+                        splatMat.renderQueue = 3500 + i;
+                        string matPath = Path.Combine(outputDataFolder + "/materials", splatMat.name + ".mat");
+                        AssetDatabase.CreateAsset(splatMat, matPath);
+                    }
+                }
 
                 Mesh pointMesh = PointsMesh.GetMultiPassMesh(indexCounts, topologies, bbox);
                 AssetDatabase.CreateAsset(pointMesh, Path.Combine(outputDataFolder, materialName + "_mesh.asset"));
                 // Create prefab with the splat material and mesh
-                GameObject prefab = CreatePrefab(materials, pointMesh, prefabOutputPath, materialName, !precomputeSorting);
+                CreatePrefab(materials, pointMesh, prefabOutputPath, materialName, !precomputeSorting, stochasticMaterials, stochasticMesh);
                 AssetDatabase.SaveAssets();
             }
             finally

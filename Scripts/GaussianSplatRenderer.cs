@@ -1,4 +1,4 @@
-﻿using UnityEngine;
+using UnityEngine;
 using UdonSharp;
 using VRC.SDKBase;
 using VRC.SDK3.Rendering;
@@ -18,15 +18,14 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
     const int MAX_CAMERA_COUNT = 3; // Screen camera + Photo camera + Mirror camera
     private Vector3[] _prevCameraPos;
     private RadixSort _radixSort;
-    private MeshRenderer _meshRenderer;
+    private MeshRenderer _sortedRenderer;
     private Material keyValueMat;
     private GameObject splatObject;
-    private int prevSplatObjectIndex = -1; // To track the previous splat object index
 
     [Header("Gaussian Splat Object")]
     [UdonSynced, Tooltip("The index of the currently rendered splat object in the splatObjects array.")]
     public int splatObjectIndex = 0; // Index of the current splat object in the splatObjects array
-    [Tooltip("The GameObject that contains the Gaussian Splat mesh. This should have a MeshRenderer component with a material that uses the Gaussian Splat shader.")]
+    [Tooltip("The GameObject that contains the Gaussian Splat root. Non-presorted imports should contain sorted and stochastic children.")]
     public GameObject[] splatObjects;
 
     [Header("Render Settings")]
@@ -60,6 +59,34 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         }
     }
 
+    void ShowStochastic(GameObject rootObject)
+    {
+        if (rootObject == null)
+        {
+            return;
+        }
+
+        GaussianSplatObject gaussianSplatObject = rootObject.GetComponent<GaussianSplatObject>();
+        if (gaussianSplatObject != null)
+        {
+            gaussianSplatObject.ShowStochastic();
+        }
+    }
+
+    void ShowSorted(GameObject rootObject)
+    {
+        if (rootObject == null)
+        {
+            return;
+        }
+
+        GaussianSplatObject gaussianSplatObject = rootObject.GetComponent<GaussianSplatObject>();
+        if (gaussianSplatObject != null)
+        {
+            gaussianSplatObject.ShowSorted();
+        }
+    }
+
     void DeactivateSplatObjects()
     {
         for (int i = 0; i < splatObjects.Length; i++)
@@ -67,16 +94,36 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
             GameObject splatObj = splatObjects[i];
             if (splatObj != null)
             {
+                ShowStochastic(splatObj);
                 splatObj.SetActive(false);
             }
         }
     }
 
+    MeshRenderer GetSortedRenderer(GameObject rootObject)
+    {
+        if (rootObject == null)
+        {
+            return null;
+        }
+
+        GaussianSplatObject gaussianSplatObject = rootObject.GetComponent<GaussianSplatObject>();
+        if (gaussianSplatObject != null)
+        {
+            MeshRenderer renderer = gaussianSplatObject.GetSortedRenderer();
+            if (renderer != null)
+            {
+                return renderer;
+            }
+        }
+
+        return (MeshRenderer)rootObject.GetComponent(typeof(MeshRenderer));
+    }
+
     public void SetSplatObjectIndex(int index)
     {
-        if (prevSplatObjectIndex == index)
+        if (splatObjectIndex == index && splatObject != null)
         {
-            // No change in splat object index, skip update
             return;
         }
         if (index < 0 || index >= splatObjects.Length)
@@ -88,16 +135,15 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         ResetCameraPositions();
         DeactivateSplatObjects();
 
-        prevSplatObjectIndex = splatObjectIndex; // Store the previous index before changing
         splatObjectIndex = index;
-       
         splatObject = splatObjects[splatObjectIndex];
         if (splatObject == null)
         {
             Debug.LogError($"Splat object at index {splatObjectIndex} is null. Please ensure the splatObjects array is populated correctly.");
             return;
         }
-        splatObject.SetActive(true); // Activate the new splat object
+        splatObject.SetActive(true);
+        ShowStochastic(splatObject);
     }
 
     public GameObject GetObjectByIndex(int index)
@@ -124,7 +170,7 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
             Debug.LogError("Splat Render Order texture is not assigned. Please assign a RenderTexture.");
             return;
         }
-        
+
         _prevCameraPos = new Vector3[MAX_CAMERA_COUNT];
         ResetCameraPositions();
     }
@@ -141,13 +187,23 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         );
     }
 
-    void UpdateMaterials()
+    bool UpdateMaterials()
     {
         SetSplatObjectIndex(splatObjectIndex);
 
-        _meshRenderer = splatObject.GetComponent<MeshRenderer>();
+        if (splatObject == null)
+        {
+            return false;
+        }
 
-        Material[] splatMats = _meshRenderer.materials;
+        _sortedRenderer = GetSortedRenderer(splatObject);
+        if (_sortedRenderer == null)
+        {
+            Debug.LogError($"No sorted MeshRenderer found on {splatObject.name}.");
+            return false;
+        }
+
+        Material[] splatMats = _sortedRenderer.materials;
         Vector4 minMaxSortDistance = new Vector4(minSortDistance, maxSortDistance, 0, 0);
         for (int i = 0; i < splatMats.Length; i++)
         {
@@ -162,46 +218,55 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         }
 
         Texture positions = null;
-        if(splatMats.Length > 1) { // Color correction is (probably) enabled, so first splat chunk material is 1
+        if (splatMats.Length > 1)
+        {
             positions = splatMats[1].GetTexture("_GS_Positions");
-        } else { // Only one material, so use it directly
+        }
+        else
+        {
             positions = splatMats[0].GetTexture("_GS_Positions");
         }
-        
+
         _radixSort.elementCount = positions.width * positions.height;
         _radixSort.maxKeyBits = sortingSteps * 4; // Each sorting step sorts 4 bits, so total bits = steps * 4
         keyValueMat = _radixSort.computeKeyValues;
         keyValueMat.SetTexture("_GS_Positions", positions);
         keyValueMat.SetVector("_MinMaxSortDistance", minMaxSortDistance);
         keyValueMat.SetFloat("_KeyScale", (float)((1 << (sortingSteps * 4)) - 1));
-        keyValueMat.SetMatrix("_SplatToWorld", splatObject.transform.localToWorldMatrix);
-
+        keyValueMat.SetMatrix("_SplatToWorld", _sortedRenderer.transform.localToWorldMatrix);
+        return true;
     }
 
-    void SortCamera(Vector3 cameraPos, int cameraID, bool forceUpdate = false)
+    bool SortCamera(Vector3 cameraPos, int cameraID, bool forceUpdate = false)
     {
         Vector3 quantizedPos = QuantizePosition(cameraPos);
         if (quantizedPos == _prevCameraPos[cameraID] && !alwaysUpdate && !forceUpdate)
         {
-            // No change in camera position, skip update
-            return;
+            return false;
         }
-        //Debug.Log($"Camera {cameraID} position updated: {quantizedPos}");
+
         _prevCameraPos[cameraID] = quantizedPos;
         keyValueMat.SetVector("_CameraPos", cameraPos);
         _radixSort.Sort();
-        // Copy the sorted results to the splat render order texture
         VRCGraphics.Blit(_radixSort.keyValues0, splatRenderOrder, 0, cameraID);
+        return true;
     }
 
-    public void SortCameras(Vector3 screenCamPos) {
-        UpdateMaterials();
-       
-        SortCamera(screenCamPos, 0);
+    public void SortCameras(Vector3 screenCamPos)
+    {
+        if (!UpdateMaterials())
+        {
+            return;
+        }
+
+        if (SortCamera(screenCamPos, 0))
+        {
+            ShowSorted(splatObject);
+        }
 
         VRCCameraSettings photoCam = VRCCameraSettings.PhotoCamera;
         if (photoCam != null && photoCam.Active) SortCamera(photoCam.Position, 1);
-        
+
         // if (mirror != null && mirror.activeInHierarchy) //Mirror order is currently broken in VRChat
         // {
         //     Vector3 mirrorZ = mirror.transform.forward;
@@ -209,7 +274,7 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         //     if (zDist > 0)
         //     {
         //         Vector3 mirrorCamPos = screenCamPos + 2 * zDist * mirrorZ;
-        //         _meshRenderer.material.SetVector("_MirrorCameraPos", mirrorCamPos);
+        //         _sortedRenderer.material.SetVector("_MirrorCameraPos", mirrorCamPos);
         //         SortCamera(mirrorCamPos, 2, true);
         //     }
         // }
@@ -259,15 +324,14 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
                     TurnOnToggle toggle = toggleObject.AddComponent<TurnOnToggle>();
                     toggle.enableObjectIndex = i;
                     toggle.gaussianSplatRenderer = renderer;
-                 
+
                     Renderer toggleRenderer = toggleObject.GetComponent<Renderer>();
                     toggleRenderer.sharedMaterial = new Material(Shader.Find("Standard"));
                     toggleRenderer.sharedMaterial.color = Color.gray;
-                    
+
                     Collider collider = toggleObject.GetComponent<Collider>();
                     collider.isTrigger = true; // Make the toggle a trigger to allow interaction
 
-                    // Add a button to the inspector to set the splat object index
                     UnityEditorInternal.ComponentUtility.MoveComponentUp(toggle);
                     toggleIndex++;
                 }

@@ -273,6 +273,14 @@ SplatData LoadSplatDataRenderOrder(uint id) {
     return data;
 }
 
+SplatData LoadSplatDataStochastic(uint id) {
+    uint reordered_id = pcg(id) % _ActualSplatCount;
+    SplatData data = LoadSplatData(reordered_id);
+    data.id = reordered_id;
+    data.valid = true;
+    return data;
+}
+
 SplatData LoadSplatDataPrecomputedOrder(uint id, float3 cam_dir) {
     int precomputedIndex = GetPrecomputedRenderOrderIndex(id, cam_dir);
     SplatData data = LoadSplatData(precomputedIndex);
