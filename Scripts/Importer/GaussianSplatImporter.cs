@@ -12,6 +12,14 @@ using GaussianSplatting;
 
 namespace GaussianSplatting
 {
+    public enum SHBand
+    {
+        SH0 = 0,
+        SH1 = 1,
+        SH2 = 2,
+        SH3 = 3
+    }
+
     static public class PointsMesh
     {
         static public Mesh GetMesh(int splat_count, Bounds bbox)
@@ -47,12 +55,16 @@ namespace GaussianSplatting
     }
 
     /// <summary>
-    /// Parses a Gaussian‑splat *.ply (or .spz) file and packs the attributes into five square
-    /// textures ready for GPU upload. Only UnityEngine types are referenced so this class can
-    /// also be used at runtime. Editor‑only helpers are wrapped in UNITY_EDITOR guards.
+    /// Parses a Gaussian‑splat *.ply (or .spz) file and packs the base attributes plus optional
+    /// spherical harmonic coefficient textures ready for GPU upload. Only UnityEngine types are
+    /// referenced so this class can also be used at runtime. Editor‑only helpers are wrapped in
+    /// UNITY_EDITOR guards.
     /// </summary>
     public static class PlySplatImporter
     {
+        const int SHCoeffCount = 15;
+        const float SHNonZeroEpsilon = 1e-8f;
+
         static uint Morton3D(float nx, float ny, float nz)
         {
             // Clamp & convert to 10-bit ints (0-1023)
@@ -70,6 +82,79 @@ namespace GaussianSplatting
             }
 
             return Part1By2(x) | (Part1By2(y) << 1) | (Part1By2(z) << 2);
+        }
+
+        static string GetSHPropertyName(int index)
+        {
+            return $"_GS_SH{(index + 1).ToString("X")}";
+        }
+
+        static Vector3 GetSHCoefficient(in InputSplatData splat, int index)
+        {
+            return index switch
+            {
+                0 => splat.sh1,
+                1 => splat.sh2,
+                2 => splat.sh3,
+                3 => splat.sh4,
+                4 => splat.sh5,
+                5 => splat.sh6,
+                6 => splat.sh7,
+                7 => splat.sh8,
+                8 => splat.sh9,
+                9 => splat.shA,
+                10 => splat.shB,
+                11 => splat.shC,
+                12 => splat.shD,
+                13 => splat.shE,
+                _ => splat.shF,
+            };
+        }
+
+        static void SetMaterialSHBand(Material material, SHBand band)
+        {
+            material.SetFloat("_SHBand", (float)band);
+            material.DisableKeyword("_SHBAND_SH0");
+            material.DisableKeyword("_SHBAND_SH1");
+            material.DisableKeyword("_SHBAND_SH2");
+            material.DisableKeyword("_SHBAND_SH3");
+            switch (band)
+            {
+                case SHBand.SH0:
+                    material.EnableKeyword("_SHBAND_SH0");
+                    break;
+                case SHBand.SH1:
+                    material.EnableKeyword("_SHBAND_SH1");
+                    break;
+                case SHBand.SH2:
+                    material.EnableKeyword("_SHBAND_SH2");
+                    break;
+                default:
+                    material.EnableKeyword("_SHBAND_SH3");
+                    break;
+            }
+        }
+
+        static SHBand ClampDefaultSHBand(SHBand requestedBand, bool[] hasNonZeroBand)
+        {
+            int requested = Mathf.Clamp((int)requestedBand, (int)SHBand.SH0, (int)SHBand.SH3);
+            for (int band = requested; band >= (int)SHBand.SH1; --band)
+            {
+                if (hasNonZeroBand[band])
+                    return (SHBand)band;
+            }
+            return SHBand.SH0;
+        }
+
+        static int SHCoeffCountForBand(SHBand band)
+        {
+            return band switch
+            {
+                SHBand.SH0 => 0,
+                SHBand.SH1 => 3,
+                SHBand.SH2 => 8,
+                _ => SHCoeffCount,
+            };
         }
 
         public static GameObject CreatePrefab(List<Material> materials, Mesh mesh, string assetPath, string name, bool addGaussianSplatObject = true)
@@ -91,7 +176,7 @@ namespace GaussianSplatting
             return prefab;
         }
 
-        public static void Import(string plyFile, string prefabOutputPath, bool computeBoundingBox, int splatsPerPass, bool precomputeSorting = false, int maxAlphaMaskCount = 1, bool useSRGB = true)
+        public static void Import(string plyFile, string prefabOutputPath, bool computeBoundingBox, int splatsPerPass, bool precomputeSorting = false, int maxAlphaMaskCount = 1, bool useSRGB = true, bool importSphericalHarmonics = true, SHBand defaultSHBand = SHBand.SH1)
         {
             if (!File.Exists(plyFile))
                 throw new FileNotFoundException(plyFile);
@@ -104,6 +189,43 @@ namespace GaussianSplatting
             GaussianFileReader.ReadFile(plyFile, out NativeArray<InputSplatData> splats);
             try
             {
+                var shMin = new Vector3[SHCoeffCount];
+                var shRange = new Vector3[SHCoeffCount];
+                const float shRangeEpsilon = 1e-8f;
+                bool[] hasNonZeroBand = new bool[4];
+                if (importSphericalHarmonics)
+                {
+                    for (int coeff = 0; coeff < SHCoeffCount; ++coeff)
+                    {
+                        Vector3 minCoeff = new Vector3(float.PositiveInfinity, float.PositiveInfinity, float.PositiveInfinity);
+                        Vector3 maxCoeff = new Vector3(float.NegativeInfinity, float.NegativeInfinity, float.NegativeInfinity);
+                        for (int i = 0; i < splats.Length; ++i)
+                        {
+                            Vector3 sh = GetSHCoefficient(splats[i], coeff);
+                            minCoeff = Vector3.Min(minCoeff, sh);
+                            maxCoeff = Vector3.Max(maxCoeff, sh);
+                        }
+
+                        if (splats.Length == 0)
+                        {
+                            minCoeff = Vector3.zero;
+                            maxCoeff = Vector3.zero;
+                        }
+
+                        shMin[coeff] = minCoeff;
+                        shRange[coeff] = maxCoeff - minCoeff;
+
+                        int band = coeff < 3 ? 1 : (coeff < 8 ? 2 : 3);
+                        if (!hasNonZeroBand[band])
+                        {
+                            Vector3 range = shRange[coeff];
+                            hasNonZeroBand[band] = range.x > SHNonZeroEpsilon || range.y > SHNonZeroEpsilon || range.z > SHNonZeroEpsilon;
+                        }
+                    }
+                }
+                SHBand effectiveDefaultSHBand = importSphericalHarmonics ? ClampDefaultSHBand(defaultSHBand, hasNonZeroBand) : SHBand.SH0;
+                int importedSHCoeffCount = importSphericalHarmonics ? SHCoeffCountForBand(effectiveDefaultSHBand) : 0;
+
                 int side = Mathf.CeilToInt(Mathf.Sqrt(count));
                 int effectiveCount = side * side; // round up to nearest square
 
@@ -253,6 +375,7 @@ namespace GaussianSplatting
                 Texture2D colDcTex   = NewTexture(side, TextureFormat.RGBA32, "ColorDC");
                 Texture2D rotTex     = NewTexture(side, TextureFormat.RGBA32, "Rotation");
                 Texture2D scaleTex   = NewTexture(side, TextureFormat.RGB9e5Float, "Scale");
+                Texture2D[] shTex    = importedSHCoeffCount > 0 ? new Texture2D[importedSHCoeffCount] : null;
 
                 Shader shader = null;
                 if(useSRGB) {
@@ -265,6 +388,16 @@ namespace GaussianSplatting
                 var colPixels   = new Color[side * side];
                 var rotPixels   = new Color[side * side];
                 var scalePixels = new Color[side * side];
+                var shPixels = importedSHCoeffCount > 0 ? new Color[importedSHCoeffCount][] : null;
+
+                if (importedSHCoeffCount > 0)
+                {
+                    for (int coeff = 0; coeff < importedSHCoeffCount; ++coeff)
+                    {
+                        shPixels[coeff] = new Color[side * side];
+                        shTex[coeff] = NewTexture(side, TextureFormat.RGB565, $"SH{coeff + 1:X}");
+                    }
+                }
 
                 for (int i = 0; i < data.Length; ++i) {
                     var s = data[i];                      
@@ -275,24 +408,60 @@ namespace GaussianSplatting
                                                 0.5f + 0.5f * s.rot.z, 
                                                 0.5f + 0.5f * s.rot.w);
                     scalePixels[i] = new Color(s.scale.x, s.scale.y, s.scale.z, 0f);
+
+                    if (importedSHCoeffCount > 0)
+                    {
+                        for (int coeff = 0; coeff < importedSHCoeffCount; ++coeff)
+                        {
+                            Vector3 sh = GetSHCoefficient(s, coeff);
+                            Vector3 range = shRange[coeff];
+                            shPixels[coeff][i] = new Color(
+                                range.x > shRangeEpsilon ? (sh.x - shMin[coeff].x) / range.x : 0f,
+                                range.y > shRangeEpsilon ? (sh.y - shMin[coeff].y) / range.y : 0f,
+                                range.z > shRangeEpsilon ? (sh.z - shMin[coeff].z) / range.z : 0f,
+                                0f
+                            );
+                        }
+                    }
                 }
 
                 xyzTex.SetPixels(xyzPixels);
                 colDcTex.SetPixels(colPixels);
                 rotTex.SetPixels(rotPixels);
                 scaleTex.SetPixels(scalePixels);
+                if (importedSHCoeffCount > 0)
+                {
+                    for (int coeff = 0; coeff < importedSHCoeffCount; ++coeff)
+                    {
+                        shTex[coeff].SetPixels(shPixels[coeff]);
+                    }
+                }
 
                 xyzTex.Apply(false, true);
                 colDcTex.Apply(false, true);
                 rotTex.Apply(false, true);
                 scaleTex.Apply(false, true);
+                if (importedSHCoeffCount > 0)
+                {
+                    for (int coeff = 0; coeff < importedSHCoeffCount; ++coeff)
+                    {
+                        shTex[coeff].Apply(false, true);
+                    }
+                }
 
 
 
                 SaveTextureAsset(xyzTex, outputDataFolder, materialName + "_xyz");
                 SaveTextureAsset(colDcTex, outputDataFolder, materialName + "_color_dc");
                 SaveTextureAsset(rotTex, outputDataFolder, materialName + "_rotation");
-                SaveTextureAsset(scaleTex, outputDataFolder, materialName + "_scale");  
+                SaveTextureAsset(scaleTex, outputDataFolder, materialName + "_scale");
+                if (importedSHCoeffCount > 0)
+                {
+                    for (int coeff = 0; coeff < importedSHCoeffCount; ++coeff)
+                    {
+                        SaveTextureAsset(shTex[coeff], outputDataFolder, materialName + $"_sh_{coeff + 1:X}");
+                    }
+                }
                 
                 if(splatsPerPass == 0) splatsPerPass = effectiveCount;
                 splatsPerPass = Mathf.Min(splatsPerPass, effectiveCount);
@@ -331,7 +500,24 @@ namespace GaussianSplatting
                         splatMat.SetTexture("_GS_Colors", colDcTex);
                         splatMat.SetTexture("_GS_Rotations", rotTex);
                         splatMat.SetTexture("_GS_Scales", scaleTex);
+                        if (importedSHCoeffCount > 0)
+                        {
+                            for (int coeff = 0; coeff < importedSHCoeffCount; ++coeff)
+                            {
+                                string prop = GetSHPropertyName(coeff);
+                                Vector3 range = shRange[coeff];
+                                splatMat.SetTexture(prop, shTex[coeff]);
+                                splatMat.SetVector(prop + "_Min", new Vector4(shMin[coeff].x, shMin[coeff].y, shMin[coeff].z, 0f));
+                                splatMat.SetVector(prop + "_Range", new Vector4(
+                                    Mathf.Max(range.x, shRangeEpsilon),
+                                    Mathf.Max(range.y, shRangeEpsilon),
+                                    Mathf.Max(range.z, shRangeEpsilon),
+                                    0f
+                                ));
+                            }
+                        }
                         splatMat.SetInt("_ActualSplatCount", n);
+                        SetMaterialSHBand(splatMat, effectiveDefaultSHBand);
                         mainMat = splatMat;
                         if(precomputeSorting)
                         {
@@ -441,6 +627,8 @@ namespace GaussianSplatting.Editor.Importers
         bool _precomputeSorting = false; // precompute sorting for octahedral directions
         int _maxAlphaMaskCount = 1; // max number of alpha mask passes
         bool _useSRGB = true; // use sRGB color correction
+        bool _importSphericalHarmonics = true;
+        SHBand _defaultSHBand = SHBand.SH1;
         Vector2 scrollPosition = Vector2.zero;
         [MenuItem("Gaussian Splatting/Import PLY Splats…")]
         static void Init()
@@ -496,6 +684,16 @@ namespace GaussianSplatting.Editor.Importers
             EditorGUILayout.LabelField("Splat settings", EditorStyles.boldLabel);
             _computeBoundingBox   = EditorGUILayout.Toggle("Compute Bounding Box", _computeBoundingBox);
             _useSRGB = EditorGUILayout.Toggle("sRGB Color Correction", _useSRGB);
+            _importSphericalHarmonics = EditorGUILayout.Toggle("Import Spherical Harmonics", _importSphericalHarmonics);
+            if (_importSphericalHarmonics)
+            {
+                _defaultSHBand = (SHBand)EditorGUILayout.EnumPopup("Default SH Band", _defaultSHBand);
+                EditorGUILayout.HelpBox("Imports higher-order SH coefficient textures only up to the selected max band and sets the imported material to that band. If the selected band has no non-zero coefficients in the file, the importer falls back to the highest lower non-zero band.", MessageType.Info);
+            }
+            else
+            {
+                EditorGUILayout.HelpBox("Skips SH coefficient texture generation and forces imported materials to SH0 only.", MessageType.Info);
+            }
             EditorGUILayout.HelpBox("Color correction requires 2 additional grab passes, for small splats you might want to disable this. Without this enabled back to front rendering will be used, which makes multi-pass rendering not work. sRGB color correction only works correctly if the world has HDR camera render targets.", MessageType.Info);
             if(_useSRGB) {
                 _multiPassRendering   = EditorGUILayout.Toggle("Multi-Pass Rendering", _multiPassRendering);
@@ -549,7 +747,7 @@ namespace GaussianSplatting.Editor.Importers
             {
                 EditorUtility.DisplayProgressBar("PLY Import",
                     $"Importing {Path.GetFileName(plyPath)}", 0f);
-                PlySplatImporter.Import(plyPath, prefabPath, _computeBoundingBox, _splatsPerPass, _precomputeSorting, _maxAlphaMaskCount, _useSRGB);
+                PlySplatImporter.Import(plyPath, prefabPath, _computeBoundingBox, _splatsPerPass, _precomputeSorting, _maxAlphaMaskCount, _useSRGB, _importSphericalHarmonics, _defaultSHBand);
             }
             catch (Exception e)
             {

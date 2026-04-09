@@ -2,6 +2,7 @@
 #pragma target 5.0
 #pragma exclude_renderers gles
 #pragma shader_feature_local _PRECOMPUTED_SORTING_ON
+#pragma shader_feature_local _SHBAND_SH0 _SHBAND_SH1 _SHBAND_SH2 _SHBAND_SH3
 #pragma vertex vert
 #pragma fragment frag
 #pragma geometry geo
@@ -76,14 +77,15 @@ void geo(point v2g input[1], inout TriangleStream<g2f> triStream, uint instanceI
     if (all(splatClipPos.xy < -1.0) || all(splatClipPos.xy > 1.0)) return; // outside of view frustum
 
     o.color = splat.color;
-    #ifdef _FAKE_SRGB
-        o.color.rgb = GammaToLinearSpace(o.color.rgb);
-    #endif
     float peakAlpha = o.color.a;
     float cutoffSigmaRadius = sqrt(max(-2.0 * log(_AlphaCutoff / peakAlpha), 0.0));
     float scale_max = max(splat.scale.x, max(splat.scale.y, splat.scale.z));
     float3 clamped_scale = clamp(splat.scale, scale_max * _ThinThreshold, scale_max);
     float supportScale = _GaussianMul * cutoffSigmaRadius;
+
+    if (o.color.a < _AlphaCutoff) {
+        return; // skip splats with too small area or invalid alpha
+    }
 
     // Project the ellipsoid onto the screen
     Ellipse ell = GetProjectedEllipsoid(splat.mean, supportScale * clamped_scale, splat.quat);
@@ -92,23 +94,19 @@ void geo(point v2g input[1], inout TriangleStream<g2f> triStream, uint instanceI
         return;
     }
 
+    float3 cameraPosObject = mul(unity_WorldToObject, float4(_WorldSpaceCameraPos, 1.0)).xyz;
+    o.color.rgb = EvaluateSplatSHColor(splat.id, splat.color.rgb, splat.mean, cameraPosObject);
+    o.color.rgb = shift_color(o.color.rgb) * _Exposure;
+    #ifdef _FAKE_SRGB
+        o.color.rgb = GammaToLinearSpace(o.color.rgb);
+    #endif
+
     float area = ell.size.x * ell.size.y;
     ell.size = max(ell.size * _ScreenParams, 1.75 * _AntiAliasing) / _ScreenParams; // ensure minimum size
     float areaPost = ell.size.x * ell.size.y;
     float areaScale = area / areaPost;
     o.color.a *= areaScale; // scale alpha by area ratio
     o.gaussianExp = 0.5 * cutoffSigmaRadius * cutoffSigmaRadius;
-
-    if (o.color.a < _AlphaCutoff) {
-        return; // skip splats with too small area or invalid alpha
-    }
-
-    if(isnan(o.color.a)) {
-        ell.center = splatClipPos.xy;
-        ell.axis = float2(1, 0); // set axis to a default value
-        ell.size = float2(0.01, 0.01); // set size to a small value
-        o.color = float4(1,0,0,1); // debug color for NaN alpha
-    }
 
     [unroll] for (uint vtxID = 0; vtxID < 4; vtxID ++)
     {

@@ -1,6 +1,21 @@
 #include "../RadixSort/Utils.cginc"
 
 Texture2D _GS_Positions, _GS_Scales, _GS_Rotations, _GS_Colors;
+#if defined(_SHBAND_SH1) || defined(_SHBAND_SH2) || defined(_SHBAND_SH3)
+Texture2D _GS_SH1, _GS_SH2, _GS_SH3;
+float4 _GS_SH1_Min, _GS_SH2_Min, _GS_SH3_Min;
+float4 _GS_SH1_Range, _GS_SH2_Range, _GS_SH3_Range;
+#endif
+#if defined(_SHBAND_SH2) || defined(_SHBAND_SH3)
+Texture2D _GS_SH4, _GS_SH5, _GS_SH6, _GS_SH7, _GS_SH8;
+float4 _GS_SH4_Min, _GS_SH5_Min, _GS_SH6_Min, _GS_SH7_Min, _GS_SH8_Min;
+float4 _GS_SH4_Range, _GS_SH5_Range, _GS_SH6_Range, _GS_SH7_Range, _GS_SH8_Range;
+#endif
+#if defined(_SHBAND_SH3)
+Texture2D _GS_SH9, _GS_SHA, _GS_SHB, _GS_SHC, _GS_SHD, _GS_SHE, _GS_SHF;
+float4 _GS_SH9_Min, _GS_SHA_Min, _GS_SHB_Min, _GS_SHC_Min, _GS_SHD_Min, _GS_SHE_Min, _GS_SHF_Min;
+float4 _GS_SH9_Range, _GS_SHA_Range, _GS_SHB_Range, _GS_SHC_Range, _GS_SHD_Range, _GS_SHE_Range, _GS_SHF_Range;
+#endif
 Texture2DArray<float> _GS_RenderOrder;
 Texture2DArray<float> _GS_RenderOrderPrecomputed;
 Texture2D<float> _GS_RenderOrderMirror;
@@ -25,6 +40,34 @@ int _ActualSplatCount;
 int _SplatOffset;
 
 float3 _OKLCHShift;
+
+#if !defined(_SHBAND_SH0) && !defined(_SHBAND_SH1) && !defined(_SHBAND_SH2) && !defined(_SHBAND_SH3)
+    #define _SHBAND_SH0
+#endif
+
+#if defined(_SHBAND_SH1) || defined(_SHBAND_SH2) || defined(_SHBAND_SH3)
+    #define GS_HAS_SH_BAND1
+#endif
+#if defined(_SHBAND_SH2) || defined(_SHBAND_SH3)
+    #define GS_HAS_SH_BAND2
+#endif
+#if defined(_SHBAND_SH3)
+    #define GS_HAS_SH_BAND3
+#endif
+
+static const float SH_C1 = 0.4886025119029199;
+static const float SH_C2_0 = 1.0925484305920792;
+static const float SH_C2_1 = -1.0925484305920792;
+static const float SH_C2_2 = 0.31539156525252005;
+static const float SH_C2_3 = -1.0925484305920792;
+static const float SH_C2_4 = 0.5462742152960396;
+static const float SH_C3_0 = -0.5900435899266435;
+static const float SH_C3_1 = 2.890611442640554;
+static const float SH_C3_2 = -0.4570457994644658;
+static const float SH_C3_3 = 0.3731763325901154;
+static const float SH_C3_4 = -0.4570457994644658;
+static const float SH_C3_5 = 1.445305721320277;
+static const float SH_C3_6 = -0.5900435899266435;
 
 float3 rgb_to_oklab(float3 c) 
 {
@@ -102,8 +145,13 @@ struct SplatData {
     bool valid;
 };
 
+uint2 GetSplatCoord(uint id)
+{
+    return uint2(id % uint(_GS_Positions_TexelSize.z), id / uint(_GS_Positions_TexelSize.z));
+}
+
 SplatData LoadSplatData(uint id) {
-    uint2 coord = uint2(id % uint(_GS_Positions_TexelSize.z), id / uint(_GS_Positions_TexelSize.z));
+    uint2 coord = GetSplatCoord(id);
 
     SplatData o;
     o.mean = _GS_Positions[coord].xyz;
@@ -111,10 +159,71 @@ SplatData LoadSplatData(uint id) {
     // Only necessary if splats are trained without mip-splatting.
     o.scale = max(exp2(_Log2MinScale), _GS_Scales[coord].xyz);
     o.quat = normalize(lerp(-1.0, 1.0, _GS_Rotations[coord]));
-    o.color = _GS_Colors[coord]; // convert to linear space
-    o.color.rgb = shift_color(o.color.rgb) * _Exposure; // apply color shift
+    o.color = _GS_Colors[coord];
     o.color.a *= _Opacity;
     return o;
+}
+
+float3 DecodeSH(Texture2D tex, float4 shMin, float4 shRange, uint2 coord)
+{
+    return shMin.xyz + tex[coord].rgb * shRange.xyz;
+}
+
+float3 EvaluateSplatSHColor(uint id, float3 sh0Color, float3 positionObject, float3 cameraPosObject)
+{
+    float3 color = sh0Color;
+#if defined(GS_HAS_SH_BAND1) || defined(GS_HAS_SH_BAND2) || defined(GS_HAS_SH_BAND3)
+    uint2 coord = GetSplatCoord(id);
+    float3 viewDir = positionObject - cameraPosObject;
+    float invLen = rsqrt(max(dot(viewDir, viewDir), 1e-8));
+    float3 dir = viewDir * invLen;
+    float x = dir.x;
+    float y = dir.y;
+    float z = dir.z;
+#endif
+#if defined(GS_HAS_SH_BAND1)
+    float3 sh1 = DecodeSH(_GS_SH1, _GS_SH1_Min, _GS_SH1_Range, coord);
+    float3 sh2 = DecodeSH(_GS_SH2, _GS_SH2_Min, _GS_SH2_Range, coord);
+    float3 sh3 = DecodeSH(_GS_SH3, _GS_SH3_Min, _GS_SH3_Range, coord);
+    color += -SH_C1 * y * sh1
+        + SH_C1 * z * sh2
+        - SH_C1 * x * sh3;
+#endif
+#if defined(GS_HAS_SH_BAND2)
+    float xx = x * x;
+    float yy = y * y;
+    float zz = z * z;
+    float xy = x * y;
+    float yz = y * z;
+    float xz = x * z;
+    float3 sh4 = DecodeSH(_GS_SH4, _GS_SH4_Min, _GS_SH4_Range, coord);
+    float3 sh5 = DecodeSH(_GS_SH5, _GS_SH5_Min, _GS_SH5_Range, coord);
+    float3 sh6 = DecodeSH(_GS_SH6, _GS_SH6_Min, _GS_SH6_Range, coord);
+    float3 sh7 = DecodeSH(_GS_SH7, _GS_SH7_Min, _GS_SH7_Range, coord);
+    float3 sh8 = DecodeSH(_GS_SH8, _GS_SH8_Min, _GS_SH8_Range, coord);
+    color += SH_C2_0 * xy * sh4
+        + SH_C2_1 * yz * sh5
+        + SH_C2_2 * (2.0 * zz - xx - yy) * sh6
+        + SH_C2_3 * xz * sh7
+        + SH_C2_4 * (xx - yy) * sh8;
+#endif
+#if defined(GS_HAS_SH_BAND3)
+    float3 sh9 = DecodeSH(_GS_SH9, _GS_SH9_Min, _GS_SH9_Range, coord);
+    float3 shA = DecodeSH(_GS_SHA, _GS_SHA_Min, _GS_SHA_Range, coord);
+    float3 shB = DecodeSH(_GS_SHB, _GS_SHB_Min, _GS_SHB_Range, coord);
+    float3 shC = DecodeSH(_GS_SHC, _GS_SHC_Min, _GS_SHC_Range, coord);
+    float3 shD = DecodeSH(_GS_SHD, _GS_SHD_Min, _GS_SHD_Range, coord);
+    float3 shE = DecodeSH(_GS_SHE, _GS_SHE_Min, _GS_SHE_Range, coord);
+    float3 shF = DecodeSH(_GS_SHF, _GS_SHF_Min, _GS_SHF_Range, coord);
+    color += SH_C3_0 * y * (3.0 * x * x - y * y) * sh9
+        + SH_C3_1 * x * y * z * shA
+        + SH_C3_2 * y * (4.0 * z * z - x * x - y * y) * shB
+        + SH_C3_3 * z * (2.0 * z * z - 3.0 * x * x - 3.0 * y * y) * shC
+        + SH_C3_4 * x * (4.0 * z * z - x * x - y * y) * shD
+        + SH_C3_5 * z * (x * x - y * y) * shE
+        + SH_C3_6 * x * (x * x - 3.0 * y * y) * shF;
+#endif
+    return saturate(color);
 }
 
 int GetPrecomputedRenderOrderIndex(uint id, float3 cam_dir) {
