@@ -310,7 +310,7 @@ Transform:
   m_LocalScale: {x: 0.5605487, y: 0.5605487, z: 0.5605487}
   m_ConstrainProportionsScale: 0
   m_Children:
-  - {fileID: 1412264608}
+  - {fileID: 2016312807}
   m_Father: {fileID: 608231344}
   m_LocalEulerAnglesHint: {x: 179.204, y: 229.795, z: -180.275}
 --- !u!1 &176469368
@@ -515,6 +515,18 @@ MonoBehaviour:
     ID: 22
     SerializedTypeNames:
     - VRC.Udon.UdonBehaviour
+  - gameObject: {fileID: 890404214}
+    ID: 23
+    SerializedTypeNames:
+    - VRC.Udon.UdonBehaviour
+  - gameObject: {fileID: 2016312806}
+    ID: 24
+    SerializedTypeNames:
+    - VRC.Udon.UdonBehaviour
+  - gameObject: {fileID: 1888677137}
+    ID: 25
+    SerializedTypeNames:
+    - VRC.Udon.UdonBehaviour
   portraitCameraPositionOffset: {x: 0, y: 0, z: 0}
   portraitCameraRotationOffset: {x: 0, y: 1, z: 0, w: -0.00000004371139}
   PlayerPersistence: []
@@ -604,10 +616,10 @@ MonoBehaviour:
   _udonSharpBackingUdonBehaviour: {fileID: 258407249}
   splatObjectIndex: 0
   splatObjects:
-  - {fileID: 1694134482}
-  - {fileID: 1939249386}
-  - {fileID: 1412264607}
-  - {fileID: 2138743193}
+  - {fileID: 1293401448}
+  - {fileID: 1888677137}
+  - {fileID: 2016312806}
+  - {fileID: 890404214}
   minSortDistance: 0
   maxSortDistance: 350
   cameraPositionQuantization: 0.1
@@ -615,8 +627,8 @@ MonoBehaviour:
   sortingSteps: 4
   splatRenderOrder: {fileID: 8400000, guid: ce4f819f4c1e4fa42b86c002ebd738f6, type: 2}
   overrideMaterialProperties: 0
-  quadScale: 1.1
   gaussianScale: 1
+  alphaCutoff: 0.03
 --- !u!114 &258407249
 MonoBehaviour:
   m_ObjectHideFlags: 2
@@ -742,7 +754,7 @@ Transform:
   m_LocalScale: {x: 0.3240007, y: 0.32400066, z: 0.32400066}
   m_ConstrainProportionsScale: 0
   m_Children:
-  - {fileID: 1694134483}
+  - {fileID: 1293401449}
   m_Father: {fileID: 608231344}
   m_LocalEulerAnglesHint: {x: 178.216, y: 229.3, z: -180.151}
 --- !u!1 &418662095
@@ -829,8 +841,8 @@ MonoBehaviour:
     PrefabModifications: []
     SerializationNodes: []
   _udonSharpBackingUdonBehaviour: {fileID: 418662097}
-  quadScale: 0.65
-  gaussianScale: 0.5
+  gaussianScale: 1
+  alphaCutoff: 0.15
   gaussianSplatRenderer: {fileID: 258407248}
 --- !u!65 &418662099
 BoxCollider:
@@ -1022,8 +1034,8 @@ MonoBehaviour:
     PrefabModifications: []
     SerializationNodes: []
   _udonSharpBackingUdonBehaviour: {fileID: 700447546}
-  quadScale: 0.784
-  gaussianScale: 0.718
+  gaussianScale: 1
+  alphaCutoff: 0.06
   gaussianSplatRenderer: {fileID: 258407248}
 --- !u!65 &700447548
 BoxCollider:
@@ -1202,6 +1214,18 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 90, y: 0, z: 0}
+--- !u!1 &890404214 stripped
+GameObject:
+  m_CorrespondingSourceObject: {fileID: 2548891501130212866, guid: 05e4832101ee30047b2d50782ec14e28,
+    type: 3}
+  m_PrefabInstance: {fileID: 2138743192}
+  m_PrefabAsset: {fileID: 0}
+--- !u!4 &890404215 stripped
+Transform:
+  m_CorrespondingSourceObject: {fileID: 4842042257077127637, guid: 05e4832101ee30047b2d50782ec14e28,
+    type: 3}
+  m_PrefabInstance: {fileID: 2138743192}
+  m_PrefabAsset: {fileID: 0}
 --- !u!1 &909559410
 GameObject:
   m_ObjectHideFlags: 0
@@ -1231,7 +1255,7 @@ Transform:
   m_LocalScale: {x: 0.972199, y: 0.97219896, z: 0.97219896}
   m_ConstrainProportionsScale: 0
   m_Children:
-  - {fileID: 2138743194}
+  - {fileID: 890404215}
   m_Father: {fileID: 608231344}
   m_LocalEulerAnglesHint: {x: 180.311, y: 51.503998, z: -180.47}
 --- !u!1 &998487714
@@ -1467,8 +1491,8 @@ MonoBehaviour:
     PrefabModifications: []
     SerializationNodes: []
   _udonSharpBackingUdonBehaviour: {fileID: 1131303556}
-  quadScale: 1.41
   gaussianScale: 1
+  alphaCutoff: 0.01
   gaussianSplatRenderer: {fileID: 258407248}
 --- !u!65 &1131303558
 BoxCollider:
@@ -1541,6 +1565,18 @@ MeshFilter:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1131303554}
   m_Mesh: {fileID: 10202, guid: 0000000000000000e000000000000000, type: 0}
+--- !u!1 &1293401448 stripped
+GameObject:
+  m_CorrespondingSourceObject: {fileID: 3873307395811582193, guid: 686233f63ba59d24c936ad968649bdf5,
+    type: 3}
+  m_PrefabInstance: {fileID: 1694134481}
+  m_PrefabAsset: {fileID: 0}
+--- !u!4 &1293401449 stripped
+Transform:
+  m_CorrespondingSourceObject: {fileID: 4493519133791677749, guid: 686233f63ba59d24c936ad968649bdf5,
+    type: 3}
+  m_PrefabInstance: {fileID: 1694134481}
+  m_PrefabAsset: {fileID: 0}
 --- !u!1 &1319529399
 GameObject:
   m_ObjectHideFlags: 0
@@ -1661,8 +1697,8 @@ MonoBehaviour:
     PrefabModifications: []
     SerializationNodes: []
   _udonSharpBackingUdonBehaviour: {fileID: 1372845163}
-  quadScale: 1.1
   gaussianScale: 1
+  alphaCutoff: 0.03
   gaussianSplatRenderer: {fileID: 258407248}
 --- !u!65 &1372845165
 BoxCollider:
@@ -1759,6 +1795,11 @@ PrefabInstance:
       propertyPath: m_IsActive
       value: 0
       objectReference: {fileID: 0}
+    - target: {fileID: 3082422220889061222, guid: d1f7dd9eda7c54b4faa144f4ffb2b6a2,
+        type: 3}
+      propertyPath: m_IsActive
+      value: 0
+      objectReference: {fileID: 0}
     - target: {fileID: 8342219719130973721, guid: d1f7dd9eda7c54b4faa144f4ffb2b6a2,
         type: 3}
       propertyPath: m_LocalPosition.x
@@ -1814,18 +1855,6 @@ PrefabInstance:
     m_AddedGameObjects: []
     m_AddedComponents: []
   m_SourcePrefab: {fileID: 100100000, guid: d1f7dd9eda7c54b4faa144f4ffb2b6a2, type: 3}
---- !u!1 &1412264607 stripped
-GameObject:
-  m_CorrespondingSourceObject: {fileID: 1081143187534511694, guid: d1f7dd9eda7c54b4faa144f4ffb2b6a2,
-    type: 3}
-  m_PrefabInstance: {fileID: 1412264606}
-  m_PrefabAsset: {fileID: 0}
---- !u!4 &1412264608 stripped
-Transform:
-  m_CorrespondingSourceObject: {fileID: 8342219719130973721, guid: d1f7dd9eda7c54b4faa144f4ffb2b6a2,
-    type: 3}
-  m_PrefabInstance: {fileID: 1412264606}
-  m_PrefabAsset: {fileID: 0}
 --- !u!1 &1456118020
 GameObject:
   m_ObjectHideFlags: 0
@@ -2326,8 +2355,8 @@ MonoBehaviour:
     PrefabModifications: []
     SerializationNodes: []
   _udonSharpBackingUdonBehaviour: {fileID: 1691656084}
-  quadScale: 2
   gaussianScale: 1
+  alphaCutoff: 0.003
   gaussianSplatRenderer: {fileID: 258407248}
 --- !u!65 &1691656086
 BoxCollider:
@@ -2458,6 +2487,11 @@ PrefabInstance:
       propertyPath: m_LocalEulerAnglesHint.z
       value: 0
       objectReference: {fileID: 0}
+    - target: {fileID: 3873307395811582193, guid: 686233f63ba59d24c936ad968649bdf5,
+        type: 3}
+      propertyPath: m_IsActive
+      value: 0
+      objectReference: {fileID: 0}
     - target: {fileID: 6971211911025648014, guid: 686233f63ba59d24c936ad968649bdf5,
         type: 3}
       propertyPath: serializationData.Prefab
@@ -2479,18 +2513,6 @@ PrefabInstance:
     m_AddedGameObjects: []
     m_AddedComponents: []
   m_SourcePrefab: {fileID: 100100000, guid: 686233f63ba59d24c936ad968649bdf5, type: 3}
---- !u!1 &1694134482 stripped
-GameObject:
-  m_CorrespondingSourceObject: {fileID: 8990013952697663912, guid: 686233f63ba59d24c936ad968649bdf5,
-    type: 3}
-  m_PrefabInstance: {fileID: 1694134481}
-  m_PrefabAsset: {fileID: 0}
---- !u!4 &1694134483 stripped
-Transform:
-  m_CorrespondingSourceObject: {fileID: 138264947262471736, guid: 686233f63ba59d24c936ad968649bdf5,
-    type: 3}
-  m_PrefabInstance: {fileID: 1694134481}
-  m_PrefabAsset: {fileID: 0}
 --- !u!1 &1775751583
 GameObject:
   m_ObjectHideFlags: 0
@@ -2575,8 +2597,8 @@ MonoBehaviour:
     PrefabModifications: []
     SerializationNodes: []
   _udonSharpBackingUdonBehaviour: {fileID: 1775751585}
-  quadScale: 1
   gaussianScale: 1
+  alphaCutoff: 0.03
   gaussianSplatRenderer: {fileID: 258407248}
 --- !u!65 &1775751587
 BoxCollider:
@@ -2967,6 +2989,18 @@ MeshFilter:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 1871637587}
   m_Mesh: {fileID: 10210, guid: 0000000000000000e000000000000000, type: 0}
+--- !u!1 &1888677137 stripped
+GameObject:
+  m_CorrespondingSourceObject: {fileID: 2067796226368021253, guid: 807c1091efa8db948bd08eb09f014c8b,
+    type: 3}
+  m_PrefabInstance: {fileID: 1939249385}
+  m_PrefabAsset: {fileID: 0}
+--- !u!4 &1888677138 stripped
+Transform:
+  m_CorrespondingSourceObject: {fileID: 8924227609032827026, guid: 807c1091efa8db948bd08eb09f014c8b,
+    type: 3}
+  m_PrefabInstance: {fileID: 1939249385}
+  m_PrefabAsset: {fileID: 0}
 --- !u!1 &1906334079
 GameObject:
   m_ObjectHideFlags: 0
@@ -3051,8 +3085,8 @@ MonoBehaviour:
     PrefabModifications: []
     SerializationNodes: []
   _udonSharpBackingUdonBehaviour: {fileID: 1906334081}
-  quadScale: 1.5
-  gaussianScale: 0.5
+  gaussianScale: 1.5
+  alphaCutoff: 0.03
   gaussianSplatRenderer: {fileID: 258407248}
 --- !u!65 &1906334083
 BoxCollider:
@@ -3199,22 +3233,27 @@ PrefabInstance:
       value: 
       objectReference: {fileID: 1292330990108814260, guid: 807c1091efa8db948bd08eb09f014c8b,
         type: 3}
+    - target: {fileID: 2067796226368021253, guid: 807c1091efa8db948bd08eb09f014c8b,
+        type: 3}
+      propertyPath: m_IsActive
+      value: 0
+      objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []
     m_AddedGameObjects: []
     m_AddedComponents: []
   m_SourcePrefab: {fileID: 100100000, guid: 807c1091efa8db948bd08eb09f014c8b, type: 3}
---- !u!1 &1939249386 stripped
+--- !u!1 &2016312806 stripped
 GameObject:
-  m_CorrespondingSourceObject: {fileID: 714717191847156123, guid: 807c1091efa8db948bd08eb09f014c8b,
+  m_CorrespondingSourceObject: {fileID: 3082422220889061222, guid: d1f7dd9eda7c54b4faa144f4ffb2b6a2,
     type: 3}
-  m_PrefabInstance: {fileID: 1939249385}
+  m_PrefabInstance: {fileID: 1412264606}
   m_PrefabAsset: {fileID: 0}
---- !u!4 &1939249387 stripped
+--- !u!4 &2016312807 stripped
 Transform:
-  m_CorrespondingSourceObject: {fileID: 441827844949289563, guid: 807c1091efa8db948bd08eb09f014c8b,
+  m_CorrespondingSourceObject: {fileID: 7997233987267122498, guid: d1f7dd9eda7c54b4faa144f4ffb2b6a2,
     type: 3}
-  m_PrefabInstance: {fileID: 1939249385}
+  m_PrefabInstance: {fileID: 1412264606}
   m_PrefabAsset: {fileID: 0}
 --- !u!1 &2088467654
 GameObject:
@@ -3245,7 +3284,7 @@ Transform:
   m_LocalScale: {x: 0.3240007, y: 0.32400066, z: 0.32400066}
   m_ConstrainProportionsScale: 0
   m_Children:
-  - {fileID: 1939249387}
+  - {fileID: 1888677138}
   m_Father: {fileID: 608231344}
   m_LocalEulerAnglesHint: {x: 177.761, y: 228.495, z: -179.852}
 --- !u!1001 &2138743192
@@ -3262,6 +3301,11 @@ PrefabInstance:
       value: flowers
       objectReference: {fileID: 0}
     - target: {fileID: 2003764145469083766, guid: 05e4832101ee30047b2d50782ec14e28,
+        type: 3}
+      propertyPath: m_IsActive
+      value: 0
+      objectReference: {fileID: 0}
+    - target: {fileID: 2548891501130212866, guid: 05e4832101ee30047b2d50782ec14e28,
         type: 3}
       propertyPath: m_IsActive
       value: 0
@@ -3327,18 +3371,6 @@ PrefabInstance:
     m_AddedGameObjects: []
     m_AddedComponents: []
   m_SourcePrefab: {fileID: 100100000, guid: 05e4832101ee30047b2d50782ec14e28, type: 3}
---- !u!1 &2138743193 stripped
-GameObject:
-  m_CorrespondingSourceObject: {fileID: 2003764145469083766, guid: 05e4832101ee30047b2d50782ec14e28,
-    type: 3}
-  m_PrefabInstance: {fileID: 2138743192}
-  m_PrefabAsset: {fileID: 0}
---- !u!4 &2138743194 stripped
-Transform:
-  m_CorrespondingSourceObject: {fileID: 7816774703558344104, guid: 05e4832101ee30047b2d50782ec14e28,
-    type: 3}
-  m_PrefabInstance: {fileID: 2138743192}
-  m_PrefabAsset: {fileID: 0}
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0

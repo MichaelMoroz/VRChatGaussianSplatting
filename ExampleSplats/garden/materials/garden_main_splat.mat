@@ -11,7 +11,8 @@ Material:
   m_Shader: {fileID: 4800000, guid: f531a645849e0b067b8b09de4f72f60d, type: 3}
   m_Parent: {fileID: 0}
   m_ModifiedSerializedProperties: 0
-  m_ValidKeywords: []
+  m_ValidKeywords:
+  - _SHBAND_SH0
   m_InvalidKeywords: []
   m_LightmapFlags: 4
   m_EnableInstancingVariants: 0
@@ -47,6 +48,66 @@ Material:
         m_Texture: {fileID: 2800000, guid: 6a7a9f5f8ec631142805da9610f19dc4, type: 2}
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
+    - _GS_SH1:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _GS_SH2:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _GS_SH3:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _GS_SH4:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _GS_SH5:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _GS_SH6:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _GS_SH7:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _GS_SH8:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _GS_SH9:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _GS_SHA:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _GS_SHB:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _GS_SHC:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _GS_SHD:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _GS_SHE:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _GS_SHF:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
     - _GS_Scales:
         m_Texture: {fileID: 2800000, guid: c7c1219166903364f88dd08bbaf98081, type: 2}
         m_Scale: {x: 1, y: 1}
@@ -60,15 +121,44 @@ Material:
     - _Exposure: 1
     - _Gamma: 1
     - _GaussianMul: 1
-    - _HACK_UNIFORM: 1
     - _Log2MinScale: -12
     - _Opacity: 1
-    - _QuadScale: 1.1
+    - _SHBand: 0
     - _ScaleCutoff: 100
     - _SplatCount: 750313
     - _SplatOffset: 0
     - _ThinThreshold: 0.005
     m_Colors:
+    - _GS_SH1_Min: {r: 0, g: 0, b: 0, a: 0}
+    - _GS_SH1_Range: {r: 1, g: 1, b: 1, a: 0}
+    - _GS_SH2_Min: {r: 0, g: 0, b: 0, a: 0}
+    - _GS_SH2_Range: {r: 1, g: 1, b: 1, a: 0}
+    - _GS_SH3_Min: {r: 0, g: 0, b: 0, a: 0}
+    - _GS_SH3_Range: {r: 1, g: 1, b: 1, a: 0}
+    - _GS_SH4_Min: {r: 0, g: 0, b: 0, a: 0}
+    - _GS_SH4_Range: {r: 1, g: 1, b: 1, a: 0}
+    - _GS_SH5_Min: {r: 0, g: 0, b: 0, a: 0}
+    - _GS_SH5_Range: {r: 1, g: 1, b: 1, a: 0}
+    - _GS_SH6_Min: {r: 0, g: 0, b: 0, a: 0}
+    - _GS_SH6_Range: {r: 1, g: 1, b: 1, a: 0}
+    - _GS_SH7_Min: {r: 0, g: 0, b: 0, a: 0}
+    - _GS_SH7_Range: {r: 1, g: 1, b: 1, a: 0}
+    - _GS_SH8_Min: {r: 0, g: 0, b: 0, a: 0}
+    - _GS_SH8_Range: {r: 1, g: 1, b: 1, a: 0}
+    - _GS_SH9_Min: {r: 0, g: 0, b: 0, a: 0}
+    - _GS_SH9_Range: {r: 1, g: 1, b: 1, a: 0}
+    - _GS_SHA_Min: {r: 0, g: 0, b: 0, a: 0}
+    - _GS_SHA_Range: {r: 1, g: 1, b: 1, a: 0}
+    - _GS_SHB_Min: {r: 0, g: 0, b: 0, a: 0}
+    - _GS_SHB_Range: {r: 1, g: 1, b: 1, a: 0}
+    - _GS_SHC_Min: {r: 0, g: 0, b: 0, a: 0}
+    - _GS_SHC_Range: {r: 1, g: 1, b: 1, a: 0}
+    - _GS_SHD_Min: {r: 0, g: 0, b: 0, a: 0}
+    - _GS_SHD_Range: {r: 1, g: 1, b: 1, a: 0}
+    - _GS_SHE_Min: {r: 0, g: 0, b: 0, a: 0}
+    - _GS_SHE_Range: {r: 1, g: 1, b: 1, a: 0}
+    - _GS_SHF_Min: {r: 0, g: 0, b: 0, a: 0}
+    - _GS_SHF_Range: {r: 1, g: 1, b: 1, a: 0}
     - _MinMaxSortDistance: {r: 0, g: 0, b: 0, a: 0}
     - _MirrorCameraPos: {r: 0, g: 0, b: 0, a: 0}
     - _OKLCHShift: {r: 0, g: 0, b: 0, a: 0}

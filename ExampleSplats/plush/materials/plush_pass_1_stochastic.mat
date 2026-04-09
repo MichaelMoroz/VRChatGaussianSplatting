@@ -7,9 +7,9 @@ Material:
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_Name: stump_pass_2_splat
-  m_Shader: {fileID: 4800000, guid: f531a645849e0b067b8b09de4f72f60d, type: 3}
-  m_Parent: {fileID: 2100000, guid: 4130ceebf03547d4eb3408f0ff719fba, type: 2}
+  m_Name: plush_pass_1_stochastic
+  m_Shader: {fileID: 4800000, guid: 2a6bb6750b7041d6a1db39f4af44c811, type: 3}
+  m_Parent: {fileID: 2100000, guid: 524e43cf26d7a704dbd5ed160aafef13, type: 2}
   m_ModifiedSerializedProperties: 16
   m_ValidKeywords:
   - _SHBAND_SH0
@@ -17,7 +17,7 @@ Material:
   m_LightmapFlags: 4
   m_EnableInstancingVariants: 0
   m_DoubleSidedGI: 0
-  m_CustomRenderQueue: 3504
+  m_CustomRenderQueue: 3501
   stringTagMap: {}
   disabledShaderPasses: []
   m_LockedProperties: 
@@ -26,7 +26,6 @@ Material:
     m_TexEnvs: []
     m_Ints: []
     m_Floats:
-    - _SplatCount: 667407
-    - _SplatOffset: 1334818
+    - _SplatOffset: 603906
     m_Colors: []
   m_BuildTextureStacks: []

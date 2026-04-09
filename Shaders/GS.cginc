@@ -27,7 +27,9 @@ struct g2f {
     float2 quadPos: TEXCOORD0;
     nointerpolation float4 color: TEXCOORD1;
     nointerpolation float gaussianExp: TEXCOORD2;
+#ifdef _STOCHASTIC
     nointerpolation uint splatID: TEXCOORD3;
+#endif
     UNITY_VERTEX_OUTPUT_STEREO
 };
 
@@ -110,7 +112,9 @@ void geo(point v2g input[1], inout TriangleStream<g2f> triStream, uint instanceI
     float areaScale = area / areaPost;
     o.color.a *= areaScale; // scale alpha by area ratio
     o.gaussianExp = 0.5 * cutoffSigmaRadius * cutoffSigmaRadius;
+#ifdef _STOCHASTIC
     o.splatID = id;
+#endif
 
     [unroll] for (uint vtxID = 0; vtxID < 4; vtxID ++)
     {
@@ -146,6 +150,7 @@ float InterleavedGradientNoiseInt(uint2 pixel, uint frameIndex)
     return InterleavedGradientNoise(float2(pixel), frameIndex);
 }
 
+#ifdef _STOCHASTIC
 uint EvaluateStochasticCoverage(g2f input, float rho)
 {
     uint2 pixel = uint2(input.position.xy);
@@ -169,6 +174,7 @@ uint EvaluateStochasticCoverage(g2f input, float rho)
     return coverage;
 
 }
+#endif
 
 uint GetFullCoverageMask()
 {

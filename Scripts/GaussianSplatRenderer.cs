@@ -59,6 +59,22 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         }
     }
 
+    GameObject FindNamedChild(GameObject rootObject, string childName)
+    {
+        if (rootObject == null)
+        {
+            return null;
+        }
+
+        Transform child = rootObject.transform.Find(childName);
+        if (child != null)
+        {
+            return child.gameObject;
+        }
+
+        return null;
+    }
+
     void ShowStochastic(GameObject rootObject)
     {
         if (rootObject == null)
@@ -70,6 +86,18 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         if (gaussianSplatObject != null)
         {
             gaussianSplatObject.ShowStochastic();
+            return;
+        }
+
+        GameObject sortedObject = FindNamedChild(rootObject, "Sorted");
+        GameObject stochasticObject = FindNamedChild(rootObject, "Stochastic");
+        if (sortedObject != null)
+        {
+            sortedObject.SetActive(false);
+        }
+        if (stochasticObject != null)
+        {
+            stochasticObject.SetActive(true);
         }
     }
 
@@ -84,6 +112,18 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         if (gaussianSplatObject != null)
         {
             gaussianSplatObject.ShowSorted();
+            return;
+        }
+
+        GameObject sortedObject = FindNamedChild(rootObject, "Sorted");
+        GameObject stochasticObject = FindNamedChild(rootObject, "Stochastic");
+        if (sortedObject != null)
+        {
+            sortedObject.SetActive(true);
+        }
+        if (stochasticObject != null)
+        {
+            stochasticObject.SetActive(false);
         }
     }
 
@@ -100,6 +140,42 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         }
     }
 
+    void InitializeSplatObject()
+    {
+        if (splatObjects == null || splatObjects.Length == 0)
+        {
+            return;
+        }
+
+        for (int i = 0; i < splatObjects.Length; i++)
+        {
+            GameObject splatObj = splatObjects[i];
+            if (splatObj == null)
+            {
+                continue;
+            }
+
+            ShowSorted(splatObj);
+            splatObj.SetActive(false);
+        }
+
+        if (splatObjectIndex < 0 || splatObjectIndex >= splatObjects.Length)
+        {
+            Debug.LogError($"Invalid splat object index: {splatObjectIndex}. Must be between 0 and {splatObjects.Length - 1}.");
+            return;
+        }
+
+        splatObject = splatObjects[splatObjectIndex];
+        if (splatObject == null)
+        {
+            Debug.LogError($"Splat object at index {splatObjectIndex} is null. Please ensure the splatObjects array is populated correctly.");
+            return;
+        }
+
+        splatObject.SetActive(true);
+        ShowSorted(splatObject);
+    }
+
     MeshRenderer GetSortedRenderer(GameObject rootObject)
     {
         if (rootObject == null)
@@ -114,6 +190,16 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
             if (renderer != null)
             {
                 return renderer;
+            }
+        }
+
+        GameObject sortedObject = FindNamedChild(rootObject, "Sorted");
+        if (sortedObject != null)
+        {
+            MeshRenderer childRenderer = (MeshRenderer)sortedObject.GetComponent(typeof(MeshRenderer));
+            if (childRenderer != null)
+            {
+                return childRenderer;
             }
         }
 
@@ -173,6 +259,7 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
 
         _prevCameraPos = new Vector3[MAX_CAMERA_COUNT];
         ResetCameraPositions();
+        InitializeSplatObject();
     }
 
     Vector3 QuantizePosition(Vector3 position)

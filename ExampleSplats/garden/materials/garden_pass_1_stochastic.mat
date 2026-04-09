@@ -7,16 +7,17 @@ Material:
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_Name: plush_pass_2_splat_alpha_depth_mask
-  m_Shader: {fileID: 4800000, guid: 87dd719298e796c40bf404428f7091e3, type: 3}
-  m_Parent: {fileID: 0}
-  m_ModifiedSerializedProperties: 0
-  m_ValidKeywords: []
+  m_Name: garden_pass_1_stochastic
+  m_Shader: {fileID: 4800000, guid: 2a6bb6750b7041d6a1db39f4af44c811, type: 3}
+  m_Parent: {fileID: 2100000, guid: 79e9a3b9db6d008408bba6efe9b3bed5, type: 2}
+  m_ModifiedSerializedProperties: 16
+  m_ValidKeywords:
+  - _SHBAND_SH0
   m_InvalidKeywords: []
   m_LightmapFlags: 4
   m_EnableInstancingVariants: 0
   m_DoubleSidedGI: 0
-  m_CustomRenderQueue: 3504
+  m_CustomRenderQueue: 3501
   stringTagMap: {}
   disabledShaderPasses: []
   m_LockedProperties: 
@@ -24,6 +25,8 @@ Material:
     serializedVersion: 3
     m_TexEnvs: []
     m_Ints: []
-    m_Floats: []
+    m_Floats:
+    - _SplatCount: 750312
+    - _SplatOffset: 750313
     m_Colors: []
   m_BuildTextureStacks: []
