@@ -14,13 +14,10 @@ using UnityEngine.Assertions;
 
 namespace GaussianSplatting.Editor.Utils
 {
-    // input file splat data is read into this format
-    public struct InputSplatData
+    public struct ImportSplatData
     {
         public Vector3 pos;
-        public Vector3 nor;
         public Vector3 dc0;
-        public Vector3 sh1, sh2, sh3, sh4, sh5, sh6, sh7, sh8, sh9, shA, shB, shC, shD, shE, shF;
         public float opacity;
         public Vector3 scale;
         public Quaternion rot;
@@ -43,24 +40,31 @@ namespace GaussianSplatting.Editor.Utils
             return vertexCount;
         }
 
-        public static unsafe void ReadFile(string filePath, out NativeArray<InputSplatData> splats)
+        public static unsafe void ReadFile(string filePath, int shCoeffCount, out NativeArray<ImportSplatData> splats, out NativeArray<Vector3> shCoeffs)
         {
             if (isPLY(filePath))
             {
-                NativeArray<byte> plyRawData;
-                List<(string, PLYFileReader.ElementType)> attributes;
-                PLYFileReader.ReadFile(filePath, out var splatCount, out var vertexStride, out attributes, out plyRawData);
-                string attrError = CheckPLYAttributes(attributes);
-                if (!string.IsNullOrEmpty(attrError))
-                    throw new IOException($"PLY file is probably not a Gaussian Splat file? Missing properties: {attrError}");
-                splats = PLYDataToSplats(plyRawData, splatCount, vertexStride, attributes);
-                ReorderSHs(splatCount, (float*)splats.GetUnsafePtr());
-                LinearizeData(splats);
-                return;
+                NativeArray<byte> plyRawData = default;
+                try
+                {
+                    List<(string, PLYFileReader.ElementType)> attributes;
+                    PLYFileReader.ReadFile(filePath, out var splatCount, out var vertexStride, out attributes, out plyRawData);
+                    string attrError = CheckPLYAttributes(attributes);
+                    if (!string.IsNullOrEmpty(attrError))
+                        throw new IOException($"PLY file is probably not a Gaussian Splat file? Missing properties: {attrError}");
+                    PLYDataToCompactSplats(plyRawData, splatCount, vertexStride, attributes, shCoeffCount, out splats, out shCoeffs);
+                    LinearizeData(splats);
+                    return;
+                }
+                finally
+                {
+                    if (plyRawData.IsCreated)
+                        plyRawData.Dispose();
+                }
             }
             if (isSPZ(filePath))
             {
-                SPZFileReader.ReadFile(filePath, out splats);
+                SPZFileReader.ReadFile(filePath, shCoeffCount, out splats, out shCoeffs);
                 return;
             }
             throw new IOException($"File {filePath} is not a supported format");
@@ -78,7 +82,7 @@ namespace GaussianSplatting.Editor.Utils
             return string.Join(",", missing);
         }
 
-        static unsafe NativeArray<InputSplatData> PLYDataToSplats(NativeArray<byte> input, int count, int stride, List<(string, PLYFileReader.ElementType)> attributes)
+        static unsafe void PLYDataToCompactSplats(NativeArray<byte> input, int count, int stride, List<(string, PLYFileReader.ElementType)> attributes, int shCoeffCount, out NativeArray<ImportSplatData> splats, out NativeArray<Vector3> shCoeffs)
         {
             NativeArray<int> fileAttrOffsets = new NativeArray<int>(attributes.Count, Allocator.Temp);
             int offset = 0;
@@ -94,57 +98,9 @@ namespace GaussianSplatting.Editor.Utils
                 "x",
                 "y",
                 "z",
-                "nx",
-                "ny",
-                "nz",
                 "f_dc_0",
                 "f_dc_1",
                 "f_dc_2",
-                "f_rest_0",
-                "f_rest_1",
-                "f_rest_2",
-                "f_rest_3",
-                "f_rest_4",
-                "f_rest_5",
-                "f_rest_6",
-                "f_rest_7",
-                "f_rest_8",
-                "f_rest_9",
-                "f_rest_10",
-                "f_rest_11",
-                "f_rest_12",
-                "f_rest_13",
-                "f_rest_14",
-                "f_rest_15",
-                "f_rest_16",
-                "f_rest_17",
-                "f_rest_18",
-                "f_rest_19",
-                "f_rest_20",
-                "f_rest_21",
-                "f_rest_22",
-                "f_rest_23",
-                "f_rest_24",
-                "f_rest_25",
-                "f_rest_26",
-                "f_rest_27",
-                "f_rest_28",
-                "f_rest_29",
-                "f_rest_30",
-                "f_rest_31",
-                "f_rest_32",
-                "f_rest_33",
-                "f_rest_34",
-                "f_rest_35",
-                "f_rest_36",
-                "f_rest_37",
-                "f_rest_38",
-                "f_rest_39",
-                "f_rest_40",
-                "f_rest_41",
-                "f_rest_42",
-                "f_rest_43",
-                "f_rest_44",
                 "opacity",
                 "scale_0",
                 "scale_1",
@@ -154,7 +110,7 @@ namespace GaussianSplatting.Editor.Utils
                 "rot_2",
                 "rot_3",                
             };
-            Assert.AreEqual(UnsafeUtility.SizeOf<InputSplatData>() / 4, splatAttributes.Length);
+            Assert.AreEqual(UnsafeUtility.SizeOf<ImportSplatData>() / 4, splatAttributes.Length);
             NativeArray<int> srcOffsets = new NativeArray<int>(splatAttributes.Length, Allocator.Temp);
             for (int ai = 0; ai < splatAttributes.Length; ai++)
             {
@@ -162,14 +118,30 @@ namespace GaussianSplatting.Editor.Utils
                 int attrOffset = attrIndex >= 0 ? fileAttrOffsets[attrIndex] : -1;
                 srcOffsets[ai] = attrOffset;
             }
-            
-            NativeArray<InputSplatData> dst = new NativeArray<InputSplatData>(count, Allocator.Persistent);
-            ReorderPLYData(count, (byte*)input.GetUnsafeReadOnlyPtr(), stride, (byte*)dst.GetUnsafePtr(), UnsafeUtility.SizeOf<InputSplatData>(), (int*)srcOffsets.GetUnsafeReadOnlyPtr());
-            return dst;
+
+            NativeArray<int> shSrcOffsets = new NativeArray<int>(shCoeffCount * 3, Allocator.Temp);
+            for (int coeff = 0; coeff < shCoeffCount; coeff++)
+            {
+                for (int channel = 0; channel < 3; channel++)
+                {
+                    string attrName = $"f_rest_{coeff + (channel * 15)}";
+                    int attrIndex = attributes.IndexOf((attrName, PLYFileReader.ElementType.Float));
+                    shSrcOffsets[coeff * 3 + channel] = attrIndex >= 0 ? fileAttrOffsets[attrIndex] : -1;
+                }
+            }
+
+            splats = new NativeArray<ImportSplatData>(count, Allocator.Persistent);
+            shCoeffs = shCoeffCount > 0 ? new NativeArray<Vector3>(count * shCoeffCount, Allocator.Persistent, NativeArrayOptions.ClearMemory) : default;
+            float3* shCoeffPtr = shCoeffCount > 0 ? (float3*)shCoeffs.GetUnsafePtr() : null;
+            ReorderPLYData(count, (byte*)input.GetUnsafeReadOnlyPtr(), stride, (byte*)splats.GetUnsafePtr(), UnsafeUtility.SizeOf<ImportSplatData>(), (int*)srcOffsets.GetUnsafeReadOnlyPtr(), shCoeffPtr, shCoeffCount, (int*)shSrcOffsets.GetUnsafeReadOnlyPtr());
+
+            fileAttrOffsets.Dispose();
+            srcOffsets.Dispose();
+            shSrcOffsets.Dispose();
         }
 
         [BurstCompile]
-        static unsafe void ReorderPLYData(int splatCount, byte* src, int srcStride, byte* dst, int dstStride, int* srcOffsets)
+        static unsafe void ReorderPLYData(int splatCount, byte* src, int srcStride, byte* dst, int dstStride, int* srcOffsets, float3* shDst, int shCoeffCount, int* shSrcOffsets)
         {
             for (int i = 0; i < splatCount; i++)
             {
@@ -177,6 +149,21 @@ namespace GaussianSplatting.Editor.Utils
                 {
                     if (srcOffsets[attr] >= 0)
                         *(int*)(dst + attr * 4) = *(int*)(src + srcOffsets[attr]);
+                    else
+                        *(int*)(dst + attr * 4) = 0;
+                }
+
+                for (int coeff = 0; coeff < shCoeffCount; coeff++)
+                {
+                    float3 sh = 0f;
+                    int baseOffset = coeff * 3;
+                    if (shSrcOffsets[baseOffset + 0] >= 0)
+                        sh.x = *(float*)(src + shSrcOffsets[baseOffset + 0]);
+                    if (shSrcOffsets[baseOffset + 1] >= 0)
+                        sh.y = *(float*)(src + shSrcOffsets[baseOffset + 1]);
+                    if (shSrcOffsets[baseOffset + 2] >= 0)
+                        sh.z = *(float*)(src + shSrcOffsets[baseOffset + 2]);
+                    shDst[i * shCoeffCount + coeff] = sh;
                 }
                 src += srcStride;
                 dst += dstStride;
@@ -184,34 +171,9 @@ namespace GaussianSplatting.Editor.Utils
         }
 
         [BurstCompile]
-        static unsafe void ReorderSHs(int splatCount, float* data)
-        {
-            int splatStride = UnsafeUtility.SizeOf<InputSplatData>() / 4;
-            int shStartOffset = 9, shCount = 15;
-            float* tmp = stackalloc float[shCount * 3];
-            int idx = shStartOffset;
-            for (int i = 0; i < splatCount; ++i)
-            {
-                for (int j = 0; j < shCount; ++j)
-                {
-                    tmp[j * 3 + 0] = data[idx + j];
-                    tmp[j * 3 + 1] = data[idx + j + shCount];
-                    tmp[j * 3 + 2] = data[idx + j + shCount * 2];
-                }
-
-                for (int j = 0; j < shCount * 3; ++j)
-                {
-                    data[idx + j] = tmp[j];
-                }
-
-                idx += splatStride;
-            }
-        }
-
-        [BurstCompile]
         struct LinearizeDataJob : IJobParallelFor
         {
-            public NativeArray<InputSplatData> splatData;
+            public NativeArray<ImportSplatData> splatData;
             public void Execute(int index)
             {
                 var splat = splatData[index];
@@ -232,7 +194,7 @@ namespace GaussianSplatting.Editor.Utils
             }
         }
 
-        static void LinearizeData(NativeArray<InputSplatData> splatData)
+        static void LinearizeData(NativeArray<ImportSplatData> splatData)
         {
             LinearizeDataJob job = new LinearizeDataJob();
             job.splatData = splatData;

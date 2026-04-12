@@ -8,10 +8,12 @@ using UnityEngine.EventSystems;
 
 #if UNITY_EDITOR && !COMPILER_UDONSHARP
 using System;
+using System.IO;
 using UnityEditor;
 using UnityEditor.Events;
 using System.Collections.Generic;
 using System.Reflection;
+using UnityEngine.Rendering;
 using UdonSharpEditor;
 #endif
 
@@ -52,6 +54,7 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
     [SerializeField] public bool overrideMaterialProperties = false;
     [Range(0.0f, 2.0f)] [SerializeField] public float gaussianScale = 1.0f;
     [Range(0.0f, 1.0f)] [SerializeField] public float alphaCutoff = 0.03f;
+    [SerializeField] bool useVrcLightVolumes = false;
 
     // [Header("Optional Mirror")]
     // [Tooltip("Optional mirror GameObject. If set, the script will also sort splats for the mirror camera position.")]
@@ -96,14 +99,24 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         }
 
         GameObject sortedObject = FindNamedChild(rootObject, "Sorted");
-        GameObject stochasticObject = FindNamedChild(rootObject, "Stochastic");
         if (sortedObject != null)
         {
             sortedObject.SetActive(true);
         }
-        if (stochasticObject != null)
+
+        Transform rootTransform = rootObject.transform;
+        for (int i = 0; i < rootTransform.childCount; i++)
         {
-            stochasticObject.SetActive(false);
+            Transform child = rootTransform.GetChild(i);
+            if (child == null || (sortedObject != null && child.gameObject == sortedObject))
+            {
+                continue;
+            }
+
+            if (child.GetComponent(typeof(Renderer)) != null || child.GetComponent(typeof(MeshFilter)) != null)
+            {
+                child.gameObject.SetActive(false);
+            }
         }
     }
 
@@ -294,6 +307,119 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         alphaCutoff = Mathf.Clamp01(value);
     }
 
+    void SetMaterialVrcLightVolumes(Material material, bool enabled)
+    {
+        if (material == null || !material.HasProperty("_VRC_LIGHT_VOLUMES"))
+        {
+            return;
+        }
+
+        if (enabled)
+        {
+            material.EnableKeyword("_VRC_LIGHT_VOLUMES_ON");
+        }
+        else
+        {
+            material.DisableKeyword("_VRC_LIGHT_VOLUMES_ON");
+        }
+    }
+
+    void ApplyVrcLightVolumesToSelectedObject()
+    {
+        if (!ApplySelectedSplatObject())
+        {
+            return;
+        }
+
+        MeshRenderer renderer = GetSortedRenderer(splatObject);
+        if (renderer == null)
+        {
+            return;
+        }
+
+        Material[] splatMats = renderer.materials;
+        for (int i = 0; i < splatMats.Length; i++)
+        {
+            SetMaterialVrcLightVolumes(splatMats[i], useVrcLightVolumes);
+        }
+    }
+
+    public float GetMinSortDistance()
+    {
+        return minSortDistance;
+    }
+
+    public void SetMinSortDistance(float value)
+    {
+        minSortDistance = Mathf.Clamp(value, 0.0f, maxSortDistance);
+        ResetCameraPositions();
+    }
+
+    public float GetMaxSortDistance()
+    {
+        return maxSortDistance;
+    }
+
+    public void SetMaxSortDistance(float value)
+    {
+        maxSortDistance = Mathf.Max(value, minSortDistance);
+        ResetCameraPositions();
+    }
+
+    public float GetCameraPositionQuantization()
+    {
+        return cameraPositionQuantization;
+    }
+
+    public void SetCameraPositionQuantization(float value)
+    {
+        cameraPositionQuantization = Mathf.Max(0.0f, value);
+        ResetCameraPositions();
+    }
+
+    public int GetSortingSteps()
+    {
+        return sortingSteps;
+    }
+
+    public void SetSortingSteps(int value)
+    {
+        sortingSteps = Mathf.Clamp(value, 2, 8);
+        ResetCameraPositions();
+    }
+
+    public bool GetAlwaysUpdate()
+    {
+        return alwaysUpdate;
+    }
+
+    public void SetAlwaysUpdate(bool value)
+    {
+        alwaysUpdate = value;
+        ResetCameraPositions();
+    }
+
+    public void ToggleAlwaysUpdate()
+    {
+        SetAlwaysUpdate(!alwaysUpdate);
+    }
+
+    public bool GetUseVrcLightVolumes()
+    {
+        return useVrcLightVolumes;
+    }
+
+    public void SetUseVrcLightVolumes(bool value)
+    {
+        useVrcLightVolumes = value;
+        ApplyVrcLightVolumesToSelectedObject();
+    }
+
+    public void ToggleVrcLightVolumes()
+    {
+        SetUseVrcLightVolumes(!useVrcLightVolumes);
+    }
+
     public string GetCurrentSplatName()
     {
         if (!ApplySelectedSplatObject())
@@ -302,6 +428,19 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         }
 
         return splatObject.name;
+    }
+
+    void DisableMsaaInGame()
+    {
+        if (VRCCameraSettings.ScreenCamera != null)
+        {
+            VRCCameraSettings.ScreenCamera.AllowMSAA = false;
+        }
+
+        if (VRCCameraSettings.PhotoCamera != null)
+        {
+            VRCCameraSettings.PhotoCamera.AllowMSAA = false;
+        }
     }
 
     void Start()
@@ -321,6 +460,7 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         _prevCameraPos = new Vector3[MAX_CAMERA_COUNT];
         ResetCameraPositions();
         InitializeSplatObject();
+        DisableMsaaInGame();
     }
 
     Vector3 QuantizePosition(Vector3 position)
@@ -355,6 +495,7 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
             Material splatMat = splatMats[i];
             splatMat.SetTexture("_GS_RenderOrder", splatRenderOrder);
             splatMat.SetVector("_MinMaxSortDistance", minMaxSortDistance);
+            SetMaterialVrcLightVolumes(splatMat, useVrcLightVolumes);
             if (overrideMaterialProperties)
             {
                 splatMat.SetFloat("_GaussianMul", gaussianScale);
@@ -432,6 +573,8 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
 
     void Update()
     {
+        DisableMsaaInGame();
+
         if (!ApplySelectedSplatObject())
         {
             return;
@@ -542,6 +685,150 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         return UdonSharpEditorUtility.GetBackingUdonBehaviour(proxyBehaviour);
     }
 
+    static string SanitizeAssetName(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return "GaussianSplatRenderer";
+        }
+
+        char[] invalidChars = Path.GetInvalidFileNameChars();
+        char[] sanitizedChars = value.ToCharArray();
+        for (int i = 0; i < sanitizedChars.Length; i++)
+        {
+            if (Array.IndexOf(invalidChars, sanitizedChars[i]) >= 0)
+            {
+                sanitizedChars[i] = '_';
+            }
+        }
+
+        return new string(sanitizedChars);
+    }
+
+    static void EnsureFolderExists(string folderPath)
+    {
+        if (string.IsNullOrEmpty(folderPath) || AssetDatabase.IsValidFolder(folderPath))
+        {
+            return;
+        }
+
+        string normalizedPath = folderPath.Replace('\\', '/');
+        string[] parts = normalizedPath.Split('/');
+        if (parts.Length == 0)
+        {
+            return;
+        }
+
+        string currentPath = parts[0];
+        for (int i = 1; i < parts.Length; i++)
+        {
+            string nextPath = currentPath + "/" + parts[i];
+            if (!AssetDatabase.IsValidFolder(nextPath))
+            {
+                AssetDatabase.CreateFolder(currentPath, parts[i]);
+            }
+
+            currentPath = nextPath;
+        }
+    }
+
+    string GetSortResourceFolderPath()
+    {
+        string scenePath = gameObject.scene.path;
+        if (!string.IsNullOrEmpty(scenePath))
+        {
+            string sceneFolder = Path.GetDirectoryName(scenePath);
+            string sceneName = Path.GetFileNameWithoutExtension(scenePath);
+            if (!string.IsNullOrEmpty(sceneFolder) && !string.IsNullOrEmpty(sceneName))
+            {
+                return (sceneFolder.Replace('\\', '/') + "/" + sceneName + "_GaussianSplatSortResources");
+            }
+        }
+
+        return "Assets/VRChatGaussianSplatting/GeneratedSortingResources";
+    }
+
+    Texture GetPositionsTexture(GameObject rootObject)
+    {
+        MeshRenderer renderer = GetSortedRenderer(rootObject);
+        if (renderer == null)
+        {
+            return null;
+        }
+
+        Material[] materials = renderer.sharedMaterials;
+        if (materials == null || materials.Length == 0)
+        {
+            return null;
+        }
+
+        Material positionsMaterial = materials.Length > 1 && materials[1] != null ? materials[1] : materials[0];
+        if (positionsMaterial == null || !positionsMaterial.HasProperty("_GS_Positions"))
+        {
+            return null;
+        }
+
+        return positionsMaterial.GetTexture("_GS_Positions");
+    }
+
+    static void ComputeRequiredSortTextureSize(int elementCount, out int width, out int height)
+    {
+        int optimalPot = Mathf.NextPowerOfTwo(Mathf.Max(1, elementCount));
+        int optimalPotLog2 = Mathf.CeilToInt(Mathf.Log(optimalPot, 2));
+        int imageSizeLog2Y = optimalPotLog2 / 2;
+        int imageSizeLog2X = imageSizeLog2Y + (optimalPotLog2 % 2);
+        width = 1 << imageSizeLog2X;
+        height = 1 << imageSizeLog2Y;
+    }
+
+    RenderTexture CreateSortRenderTextureAsset(string folderPath, string assetName, int width, int height, RenderTextureFormat format, bool useMipMap, int volumeDepth)
+    {
+        EnsureFolderExists(folderPath);
+
+        RenderTexture renderTexture = new RenderTexture(width, height, 0, format, RenderTextureReadWrite.Linear);
+        renderTexture.name = assetName;
+        renderTexture.dimension = volumeDepth > 1 ? TextureDimension.Tex2DArray : TextureDimension.Tex2D;
+        renderTexture.volumeDepth = volumeDepth;
+        renderTexture.useMipMap = useMipMap;
+        renderTexture.autoGenerateMips = useMipMap;
+        renderTexture.wrapMode = TextureWrapMode.Clamp;
+        renderTexture.filterMode = FilterMode.Point;
+        renderTexture.enableRandomWrite = false;
+        renderTexture.anisoLevel = 0;
+        renderTexture.antiAliasing = 1;
+        renderTexture.Create();
+
+        string assetPath = AssetDatabase.GenerateUniqueAssetPath(folderPath + "/" + assetName + ".renderTexture");
+        AssetDatabase.CreateAsset(renderTexture, assetPath);
+        return renderTexture;
+    }
+
+    void EnsureSortRenderTexture(ref RenderTexture targetTexture, string folderPath, string assetName, int width, int height, RenderTextureFormat format, bool useMipMap, int volumeDepth)
+    {
+        if (targetTexture == null)
+        {
+            targetTexture = CreateSortRenderTextureAsset(folderPath, assetName, width, height, format, useMipMap, volumeDepth);
+            return;
+        }
+
+        Undo.RecordObject(targetTexture, "Resize Gaussian Splat Sort Texture");
+        targetTexture.Release();
+        targetTexture.width = width;
+        targetTexture.height = height;
+        targetTexture.format = format;
+        targetTexture.dimension = volumeDepth > 1 ? TextureDimension.Tex2DArray : TextureDimension.Tex2D;
+        targetTexture.volumeDepth = volumeDepth;
+        targetTexture.useMipMap = useMipMap;
+        targetTexture.autoGenerateMips = useMipMap;
+        targetTexture.wrapMode = TextureWrapMode.Clamp;
+        targetTexture.filterMode = FilterMode.Point;
+        targetTexture.enableRandomWrite = false;
+        targetTexture.anisoLevel = 0;
+        targetTexture.antiAliasing = 1;
+        targetTexture.Create();
+        EditorUtility.SetDirty(targetTexture);
+    }
+
     static void AddUdonSharpButtonEvent(Button button, UdonSharpBehaviour targetBehaviour, string eventName)
     {
         if (button == null || targetBehaviour == null || string.IsNullOrEmpty(eventName))
@@ -619,7 +906,17 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
 
     static Text CreateTextElement(string objectName, Transform parent, string textValue, int fontSize, TextAnchor alignment, Color textColor)
     {
-        RectTransform rectTransform = CreateRectTransform(objectName, parent, new Vector2(0.0f, fontSize + 12.0f));
+        int lineCount = 1;
+        for (int i = 0; i < textValue.Length; i++)
+        {
+            if (textValue[i] == '\n')
+            {
+                lineCount++;
+            }
+        }
+
+        float preferredHeight = (lineCount * (fontSize + 6.0f)) + 12.0f;
+        RectTransform rectTransform = CreateRectTransform(objectName, parent, new Vector2(0.0f, preferredHeight));
         Text text = rectTransform.gameObject.AddComponent<Text>();
         text.font = GetBuiltinUiFont();
         text.fontSize = fontSize;
@@ -630,8 +927,8 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         text.verticalOverflow = VerticalWrapMode.Overflow;
 
         LayoutElement layoutElement = rectTransform.gameObject.AddComponent<LayoutElement>();
-        layoutElement.preferredHeight = fontSize + 18.0f;
-        layoutElement.minHeight = fontSize + 18.0f;
+        layoutElement.preferredHeight = preferredHeight;
+        layoutElement.minHeight = preferredHeight;
         return text;
     }
 
@@ -795,7 +1092,7 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         scaler.dynamicPixelsPerUnit = 10.0f;
 
         RectTransform canvasRect = canvasObject.GetComponent<RectTransform>();
-        canvasRect.sizeDelta = new Vector2(980.0f, 640.0f);
+        canvasRect.sizeDelta = new Vector2(1080.0f, 840.0f);
 
         TryAddVrChatUiShape(canvasObject);
 
@@ -806,24 +1103,81 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         panelRect.anchorMin = new Vector2(0.5f, 0.5f);
         panelRect.anchorMax = new Vector2(0.5f, 0.5f);
         panelRect.pivot = new Vector2(0.5f, 0.5f);
-        panelRect.sizeDelta = new Vector2(980.0f, 0.0f);
+        panelRect.sizeDelta = new Vector2(1080.0f, 0.0f);
 
         GaussianSplatRendererUI generatedUi = AddGeneratedUdonSharpComponent<GaussianSplatRendererUI>(canvasObject, "Add Gaussian Splat Renderer UI");
         generatedUi.gaussianSplatRenderer = this;
 
         GameObject bodyRow = CreateHorizontalGroup("Body Row", panelObject.transform, 18.0f, false);
-        SetPreferredHeight(bodyRow, 560.0f, 0.0f);
+        SetPreferredHeight(bodyRow, 760.0f, 0.0f);
 
         GameObject settingsColumn = CreateVerticalGroup("Settings Column", bodyRow.transform, new RectOffset(0, 0, 0, 0), 12.0f, TextAnchor.UpperLeft);
-        SetPreferredWidth(settingsColumn, 400.0f, 0.0f);
+        SetPreferredWidth(settingsColumn, 460.0f, 0.0f);
 
         GameObject splatColumn = CreateVerticalGroup("Splat Column", bodyRow.transform, new RectOffset(0, 0, 0, 0), 10.0f, TextAnchor.UpperLeft);
-        SetPreferredWidth(splatColumn, 520.0f, 1.0f);
+        SetPreferredWidth(splatColumn, 560.0f, 1.0f);
 
-        CreateTextElement("Title", settingsColumn.transform, "Gaussian Splat Controls", 22, TextAnchor.MiddleLeft, Color.white);
+        CreateTextElement("Title", settingsColumn.transform, "VRChatGaussianSplatting", 22, TextAnchor.MiddleLeft, Color.white);
+        CreateTextElement("Subtitle", settingsColumn.transform, "Github: https://github.com/MichaelMoroz/VRChatGaussianSplatting\nDeveloped by misha_m", 12, TextAnchor.MiddleLeft, new Color(0.82f, 0.82f, 0.82f, 1.0f));
         generatedUi.currentSplatText = CreateTextElement("Current Splat", settingsColumn.transform, "Current Splat: None", 16, TextAnchor.MiddleLeft, new Color(0.9f, 0.9f, 0.9f, 1.0f));
 
+        CreateTextElement("Sorting Section", settingsColumn.transform, "Sorting Settings", 18, TextAnchor.MiddleLeft, Color.white);
+
+        GameObject minSortDistanceRow = CreateHorizontalGroup("Min Sort Distance Row", settingsColumn.transform, 8.0f, false);
+        Text minSortDistanceLabel = CreateTextElement("Min Sort Distance Label", minSortDistanceRow.transform, "Min Sort Dist", 16, TextAnchor.MiddleLeft, Color.white);
+        SetPreferredWidth(minSortDistanceLabel.gameObject, 210.0f, 1.0f);
+        Button minSortDistanceDownButton = CreateButtonElement("Min Sort Distance Down", minSortDistanceRow.transform, "-", new Color(0.45f, 0.24f, 0.18f, 1.0f), 42.0f, 0.0f);
+        generatedUi.minSortDistanceText = CreateTextElement("Min Sort Distance Value", minSortDistanceRow.transform, "0", 16, TextAnchor.MiddleCenter, new Color(0.95f, 0.95f, 0.95f, 1.0f));
+        SetPreferredWidth(generatedUi.minSortDistanceText.gameObject, 72.0f, 0.0f);
+        Button minSortDistanceUpButton = CreateButtonElement("Min Sort Distance Up", minSortDistanceRow.transform, "+", new Color(0.18f, 0.4f, 0.24f, 1.0f), 42.0f, 0.0f);
+        AddUdonSharpButtonEvent(minSortDistanceDownButton, generatedUi, nameof(GaussianSplatRendererUI.DecreaseMinSortDistance));
+        AddUdonSharpButtonEvent(minSortDistanceUpButton, generatedUi, nameof(GaussianSplatRendererUI.IncreaseMinSortDistance));
+
+        GameObject maxSortDistanceRow = CreateHorizontalGroup("Max Sort Distance Row", settingsColumn.transform, 8.0f, false);
+        Text maxSortDistanceLabel = CreateTextElement("Max Sort Distance Label", maxSortDistanceRow.transform, "Max Sort Dist", 16, TextAnchor.MiddleLeft, Color.white);
+        SetPreferredWidth(maxSortDistanceLabel.gameObject, 210.0f, 1.0f);
+        Button maxSortDistanceDownButton = CreateButtonElement("Max Sort Distance Down", maxSortDistanceRow.transform, "-", new Color(0.45f, 0.24f, 0.18f, 1.0f), 42.0f, 0.0f);
+        generatedUi.maxSortDistanceText = CreateTextElement("Max Sort Distance Value", maxSortDistanceRow.transform, "150", 16, TextAnchor.MiddleCenter, new Color(0.95f, 0.95f, 0.95f, 1.0f));
+        SetPreferredWidth(generatedUi.maxSortDistanceText.gameObject, 72.0f, 0.0f);
+        Button maxSortDistanceUpButton = CreateButtonElement("Max Sort Distance Up", maxSortDistanceRow.transform, "+", new Color(0.18f, 0.4f, 0.24f, 1.0f), 42.0f, 0.0f);
+        AddUdonSharpButtonEvent(maxSortDistanceDownButton, generatedUi, nameof(GaussianSplatRendererUI.DecreaseMaxSortDistance));
+        AddUdonSharpButtonEvent(maxSortDistanceUpButton, generatedUi, nameof(GaussianSplatRendererUI.IncreaseMaxSortDistance));
+
+        GameObject cameraQuantizationRow = CreateHorizontalGroup("Camera Quantization Row", settingsColumn.transform, 8.0f, false);
+        Text cameraQuantizationLabel = CreateTextElement("Camera Quantization Label", cameraQuantizationRow.transform, "Camera Quant", 16, TextAnchor.MiddleLeft, Color.white);
+        SetPreferredWidth(cameraQuantizationLabel.gameObject, 210.0f, 1.0f);
+        Button cameraQuantizationDownButton = CreateButtonElement("Camera Quantization Down", cameraQuantizationRow.transform, "-", new Color(0.45f, 0.24f, 0.18f, 1.0f), 42.0f, 0.0f);
+        generatedUi.cameraQuantizationText = CreateTextElement("Camera Quantization Value", cameraQuantizationRow.transform, "0.1", 16, TextAnchor.MiddleCenter, new Color(0.95f, 0.95f, 0.95f, 1.0f));
+        SetPreferredWidth(generatedUi.cameraQuantizationText.gameObject, 72.0f, 0.0f);
+        Button cameraQuantizationUpButton = CreateButtonElement("Camera Quantization Up", cameraQuantizationRow.transform, "+", new Color(0.18f, 0.4f, 0.24f, 1.0f), 42.0f, 0.0f);
+        AddUdonSharpButtonEvent(cameraQuantizationDownButton, generatedUi, nameof(GaussianSplatRendererUI.DecreaseCameraQuantization));
+        AddUdonSharpButtonEvent(cameraQuantizationUpButton, generatedUi, nameof(GaussianSplatRendererUI.IncreaseCameraQuantization));
+
+        GameObject sortingStepsRow = CreateHorizontalGroup("Sorting Steps Row", settingsColumn.transform, 8.0f, false);
+        Text sortingStepsLabel = CreateTextElement("Sorting Steps Label", sortingStepsRow.transform, "Sorting Steps", 16, TextAnchor.MiddleLeft, Color.white);
+        SetPreferredWidth(sortingStepsLabel.gameObject, 210.0f, 1.0f);
+        Button sortingStepsDownButton = CreateButtonElement("Sorting Steps Down", sortingStepsRow.transform, "-", new Color(0.45f, 0.24f, 0.18f, 1.0f), 42.0f, 0.0f);
+        generatedUi.sortingStepsText = CreateTextElement("Sorting Steps Value", sortingStepsRow.transform, "4", 16, TextAnchor.MiddleCenter, new Color(0.95f, 0.95f, 0.95f, 1.0f));
+        SetPreferredWidth(generatedUi.sortingStepsText.gameObject, 72.0f, 0.0f);
+        Button sortingStepsUpButton = CreateButtonElement("Sorting Steps Up", sortingStepsRow.transform, "+", new Color(0.18f, 0.4f, 0.24f, 1.0f), 42.0f, 0.0f);
+        AddUdonSharpButtonEvent(sortingStepsDownButton, generatedUi, nameof(GaussianSplatRendererUI.DecreaseSortingSteps));
+        AddUdonSharpButtonEvent(sortingStepsUpButton, generatedUi, nameof(GaussianSplatRendererUI.IncreaseSortingSteps));
+
+        GameObject alwaysUpdateRow = CreateHorizontalGroup("Sort Every Frame Row", settingsColumn.transform, 8.0f, false);
+        Text alwaysUpdateLabel = CreateTextElement("Sort Every Frame Label", alwaysUpdateRow.transform, "Sort every frame", 16, TextAnchor.MiddleLeft, Color.white);
+        SetPreferredWidth(alwaysUpdateLabel.gameObject, 210.0f, 1.0f);
+        Button alwaysUpdateButton = CreateButtonElement("Sort Every Frame Button", alwaysUpdateRow.transform, "Off", new Color(0.3f, 0.16f, 0.14f, 1.0f), 72.0f, 0.0f);
+        generatedUi.alwaysUpdateButton = alwaysUpdateButton;
+        AddUdonSharpButtonEvent(alwaysUpdateButton, generatedUi, nameof(GaussianSplatRendererUI.ToggleAlwaysUpdate));
+
         CreateTextElement("Settings Section", settingsColumn.transform, "Material Settings", 18, TextAnchor.MiddleLeft, Color.white);
+
+        GameObject vrcLightVolumesRow = CreateHorizontalGroup("VRC Light Volumes Row", settingsColumn.transform, 8.0f, false);
+        Text vrcLightVolumesLabel = CreateTextElement("VRC Light Volumes Label", vrcLightVolumesRow.transform, "VRC Light Volumes", 16, TextAnchor.MiddleLeft, Color.white);
+        SetPreferredWidth(vrcLightVolumesLabel.gameObject, 210.0f, 1.0f);
+        Button vrcLightVolumesButton = CreateButtonElement("VRC Light Volumes Button", vrcLightVolumesRow.transform, "Off", new Color(0.3f, 0.16f, 0.14f, 1.0f), 72.0f, 0.0f);
+        generatedUi.vrcLightVolumesButton = vrcLightVolumesButton;
+        AddUdonSharpButtonEvent(vrcLightVolumesButton, generatedUi, nameof(GaussianSplatRendererUI.ToggleVrcLightVolumes));
 
         GameObject gaussianScaleRow = CreateHorizontalGroup("Gaussian Scale Row", settingsColumn.transform, 8.0f, false);
         Text gaussianScaleLabel = CreateTextElement("Gaussian Scale Label", gaussianScaleRow.transform, "Gaussian Scale", 16, TextAnchor.MiddleLeft, Color.white);
@@ -845,11 +1199,17 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         AddUdonSharpButtonEvent(alphaCutoffDownButton, generatedUi, nameof(GaussianSplatRendererUI.DecreaseAlphaCutoff));
         AddUdonSharpButtonEvent(alphaCutoffUpButton, generatedUi, nameof(GaussianSplatRendererUI.IncreaseAlphaCutoff));
 
+        const float splatListPanelHeight = 700.0f;
+        const float splatListPanelSpacing = 8.0f;
+        const float splatListPanelPadding = 8.0f;
+        const float splatScrollButtonHeight = 38.0f;
+        const float splatSlotButtonHeight = 42.0f;
+
         CreateTextElement("Splat Section", splatColumn.transform, "Splat Selection", 18, TextAnchor.MiddleLeft, Color.white);
         GameObject splatListPanel = CreateVerticalGroup("Splat List Panel", splatColumn.transform, new RectOffset(8, 8, 8, 8), 8.0f, TextAnchor.UpperLeft);
         Image splatListPanelImage = splatListPanel.AddComponent<Image>();
         splatListPanelImage.color = new Color(0.09f, 0.09f, 0.11f, 1.0f);
-        SetPreferredHeight(splatListPanel, 500.0f, 0.0f);
+        SetPreferredHeight(splatListPanel, splatListPanelHeight, 0.0f);
 
         GameObject splatScrollRow = CreateHorizontalGroup("Splat Scroll Controls", splatListPanel.transform, 8.0f, false);
         Button scrollUpButton = CreateButtonElement("Splat Scroll Up", splatScrollRow.transform, "Up", new Color(0.15f, 0.24f, 0.36f, 1.0f), 96.0f, 0.0f);
@@ -865,7 +1225,6 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         List<int> splatButtonIndices = new List<int>();
         List<string> splatButtonLabels = new List<string>();
 
-        const int visibleSplatButtonCount = 8;
         string[] slotSelectEventNames = new string[]
         {
             nameof(GaussianSplatRendererUI.SelectSplatSlot0),
@@ -876,12 +1235,24 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
             nameof(GaussianSplatRendererUI.SelectSplatSlot5),
             nameof(GaussianSplatRendererUI.SelectSplatSlot6),
             nameof(GaussianSplatRendererUI.SelectSplatSlot7),
+            nameof(GaussianSplatRendererUI.SelectSplatSlot8),
+            nameof(GaussianSplatRendererUI.SelectSplatSlot9),
+            nameof(GaussianSplatRendererUI.SelectSplatSlot10),
+            nameof(GaussianSplatRendererUI.SelectSplatSlot11),
+            nameof(GaussianSplatRendererUI.SelectSplatSlot12),
+            nameof(GaussianSplatRendererUI.SelectSplatSlot13),
+            nameof(GaussianSplatRendererUI.SelectSplatSlot14),
+            nameof(GaussianSplatRendererUI.SelectSplatSlot15),
         };
+
+        float availableSplatButtonHeight = splatListPanelHeight - (splatListPanelPadding * 2.0f) - splatScrollButtonHeight - splatListPanelSpacing;
+        int visibleSplatButtonCount = Mathf.Max(1, Mathf.FloorToInt((availableSplatButtonHeight + splatListPanelSpacing) / (splatSlotButtonHeight + splatListPanelSpacing)));
+        visibleSplatButtonCount = Mathf.Min(visibleSplatButtonCount, slotSelectEventNames.Length);
 
         for (int slotIndex = 0; slotIndex < visibleSplatButtonCount; slotIndex++)
         {
             Button slotButton = CreateButtonElement("Splat Slot " + slotIndex, splatButtonContainer.transform, "", new Color(0.2f, 0.2f, 0.24f, 1.0f), 0.0f, 1.0f);
-            SetPreferredHeight(slotButton.gameObject, 42.0f, 0.0f);
+            SetPreferredHeight(slotButton.gameObject, splatSlotButtonHeight, 0.0f);
             splatButtons.Add(slotButton);
             AddUdonSharpButtonEvent(slotButton, generatedUi, slotSelectEventNames[slotIndex]);
         }
@@ -922,6 +1293,72 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
             EditorUtility.SetDirty(generatedUiBacking);
         }
         Selection.activeGameObject = canvasObject;
+    }
+
+    [ContextMenu("Update Sorting Resource Textures")]
+    void UpdateSortingResourceTextures()
+    {
+        RadixSort radixSort = GetComponent<RadixSort>();
+        if (radixSort == null)
+        {
+            Debug.LogError("RadixSort component not found on the GaussianSplatRenderer GameObject.");
+            return;
+        }
+
+        if (!HasSplatObjects())
+        {
+            Debug.LogError("No splat objects have been assigned to the GaussianSplatRenderer.");
+            return;
+        }
+
+        int largestElementCount = 0;
+        string largestSplatName = null;
+        for (int i = 0; i < splatObjects.Length; i++)
+        {
+            GameObject currentSplatObject = splatObjects[i];
+            if (currentSplatObject == null)
+            {
+                continue;
+            }
+
+            Texture positionsTexture = GetPositionsTexture(currentSplatObject);
+            if (positionsTexture == null)
+            {
+                continue;
+            }
+
+            int elementCount = positionsTexture.width * positionsTexture.height;
+            if (elementCount > largestElementCount)
+            {
+                largestElementCount = elementCount;
+                largestSplatName = currentSplatObject.name;
+            }
+        }
+
+        if (largestElementCount <= 0)
+        {
+            Debug.LogError("No valid _GS_Positions textures were found on the assigned splat objects.");
+            return;
+        }
+
+        ComputeRequiredSortTextureSize(largestElementCount, out int requiredWidth, out int requiredHeight);
+
+        string resourceFolderPath = GetSortResourceFolderPath();
+        string assetPrefix = SanitizeAssetName(name);
+
+        Undo.RecordObject(this, "Update Gaussian Splat Sorting Resources");
+        Undo.RecordObject(radixSort, "Update Gaussian Splat Sorting Resources");
+
+        EnsureSortRenderTexture(ref radixSort.keyValues0, resourceFolderPath, assetPrefix + "_KeyValues0", requiredWidth, requiredHeight, RenderTextureFormat.RGFloat, false, 1);
+        EnsureSortRenderTexture(ref radixSort.keyValues1, resourceFolderPath, assetPrefix + "_KeyValues1", requiredWidth, requiredHeight, RenderTextureFormat.RGFloat, false, 1);
+        EnsureSortRenderTexture(ref radixSort.prefixSums, resourceFolderPath, assetPrefix + "_PrefixSums", requiredWidth, requiredHeight, RenderTextureFormat.RFloat, true, 1);
+        EnsureSortRenderTexture(ref splatRenderOrder, resourceFolderPath, assetPrefix + "_SplatRenderOrder", requiredWidth, requiredHeight, RenderTextureFormat.RFloat, false, 2);
+
+        EditorUtility.SetDirty(radixSort);
+        EditorUtility.SetDirty(this);
+        AssetDatabase.SaveAssets();
+
+        Debug.Log($"Updated sorting textures to {requiredWidth}x{requiredHeight} for largest splat '{largestSplatName}' ({largestElementCount} padded elements).");
     }
 
     List<GaussianSplatObject> GetAllObjectsOnlyInScene()

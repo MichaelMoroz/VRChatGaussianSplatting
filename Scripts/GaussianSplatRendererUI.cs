@@ -10,6 +10,12 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
 {
     public GaussianSplatRenderer gaussianSplatRenderer;
     public Text currentSplatText;
+    public Text minSortDistanceText;
+    public Text maxSortDistanceText;
+    public Text cameraQuantizationText;
+    public Text sortingStepsText;
+    public Button alwaysUpdateButton;
+    public Button vrcLightVolumesButton;
     public Text gaussianScaleText;
     public Text alphaCutoffText;
     public Button splatScrollUpButton;
@@ -20,11 +26,15 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
 
     [SerializeField] float gaussianScaleStep = 0.1f;
     [SerializeField] float alphaCutoffStep = 0.01f;
+    [SerializeField] float sortDistanceStep = 5.0f;
+    [SerializeField] float cameraQuantizationStep = 0.05f;
 
     Color _selectedSplatColor = new Color(0.55f, 0.39f, 0.12f, 1.0f);
     Color _defaultSplatColor = new Color(0.2f, 0.2f, 0.24f, 1.0f);
     Color _scrollEnabledColor = new Color(0.15f, 0.24f, 0.36f, 1.0f);
     Color _scrollDisabledColor = new Color(0.1f, 0.1f, 0.12f, 1.0f);
+    Color _toggleEnabledColor = new Color(0.18f, 0.4f, 0.24f, 1.0f);
+    Color _toggleDisabledColor = new Color(0.3f, 0.16f, 0.14f, 1.0f);
 
     int _splatListStartIndex;
 
@@ -154,6 +164,44 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         SetButtonEnabled(splatScrollDownButton, _splatListStartIndex < maxStartIndex, "Down", _scrollEnabledColor, _scrollDisabledColor);
     }
 
+    void RefreshSortingControls()
+    {
+        if (minSortDistanceText != null)
+        {
+            minSortDistanceText.text = FormatFloat(gaussianSplatRenderer.GetMinSortDistance());
+        }
+
+        if (maxSortDistanceText != null)
+        {
+            maxSortDistanceText.text = FormatFloat(gaussianSplatRenderer.GetMaxSortDistance());
+        }
+
+        if (cameraQuantizationText != null)
+        {
+            cameraQuantizationText.text = FormatFloat(gaussianSplatRenderer.GetCameraPositionQuantization());
+        }
+
+        if (sortingStepsText != null)
+        {
+            sortingStepsText.text = gaussianSplatRenderer.GetSortingSteps().ToString();
+        }
+
+        if (alwaysUpdateButton != null)
+        {
+            bool alwaysUpdate = gaussianSplatRenderer.GetAlwaysUpdate();
+            ApplyButtonVisual(alwaysUpdateButton, alwaysUpdate ? "On" : "Off", alwaysUpdate ? _toggleEnabledColor : _toggleDisabledColor);
+        }
+    }
+
+    void RefreshMaterialControls()
+    {
+        if (vrcLightVolumesButton != null)
+        {
+            bool enabled = gaussianSplatRenderer.GetUseVrcLightVolumes();
+            ApplyButtonVisual(vrcLightVolumesButton, enabled ? "On" : "Off", enabled ? _toggleEnabledColor : _toggleDisabledColor);
+        }
+    }
+
     void SelectSplatSlot(int slotIndex)
     {
         if (gaussianSplatRenderer == null || splatButtonIndices == null)
@@ -179,6 +227,14 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
     public void SelectSplatSlot5() { SelectSplatSlot(5); }
     public void SelectSplatSlot6() { SelectSplatSlot(6); }
     public void SelectSplatSlot7() { SelectSplatSlot(7); }
+    public void SelectSplatSlot8() { SelectSplatSlot(8); }
+    public void SelectSplatSlot9() { SelectSplatSlot(9); }
+    public void SelectSplatSlot10() { SelectSplatSlot(10); }
+    public void SelectSplatSlot11() { SelectSplatSlot(11); }
+    public void SelectSplatSlot12() { SelectSplatSlot(12); }
+    public void SelectSplatSlot13() { SelectSplatSlot(13); }
+    public void SelectSplatSlot14() { SelectSplatSlot(14); }
+    public void SelectSplatSlot15() { SelectSplatSlot(15); }
 
     public void ScrollSplatListUp()
     {
@@ -217,7 +273,119 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
             alphaCutoffText.text = FormatFloat(gaussianSplatRenderer.alphaCutoff);
         }
 
+        RefreshSortingControls();
+        RefreshMaterialControls();
         RefreshSplatButtons();
+    }
+
+    public void IncreaseMinSortDistance()
+    {
+        if (gaussianSplatRenderer == null)
+        {
+            return;
+        }
+
+        gaussianSplatRenderer.SetMinSortDistance(gaussianSplatRenderer.GetMinSortDistance() + sortDistanceStep);
+        RefreshUI();
+    }
+
+    public void DecreaseMinSortDistance()
+    {
+        if (gaussianSplatRenderer == null)
+        {
+            return;
+        }
+
+        gaussianSplatRenderer.SetMinSortDistance(gaussianSplatRenderer.GetMinSortDistance() - sortDistanceStep);
+        RefreshUI();
+    }
+
+    public void IncreaseMaxSortDistance()
+    {
+        if (gaussianSplatRenderer == null)
+        {
+            return;
+        }
+
+        gaussianSplatRenderer.SetMaxSortDistance(gaussianSplatRenderer.GetMaxSortDistance() + sortDistanceStep);
+        RefreshUI();
+    }
+
+    public void DecreaseMaxSortDistance()
+    {
+        if (gaussianSplatRenderer == null)
+        {
+            return;
+        }
+
+        gaussianSplatRenderer.SetMaxSortDistance(gaussianSplatRenderer.GetMaxSortDistance() - sortDistanceStep);
+        RefreshUI();
+    }
+
+    public void IncreaseCameraQuantization()
+    {
+        if (gaussianSplatRenderer == null)
+        {
+            return;
+        }
+
+        gaussianSplatRenderer.SetCameraPositionQuantization(gaussianSplatRenderer.GetCameraPositionQuantization() + cameraQuantizationStep);
+        RefreshUI();
+    }
+
+    public void DecreaseCameraQuantization()
+    {
+        if (gaussianSplatRenderer == null)
+        {
+            return;
+        }
+
+        gaussianSplatRenderer.SetCameraPositionQuantization(gaussianSplatRenderer.GetCameraPositionQuantization() - cameraQuantizationStep);
+        RefreshUI();
+    }
+
+    public void IncreaseSortingSteps()
+    {
+        if (gaussianSplatRenderer == null)
+        {
+            return;
+        }
+
+        gaussianSplatRenderer.SetSortingSteps(gaussianSplatRenderer.GetSortingSteps() + 1);
+        RefreshUI();
+    }
+
+    public void DecreaseSortingSteps()
+    {
+        if (gaussianSplatRenderer == null)
+        {
+            return;
+        }
+
+        gaussianSplatRenderer.SetSortingSteps(gaussianSplatRenderer.GetSortingSteps() - 1);
+        RefreshUI();
+    }
+
+    public void ToggleAlwaysUpdate()
+    {
+        if (gaussianSplatRenderer == null)
+        {
+            return;
+        }
+
+        gaussianSplatRenderer.ToggleAlwaysUpdate();
+        RefreshUI();
+    }
+
+    public void ToggleVrcLightVolumes()
+    {
+        if (gaussianSplatRenderer == null)
+        {
+            return;
+        }
+
+        gaussianSplatRenderer.ToggleVrcLightVolumes();
+        RefreshUI();
     }
 
     public void IncreaseGaussianScale()

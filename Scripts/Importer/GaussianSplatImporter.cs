@@ -89,26 +89,14 @@ namespace GaussianSplatting
             return $"_GS_SH{(index + 1).ToString("X")}";
         }
 
-        static Vector3 GetSHCoefficient(in InputSplatData splat, int index)
+        static Vector3 GetSHCoefficient(NativeArray<Vector3> shCoeffs, int shCoeffCount, int splatIndex, int coeffIndex)
         {
-            return index switch
+            if (!shCoeffs.IsCreated || shCoeffCount <= 0 || coeffIndex < 0 || coeffIndex >= shCoeffCount || splatIndex < 0)
             {
-                0 => splat.sh1,
-                1 => splat.sh2,
-                2 => splat.sh3,
-                3 => splat.sh4,
-                4 => splat.sh5,
-                5 => splat.sh6,
-                6 => splat.sh7,
-                7 => splat.sh8,
-                8 => splat.sh9,
-                9 => splat.shA,
-                10 => splat.shB,
-                11 => splat.shC,
-                12 => splat.shD,
-                13 => splat.shE,
-                _ => splat.shF,
-            };
+                return Vector3.zero;
+            }
+
+            return shCoeffs[splatIndex * shCoeffCount + coeffIndex];
         }
 
         static void SetMaterialSHBand(Material material, SHBand band)
@@ -223,22 +211,23 @@ namespace GaussianSplatting
             if (count == 0)
                 throw new Exception("Empty or unsupported splat file");
 
-            GaussianFileReader.ReadFile(plyFile, out NativeArray<InputSplatData> splats);
+            int requestedSHCoeffCount = importSphericalHarmonics ? SHCoeffCountForBand(defaultSHBand) : 0;
+            GaussianFileReader.ReadFile(plyFile, requestedSHCoeffCount, out NativeArray<ImportSplatData> splats, out NativeArray<Vector3> shCoeffs);
             try
             {
-                var shMin = new Vector3[SHCoeffCount];
-                var shRange = new Vector3[SHCoeffCount];
+                var shMin = requestedSHCoeffCount > 0 ? new Vector3[requestedSHCoeffCount] : Array.Empty<Vector3>();
+                var shRange = requestedSHCoeffCount > 0 ? new Vector3[requestedSHCoeffCount] : Array.Empty<Vector3>();
                 const float shRangeEpsilon = 1e-8f;
                 bool[] hasNonZeroBand = new bool[4];
-                if (importSphericalHarmonics)
+                if (requestedSHCoeffCount > 0)
                 {
-                    for (int coeff = 0; coeff < SHCoeffCount; ++coeff)
+                    for (int coeff = 0; coeff < requestedSHCoeffCount; ++coeff)
                     {
                         Vector3 minCoeff = new Vector3(float.PositiveInfinity, float.PositiveInfinity, float.PositiveInfinity);
                         Vector3 maxCoeff = new Vector3(float.NegativeInfinity, float.NegativeInfinity, float.NegativeInfinity);
                         for (int i = 0; i < splats.Length; ++i)
                         {
-                            Vector3 sh = GetSHCoefficient(splats[i], coeff);
+                            Vector3 sh = GetSHCoefficient(shCoeffs, requestedSHCoeffCount, i, coeff);
                             minCoeff = Vector3.Min(minCoeff, sh);
                             maxCoeff = Vector3.Max(maxCoeff, sh);
                         }
@@ -267,40 +256,15 @@ namespace GaussianSplatting
                 int effectiveCount = side * side; // round up to nearest square
 
                 Debug.Log($"Importing {count} splats into {side}x{side} textures");
-
-                // Pad splats to a square texture size with zero color zero size splats
-                if (count < effectiveCount)
-                {
-                    NativeArray<InputSplatData> paddedSplats = new NativeArray<InputSplatData>(effectiveCount, Allocator.Temp);
-                    for (int i = 0; i < count; ++i)
-                    {
-                        paddedSplats[i] = splats[i];
-                    }
-                    for (int i = count; i < effectiveCount; ++i)
-                    {
-                        paddedSplats[i] = new InputSplatData
-                        {
-                            pos     = Vector3.zero,
-                            dc0     = Vector3.zero,
-                            rot     = Quaternion.identity,
-                            scale   = Vector3.one,
-                            opacity = 0f
-                        };
-                    }
-                    splats.Dispose();
-                    splats = paddedSplats;
-                }
-
-                InputSplatData[] data = splats.ToArray();          // managed copy – easier to sort
-                int n = data.Length;
+                int n = splats.Length;
 
                 // Compute BBOX
                 Vector3 min = new(float.MaxValue, float.MaxValue, float.MaxValue);
                 Vector3 max = new(float.MinValue, float.MinValue, float.MinValue);
                 for (int i = 0; i < n; ++i)
                 {
-                    min = Vector3.Min(min, data[i].pos);
-                    max = Vector3.Max(max, data[i].pos);
+                    min = Vector3.Min(min, splats[i].pos);
+                    max = Vector3.Max(max, splats[i].pos);
                 }
                 Vector3 size = max - min;
 
@@ -314,7 +278,7 @@ namespace GaussianSplatting
                 int validCount = 0;
                 for (int i = 0; i < n; ++i)
                 {
-                    Vector3 pos = data[i].pos;
+                    Vector3 pos = splats[i].pos;
                     if (float.IsNaN(pos.x) || float.IsNaN(pos.y) || float.IsNaN(pos.z))
                     {
                         Debug.LogWarning($"Skipping splat {i} with NaN position: {pos}");
@@ -333,7 +297,7 @@ namespace GaussianSplatting
                 Vector3 maxSize = Vector3.zero;
                 for (int i = 0; i < n; ++i)
                 {
-                    Vector3 pos = data[i].pos;
+                    Vector3 pos = splats[i].pos;
                     if (float.IsNaN(pos.x) || float.IsNaN(pos.y) || float.IsNaN(pos.z))
                         continue; // skip invalid splats
                     Vector3 relativePos = pos - centerOfMass;
@@ -342,8 +306,12 @@ namespace GaussianSplatting
                     maxSize.z = Mathf.Max(maxSize.z, Mathf.Abs(relativePos.z));
                 }
 
-                // Sort splats by Morton key – in-place for data[]
-                Array.Sort(keys, data);
+                int[] sortedOrder = new int[n];
+                for (int i = 0; i < n; ++i)
+                {
+                    sortedOrder[i] = i;
+                }
+                Array.Sort(keys, sortedOrder);
 
                 Bounds bbox = new Bounds();
                 if (computeBoundingBox)
@@ -390,7 +358,7 @@ namespace GaussianSplatting
                         {
                             sortedIndices[i][j] = j;
                         }
-                        Array.Sort(sortedIndices[i], (a, b) => Vector3.Dot(data[a].pos, dir).CompareTo(Vector3.Dot(data[b].pos, dir)));
+                        Array.Sort(sortedIndices[i], (a, b) => Vector3.Dot(splats[a].pos, dir).CompareTo(Vector3.Dot(splats[b].pos, dir)));
                     }
                     
                     sortedTex = NewTextureArray(side, octahedral_dirs.Length, TextureFormat.RFloat, "SortedOctahedralDirections");
@@ -436,8 +404,9 @@ namespace GaussianSplatting
                     }
                 }
 
-                for (int i = 0; i < data.Length; ++i) {
-                    var s = data[i];                      
+                for (int i = 0; i < n; ++i) {
+                    int sourceIndex = sortedOrder[i];
+                    var s = splats[sourceIndex];
                     xyzPixels[i]   = new Color(s.pos.x,   s.pos.y,   s.pos.z,   0f);
                     colPixels[i]   = new Color(s.dc0.x,   s.dc0.y,   s.dc0.z,   s.opacity);
                     rotPixels[i]   = new Color(0.5f + 0.5f * s.rot.x, 
@@ -450,7 +419,7 @@ namespace GaussianSplatting
                     {
                         for (int coeff = 0; coeff < importedSHCoeffCount; ++coeff)
                         {
-                            Vector3 sh = GetSHCoefficient(s, coeff);
+                            Vector3 sh = GetSHCoefficient(shCoeffs, requestedSHCoeffCount, sourceIndex, coeff);
                             Vector3 range = shRange[coeff];
                             shPixels[coeff][i] = new Color(
                                 range.x > shRangeEpsilon ? (sh.x - shMin[coeff].x) / range.x : 0f,
@@ -500,17 +469,17 @@ namespace GaussianSplatting
                     }
                 }
                 
-                if(splatsPerPass == 0) splatsPerPass = effectiveCount;
-                splatsPerPass = Mathf.Min(splatsPerPass, effectiveCount);
+                if(splatsPerPass == 0) splatsPerPass = n;
+                splatsPerPass = Mathf.Min(splatsPerPass, n);
      
                 List<Material> materials = new List<Material>();
                 List<int> indexCounts = new List<int>();
                 List<MeshTopology> topologies = new List<MeshTopology>();
 
-                int totalPassCount = (effectiveCount + splatsPerPass - 1) / splatsPerPass; // number of passes needed
+                int totalPassCount = (n + splatsPerPass - 1) / splatsPerPass; // number of passes needed
                 int alphaMaskCount = Mathf.Min(maxAlphaMaskCount, totalPassCount - 1); // number of alpha mask passes needed
                 //update splats per pass to make equal chunks
-                splatsPerPass = (effectiveCount + totalPassCount - 1) / totalPassCount;
+                splatsPerPass = (n + totalPassCount - 1) / totalPassCount;
 
                 if(useSRGB) {
                     //Convert screen colors to sRGB
@@ -520,13 +489,13 @@ namespace GaussianSplatting
                     convertToSRGB.name = "convert_to_srgb";
                     materials.Add(convertToSRGB);
                 } else {
-                    splatsPerPass = effectiveCount;
+                    splatsPerPass = n;
                 }
               
                 Material mainMat = null;
-                for (int i = 0; i < effectiveCount; i += splatsPerPass)
+                for (int i = 0; i < n; i += splatsPerPass)
                 {
-                    int passCount = Mathf.Min(splatsPerPass, effectiveCount - i);
+                    int passCount = Mathf.Min(splatsPerPass, n - i);
                     int pass = i / splatsPerPass;
                     Material splatMat = null;
                     string splatMatName = materialName + (pass > 0 ? $"_pass_{pass}" : "_main") + "_splat";
@@ -589,6 +558,8 @@ namespace GaussianSplatting
             {
                 if (splats.IsCreated)
                     splats.Dispose();
+                if (shCoeffs.IsCreated)
+                    shCoeffs.Dispose();
             }
         }
 
@@ -688,7 +659,7 @@ namespace GaussianSplatting.Editor.Importers
                 }
             }
             
-            EditorGUILayout.HelpBox("At the moment more than 8M splats or .PLY files larger than 2GB don't work. ", MessageType.Info);
+            EditorGUILayout.HelpBox("Large imports still depend on available RAM, but SH import memory now scales with the selected SH band. .PLY files larger than 2GB are still not supported.", MessageType.Info);
 
             EditorGUILayout.Space(10);
             EditorGUILayout.LabelField("Output Folder", EditorStyles.boldLabel);

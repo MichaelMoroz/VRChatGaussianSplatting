@@ -273,7 +273,7 @@ SplatData LoadSplatDataRenderOrder(uint id) {
     return data;
 }
 
-SplatData LoadSplatDataStochastic(uint id) {
+SplatData LoadSplatDataRandomized(uint id) {
     uint reordered_id = pcg(id) % _ActualSplatCount;
     SplatData data = LoadSplatData(reordered_id);
     data.id = reordered_id;

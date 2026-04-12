@@ -33,7 +33,7 @@ struct g2f {
     float2 quadPos: TEXCOORD0;
     nointerpolation float4 color: TEXCOORD1;
     nointerpolation float gaussianExp: TEXCOORD2;
-#ifdef _STOCHASTIC
+#ifdef _LEGACY_RANDOMIZED_ORDER
     nointerpolation uint splatID: TEXCOORD3;
 #endif
     UNITY_VERTEX_OUTPUT_STEREO
@@ -65,8 +65,8 @@ void geo(point v2g input[1], inout TriangleStream<g2f> triStream, uint instanceI
     UNITY_INITIALIZE_OUTPUT(g2f, o);
     UNITY_TRANSFER_VERTEX_OUTPUT_STEREO(input[0], o);
 
-    #ifdef _STOCHASTIC
-    SplatData splat = LoadSplatDataStochastic(id);
+    #ifdef _LEGACY_RANDOMIZED_ORDER
+    SplatData splat = LoadSplatDataRandomized(id);
     #elif _PRECOMPUTED_SORTING_ON
     float3 cam_dir = mul(transpose(UNITY_MATRIX_IT_MV), float4(0, 0, 1, 0)).xyz; // camera direction in object space
     SplatData splat = LoadSplatDataPrecomputedOrder(id, cam_dir);
@@ -118,7 +118,7 @@ void geo(point v2g input[1], inout TriangleStream<g2f> triStream, uint instanceI
     float areaScale = area / areaPost;
     o.color.a *= areaScale; // scale alpha by area ratio
     o.gaussianExp = 0.5 * cutoffSigmaRadius * cutoffSigmaRadius;
-#ifdef _STOCHASTIC
+#ifdef _LEGACY_RANDOMIZED_ORDER
     o.splatID = id;
 #endif
 
@@ -167,8 +167,8 @@ float InterleavedGradientNoiseInt(uint2 pixel, uint frameIndex)
     return InterleavedGradientNoise(float2(pixel), frameIndex);
 }
 
-#ifdef _STOCHASTIC
-uint EvaluateStochasticCoverage(g2f input, float rho)
+#ifdef _LEGACY_RANDOMIZED_ORDER
+uint EvaluateCoverageMask(g2f input, float rho)
 {
     uint2 pixel = uint2(input.position.xy);
     uint eyeIndex = 0u;
@@ -212,8 +212,8 @@ float4 frag(g2f input, out uint coverage : SV_Coverage) : SV_Target {
         discard;
     }  // skip outside of the cutoff ellipse
     float rho = input.color.a * exp(-input.gaussianExp * dist2);
-#ifdef _STOCHASTIC
-    coverage = EvaluateStochasticCoverage(input, rho);
+#ifdef _LEGACY_RANDOMIZED_ORDER
+    coverage = EvaluateCoverageMask(input, rho);
     if (coverage == 0u) discard;
     return float4(input.color.rgb, 1.0);
 #else

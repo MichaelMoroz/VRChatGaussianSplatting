@@ -1,0 +1,20 @@
+{
+    "name": "GaussianSplatting.Editor",
+    "rootNamespace": "",
+    "references": [
+        "GaussianSplatting",
+        "RadixSort",
+        "UdonSharp.Runtime"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

@@ -63,7 +63,7 @@ namespace GaussianSplatting.Editor.Utils
             };
         }
 
-        public static void ReadFile(string filePath, out NativeArray<InputSplatData> splats)
+        public static void ReadFile(string filePath, int requestedSHCoeffCount, out NativeArray<ImportSplatData> splats, out NativeArray<Vector3> shCoeffs)
         {
             using var fs = File.OpenRead(filePath);
             using var gz = new GZipStream(fs, CompressionMode.Decompress);
@@ -77,13 +77,14 @@ namespace GaussianSplatting.Editor.Utils
                 throw new IOException($"SPZ {filePath} read error, out of range fractional bits {fractBits}");
 
             // allocate temporary storage
-            int shCoeffs = SHCoeffsForLevel(shLevel);
+            int fileSHCoeffCount = SHCoeffsForLevel(shLevel);
+            int importedSHCoeffCount = math.min(requestedSHCoeffCount, fileSHCoeffCount);
             NativeArray<byte> packedPos = new(splatCount * 3 * 3, Allocator.Persistent);
             NativeArray<byte> packedScale = new(splatCount * 3, Allocator.Persistent);
             NativeArray<byte> packedRot = new(splatCount * 3, Allocator.Persistent);
             NativeArray<byte> packedAlpha = new(splatCount, Allocator.Persistent);
             NativeArray<byte> packedCol = new(splatCount * 3, Allocator.Persistent);
-            NativeArray<byte> packedSh = new(splatCount * 3 * shCoeffs, Allocator.Persistent);
+            NativeArray<byte> packedSh = new(splatCount * 3 * fileSHCoeffCount, Allocator.Persistent);
 
             // read file contents into temporaries
             bool readOk = true;
@@ -95,7 +96,8 @@ namespace GaussianSplatting.Editor.Utils
             readOk &= gz.Read(packedSh) == packedSh.Length;
 
             // unpack into full splat data
-            splats = new NativeArray<InputSplatData>(splatCount, Allocator.Persistent);
+            splats = new NativeArray<ImportSplatData>(splatCount, Allocator.Persistent);
+            shCoeffs = importedSHCoeffCount > 0 ? new NativeArray<Vector3>(splatCount * importedSHCoeffCount, Allocator.Persistent, NativeArrayOptions.ClearMemory) : default;
             UnpackDataJob job = new UnpackDataJob();
             job.packedPos = packedPos;
             job.packedScale = packedScale;
@@ -103,9 +105,11 @@ namespace GaussianSplatting.Editor.Utils
             job.packedAlpha = packedAlpha;
             job.packedCol = packedCol;
             job.packedSh = packedSh;
-            job.shCoeffs = shCoeffs;
+            job.fileSHCoeffCount = fileSHCoeffCount;
+            job.importedSHCoeffCount = importedSHCoeffCount;
             job.fractScale = 1.0f / (1 << fractBits);
             job.splats = splats;
+            job.shCoeffs = shCoeffs;
             job.Schedule(splatCount, 4096).Complete();
 
             // cleanup
@@ -119,6 +123,8 @@ namespace GaussianSplatting.Editor.Utils
             if (!readOk)
             {
                 splats.Dispose();
+                if (shCoeffs.IsCreated)
+                    shCoeffs.Dispose();
                 throw new IOException($"SPZ {filePath} read error, file smaller than it should be");
             }
         }
@@ -133,8 +139,10 @@ namespace GaussianSplatting.Editor.Utils
             [NativeDisableParallelForRestriction] [ReadOnly] public NativeArray<byte> packedCol;
             [NativeDisableParallelForRestriction] [ReadOnly] public NativeArray<byte> packedSh;
             public float fractScale;
-            public int shCoeffs;
-            public NativeArray<InputSplatData> splats;
+            public int fileSHCoeffCount;
+            public int importedSHCoeffCount;
+            public NativeArray<ImportSplatData> splats;
+            public NativeArray<Vector3> shCoeffs;
 
             public void Execute(int index)
             {
@@ -159,22 +167,12 @@ namespace GaussianSplatting.Editor.Utils
                 col /= 0.15f;
                 splat.dc0 = GaussianUtils.SH0ToColor(col);
 
-                int shIdx = index * shCoeffs * 3;
-                splat.sh1 = UnpackSH(shIdx); shIdx += 3;
-                splat.sh2 = UnpackSH(shIdx); shIdx += 3;
-                splat.sh3 = UnpackSH(shIdx); shIdx += 3;
-                splat.sh4 = UnpackSH(shIdx); shIdx += 3;
-                splat.sh5 = UnpackSH(shIdx); shIdx += 3;
-                splat.sh6 = UnpackSH(shIdx); shIdx += 3;
-                splat.sh7 = UnpackSH(shIdx); shIdx += 3;
-                splat.sh8 = UnpackSH(shIdx); shIdx += 3;
-                splat.sh9 = UnpackSH(shIdx); shIdx += 3;
-                splat.shA = UnpackSH(shIdx); shIdx += 3;
-                splat.shB = UnpackSH(shIdx); shIdx += 3;
-                splat.shC = UnpackSH(shIdx); shIdx += 3;
-                splat.shD = UnpackSH(shIdx); shIdx += 3;
-                splat.shE = UnpackSH(shIdx); shIdx += 3;
-                splat.shF = UnpackSH(shIdx); shIdx += 3;
+                int shIdx = index * fileSHCoeffCount * 3;
+                for (int coeff = 0; coeff < importedSHCoeffCount; coeff++)
+                {
+                    shCoeffs[index * importedSHCoeffCount + coeff] = UnpackSH(shIdx);
+                    shIdx += 3;
+                }
 
                 splats[index] = splat;
             }

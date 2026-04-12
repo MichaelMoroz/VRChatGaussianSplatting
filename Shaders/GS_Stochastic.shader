@@ -86,7 +86,7 @@ Shader "VRChatGaussianSplatting/GaussianSplattingStochastic"
             Blend Off
             ZWrite On
             CGPROGRAM
-            #define _STOCHASTIC
+            #define _LEGACY_RANDOMIZED_ORDER
             #define _FAKE_SRGB
             #include "GS.cginc"
             ENDCG

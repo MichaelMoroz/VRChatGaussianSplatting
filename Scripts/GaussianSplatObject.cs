@@ -54,14 +54,23 @@ namespace GaussianSplatting
         public void ShowSorted()
         {
             sortedObject = ResolveChildObject(sortedObject, "Sorted");
-            GameObject stochasticObject = ResolveChildObject(null, "Stochastic");
             if (sortedObject != null)
             {
                 sortedObject.SetActive(true);
             }
-            if (stochasticObject != null)
+
+            for (int i = 0; i < transform.childCount; i++)
             {
-                stochasticObject.SetActive(false);
+                Transform child = transform.GetChild(i);
+                if (child == null || (sortedObject != null && child.gameObject == sortedObject))
+                {
+                    continue;
+                }
+
+                if (child.GetComponent(typeof(Renderer)) != null || child.GetComponent(typeof(MeshFilter)) != null)
+                {
+                    child.gameObject.SetActive(false);
+                }
             }
         }
     }
