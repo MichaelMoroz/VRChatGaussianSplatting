@@ -12,7 +12,7 @@ GameObject:
   - component: {fileID: 396110472149909527}
   - component: {fileID: 4990508455838405689}
   m_Layer: 0
-  m_Name: Stochastic
+  m_Name: Legacy
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -142,9 +142,9 @@ MonoBehaviour:
     SerializationNodes: []
   _udonSharpBackingUdonBehaviour: {fileID: 4312671745064987822}
   sortedObject: {fileID: 5486529283996310355}
-  stochasticObject: {fileID: 1399254264450531416}
+  legacyObject: {fileID: 1399254264450531416}
   sortedRenderer: {fileID: 7961762336964349006}
-  stochasticRenderer: {fileID: 4990508455838405689}
+  legacyRenderer: {fileID: 4990508455838405689}
 --- !u!114 &4312671745064987822
 MonoBehaviour:
   m_ObjectHideFlags: 0

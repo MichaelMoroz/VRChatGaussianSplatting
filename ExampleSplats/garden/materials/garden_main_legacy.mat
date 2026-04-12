@@ -7,7 +7,7 @@ Material:
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_Name: flowers_main_stochastic
+  m_Name: garden_main_legacy
   m_Shader: {fileID: 4800000, guid: 2a6bb6750b7041d6a1db39f4af44c811, type: 3}
   m_Parent: {fileID: 0}
   m_ModifiedSerializedProperties: 0
@@ -25,11 +25,11 @@ Material:
     serializedVersion: 3
     m_TexEnvs:
     - _GS_Colors:
-        m_Texture: {fileID: 2800000, guid: 3e0b330374aec274c88dcfea9b99b13a, type: 2}
+        m_Texture: {fileID: 2800000, guid: 78ca3f13180e79747b02d996fbb56cc5, type: 2}
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
     - _GS_Positions:
-        m_Texture: {fileID: 2800000, guid: 0dbd70be03d7c77448b1b73ca4849760, type: 2}
+        m_Texture: {fileID: 2800000, guid: 3bd61996a01a14d41be7fdf74a405f4b, type: 2}
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
     - _GS_RenderOrder:
@@ -45,7 +45,7 @@ Material:
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
     - _GS_Rotations:
-        m_Texture: {fileID: 2800000, guid: c0dc0b11024d3734dac581217badb704, type: 2}
+        m_Texture: {fileID: 2800000, guid: 6a7a9f5f8ec631142805da9610f19dc4, type: 2}
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
     - _GS_SH1:
@@ -109,13 +109,13 @@ Material:
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
     - _GS_Scales:
-        m_Texture: {fileID: 2800000, guid: c688a0fd7cceb914e959687d49679617, type: 2}
+        m_Texture: {fileID: 2800000, guid: c7c1219166903364f88dd08bbaf98081, type: 2}
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
     m_Ints:
     - _PRECOMPUTED_SORTING: 0
     m_Floats:
-    - _ActualSplatCount: 2002225
+    - _ActualSplatCount: 1500625
     - _AlphaCutoff: 0.03
     - _AntiAliasing: 1
     - _Exposure: 1
@@ -125,7 +125,7 @@ Material:
     - _Opacity: 1
     - _SHBand: 0
     - _ScaleCutoff: 100
-    - _SplatCount: 667409
+    - _SplatCount: 750313
     - _SplatOffset: 0
     - _ThinThreshold: 0.005
     m_Colors:

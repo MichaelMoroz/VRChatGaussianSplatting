@@ -6,7 +6,7 @@ Mesh:
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_Name: stump_stochastic_mesh
+  m_Name: flowers_legacy_mesh
   serializedVersion: 11
   m_SubMeshes:
   - serializedVersion: 2
@@ -171,8 +171,8 @@ Mesh:
       m_BitSize: 0
     m_UVInfo: 0
   m_LocalAABB:
-    m_Center: {x: 0.4540669, y: -0.5239064, z: 4.5506268}
-    m_Extent: {x: 120.06065, y: 78.58929, z: 129.72357}
+    m_Center: {x: 0.08612862, y: -1.4734211, z: 0.13554384}
+    m_Extent: {x: 93.87318, y: 71.84111, z: 105.79399}
   m_MeshUsageFlags: 0
   m_CookingOptions: 30
   m_BakedConvexCollisionMesh: 

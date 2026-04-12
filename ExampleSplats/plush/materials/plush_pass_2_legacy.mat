@@ -7,9 +7,9 @@ Material:
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_Name: flowers_pass_1_stochastic
+  m_Name: plush_pass_2_legacy
   m_Shader: {fileID: 4800000, guid: 2a6bb6750b7041d6a1db39f4af44c811, type: 3}
-  m_Parent: {fileID: 2100000, guid: 69bd3171026c2664a89a7a0cb1bc15aa, type: 2}
+  m_Parent: {fileID: 2100000, guid: 524e43cf26d7a704dbd5ed160aafef13, type: 2}
   m_ModifiedSerializedProperties: 16
   m_ValidKeywords:
   - _SHBAND_SH0
@@ -17,7 +17,7 @@ Material:
   m_LightmapFlags: 4
   m_EnableInstancingVariants: 0
   m_DoubleSidedGI: 0
-  m_CustomRenderQueue: 3501
+  m_CustomRenderQueue: 3502
   stringTagMap: {}
   disabledShaderPasses: []
   m_LockedProperties: 
@@ -26,6 +26,7 @@ Material:
     m_TexEnvs: []
     m_Ints: []
     m_Floats:
-    - _SplatOffset: 667409
+    - _SplatCount: 603904
+    - _SplatOffset: 1207812
     m_Colors: []
   m_BuildTextureStacks: []

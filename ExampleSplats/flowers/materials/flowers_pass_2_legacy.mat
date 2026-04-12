@@ -7,9 +7,9 @@ Material:
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_Name: stump_pass_2_stochastic
+  m_Name: flowers_pass_2_legacy
   m_Shader: {fileID: 4800000, guid: 2a6bb6750b7041d6a1db39f4af44c811, type: 3}
-  m_Parent: {fileID: 2100000, guid: e3af4a4c5fb6daf4b90ced35afb95dc5, type: 2}
+  m_Parent: {fileID: 2100000, guid: 69bd3171026c2664a89a7a0cb1bc15aa, type: 2}
   m_ModifiedSerializedProperties: 16
   m_ValidKeywords:
   - _SHBAND_SH0

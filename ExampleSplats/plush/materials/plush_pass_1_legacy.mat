@@ -7,9 +7,9 @@ Material:
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_Name: garden_pass_1_stochastic
+  m_Name: plush_pass_1_legacy
   m_Shader: {fileID: 4800000, guid: 2a6bb6750b7041d6a1db39f4af44c811, type: 3}
-  m_Parent: {fileID: 2100000, guid: 79e9a3b9db6d008408bba6efe9b3bed5, type: 2}
+  m_Parent: {fileID: 2100000, guid: 524e43cf26d7a704dbd5ed160aafef13, type: 2}
   m_ModifiedSerializedProperties: 16
   m_ValidKeywords:
   - _SHBAND_SH0
@@ -26,7 +26,6 @@ Material:
     m_TexEnvs: []
     m_Ints: []
     m_Floats:
-    - _SplatCount: 750312
-    - _SplatOffset: 750313
+    - _SplatOffset: 603906
     m_Colors: []
   m_BuildTextureStacks: []

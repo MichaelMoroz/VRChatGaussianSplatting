@@ -7,7 +7,7 @@ Material:
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_Name: stump_main_stochastic
+  m_Name: plush_main_legacy
   m_Shader: {fileID: 4800000, guid: 2a6bb6750b7041d6a1db39f4af44c811, type: 3}
   m_Parent: {fileID: 0}
   m_ModifiedSerializedProperties: 0
@@ -25,11 +25,11 @@ Material:
     serializedVersion: 3
     m_TexEnvs:
     - _GS_Colors:
-        m_Texture: {fileID: 2800000, guid: fe20fd70b61a21e409cef490d9aa3e42, type: 2}
+        m_Texture: {fileID: 2800000, guid: f6605c8410b239d40a71169f4a9e09ef, type: 2}
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
     - _GS_Positions:
-        m_Texture: {fileID: 2800000, guid: 472a5111211007d4089a9bb1db2077e1, type: 2}
+        m_Texture: {fileID: 2800000, guid: 104c153dde9eaca47b058edb91dad75e, type: 2}
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
     - _GS_RenderOrder:
@@ -45,7 +45,7 @@ Material:
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
     - _GS_Rotations:
-        m_Texture: {fileID: 2800000, guid: aa4f29725e8b6014f9007cb8e398ebee, type: 2}
+        m_Texture: {fileID: 2800000, guid: 38f8c52c5f7c40b4f94fca90e6542209, type: 2}
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
     - _GS_SH1:
@@ -109,13 +109,13 @@ Material:
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
     - _GS_Scales:
-        m_Texture: {fileID: 2800000, guid: d37665715119b7c4795faeb933e806cf, type: 2}
+        m_Texture: {fileID: 2800000, guid: f6a88f2a58c1b3b428d8ca9afc6feb75, type: 2}
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
     m_Ints:
     - _PRECOMPUTED_SORTING: 0
     m_Floats:
-    - _ActualSplatCount: 2002225
+    - _ActualSplatCount: 1811716
     - _AlphaCutoff: 0.03
     - _AntiAliasing: 1
     - _Exposure: 1
@@ -125,7 +125,7 @@ Material:
     - _Opacity: 1
     - _SHBand: 0
     - _ScaleCutoff: 100
-    - _SplatCount: 667409
+    - _SplatCount: 603906
     - _SplatOffset: 0
     - _ThinThreshold: 0.005
     m_Colors:

@@ -171,7 +171,7 @@ GameObject:
   - component: {fileID: 50521683}
   - component: {fileID: 50521682}
   m_Layer: 0
-  m_Name: Stochastic Button
+  m_Name: Always Update Button
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -283,7 +283,7 @@ MonoBehaviour:
           m_ObjectArgumentAssemblyTypeName: 
           m_IntArgument: 0
           m_FloatArgument: 0
-          m_StringArgument: SetStochasticRenderMode
+          m_StringArgument: ToggleAlwaysUpdate
           m_BoolArgument: 0
         m_CallState: 2
 --- !u!114 &50521685
@@ -4819,7 +4819,7 @@ MonoBehaviour:
   gaussianScaleText: {fileID: 589142532}
   alphaCutoffText: {fileID: 1493691683}
   sortedModeButton: {fileID: 982919067}
-  stochasticModeButton: {fileID: 50521684}
+  alwaysUpdateButton: {fileID: 50521684}
   splatScrollUpButton: {fileID: 1967391329}
   splatScrollDownButton: {fileID: 1593431793}
   splatButtons:
@@ -6502,7 +6502,7 @@ MonoBehaviour:
     m_HorizontalOverflow: 0
     m_VerticalOverflow: 1
     m_LineSpacing: 1
-  m_Text: Stochastic
+  m_Text: Off
 --- !u!222 &1612334248
 CanvasRenderer:
   m_ObjectHideFlags: 0
