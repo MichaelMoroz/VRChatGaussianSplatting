@@ -72,6 +72,8 @@ Shader "VRChatGaussianSplatting/GaussianSplatting"
         _Opacity ("Opacity", Range(0, 5)) = 1.0
         _OKLCHShift ("OKLCH Color Shift", Vector) = (0, 0, 0, 0) // Shift for OKLCH color space
         _Gamma ("Gamma", Float) = 1.0 
+        [Toggle] _VRC_LIGHT_VOLUMES ("Use VRC Light Volumes", Integer) = 0
+        _LightVolumeIntensity ("Light Volume Intensity", Range(0, 10)) = 1.0
     }
     SubShader
     {

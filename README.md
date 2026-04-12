@@ -17,7 +17,7 @@ Gaussian splatting implementation in VRChat
 9. Add the imported prefabs into the scene
 10. Add the prefabs into the `GaussianSplattingRenderer` object.
     * Optionally you can do this automatically by right clicking the `Gaussian Splat Renderer` component and selecting `Collect Gaussian Splat objects for this renderer`
-    * And you can automatically generate toggles for the splat objects by right clicking and selecting `Generate Gaussian Splat toggles for this renderer`
+    * And you can automatically generate a world-space control canvas by right clicking and selecting `Generate UI`
 11.  Select the number of sorting steps and rendering distance min/max depending on your scene.
 
 > [!TIP]

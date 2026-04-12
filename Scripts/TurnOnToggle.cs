@@ -18,14 +18,31 @@ public class TurnOnToggle : UdonSharpBehaviour
 
     public void Start()
     {
+        if (gaussianSplatRenderer == null)
+        {
+            return;
+        }
+
         GameObject targetObject = gaussianSplatRenderer.GetObjectByIndex(enableObjectIndex);
-        this.InteractionText = targetObject.name;
+        if (targetObject != null)
+        {
+            this.InteractionText = targetObject.name;
+        }
     }
 
     public void SelectObject()
     {
-        Networking.SetOwner(Networking.LocalPlayer, gameObject);
-        Networking.SetOwner(Networking.LocalPlayer, gaussianSplatRenderer.gameObject);
+        if (gaussianSplatRenderer == null)
+        {
+            return;
+        }
+
+        if (Networking.LocalPlayer != null)
+        {
+            Networking.SetOwner(Networking.LocalPlayer, gameObject);
+            Networking.SetOwner(Networking.LocalPlayer, gaussianSplatRenderer.gameObject);
+        }
+
         gaussianSplatRenderer.SetSplatObjectIndex(enableObjectIndex);
     }
 

@@ -6,9 +6,7 @@ namespace GaussianSplatting
     public class GaussianSplatObject : UdonSharpBehaviour
     {
         [SerializeField] public GameObject sortedObject;
-        [SerializeField] public GameObject stochasticObject;
         [SerializeField] public MeshRenderer sortedRenderer;
-        [SerializeField] public MeshRenderer stochasticRenderer;
 
         GameObject ResolveChildObject(GameObject childObject, string childName)
         {
@@ -56,7 +54,7 @@ namespace GaussianSplatting
         public void ShowSorted()
         {
             sortedObject = ResolveChildObject(sortedObject, "Sorted");
-            stochasticObject = ResolveChildObject(stochasticObject, "Stochastic");
+            GameObject stochasticObject = ResolveChildObject(null, "Stochastic");
             if (sortedObject != null)
             {
                 sortedObject.SetActive(true);
@@ -64,20 +62,6 @@ namespace GaussianSplatting
             if (stochasticObject != null)
             {
                 stochasticObject.SetActive(false);
-            }
-        }
-
-        public void ShowStochastic()
-        {
-            sortedObject = ResolveChildObject(sortedObject, "Sorted");
-            stochasticObject = ResolveChildObject(stochasticObject, "Stochastic");
-            if (sortedObject != null)
-            {
-                sortedObject.SetActive(false);
-            }
-            if (stochasticObject != null)
-            {
-                stochasticObject.SetActive(true);
             }
         }
     }

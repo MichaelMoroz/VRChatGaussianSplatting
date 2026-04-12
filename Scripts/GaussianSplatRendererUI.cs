@@ -1,0 +1,268 @@
+using UdonSharp;
+using UnityEngine;
+using UnityEngine.UI;
+
+namespace GaussianSplatting
+{
+
+[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
+public class GaussianSplatRendererUI : UdonSharpBehaviour
+{
+    public GaussianSplatRenderer gaussianSplatRenderer;
+    public Text currentSplatText;
+    public Text gaussianScaleText;
+    public Text alphaCutoffText;
+    public Button splatScrollUpButton;
+    public Button splatScrollDownButton;
+    public Button[] splatButtons;
+    public int[] splatButtonIndices;
+    public string[] splatButtonLabels;
+
+    [SerializeField] float gaussianScaleStep = 0.1f;
+    [SerializeField] float alphaCutoffStep = 0.01f;
+
+    Color _selectedSplatColor = new Color(0.55f, 0.39f, 0.12f, 1.0f);
+    Color _defaultSplatColor = new Color(0.2f, 0.2f, 0.24f, 1.0f);
+    Color _scrollEnabledColor = new Color(0.15f, 0.24f, 0.36f, 1.0f);
+    Color _scrollDisabledColor = new Color(0.1f, 0.1f, 0.12f, 1.0f);
+
+    int _splatListStartIndex;
+
+    void Start()
+    {
+        RefreshUI();
+    }
+
+    void Update()
+    {
+        RefreshUI();
+    }
+
+    string FormatFloat(float value)
+    {
+        float roundedValue = Mathf.Round(value * 100.0f) * 0.01f;
+        return roundedValue.ToString();
+    }
+
+    void SetButtonEnabled(Button button, bool enabled, string label, Color enabledColor, Color disabledColor)
+    {
+        if (button == null)
+        {
+            return;
+        }
+
+        button.gameObject.SetActive(true);
+        button.interactable = enabled;
+        ApplyButtonVisual(button, label, enabled ? enabledColor : disabledColor);
+    }
+
+    void ApplyButtonVisual(Button button, string labelText, Color backgroundColor)
+    {
+        if (button == null)
+        {
+            return;
+        }
+
+        Image image = button.GetComponent<Image>();
+        if (image != null)
+        {
+            image.color = backgroundColor;
+        }
+
+        ColorBlock colors = button.colors;
+        colors.normalColor = backgroundColor;
+        colors.highlightedColor = backgroundColor * 1.1f;
+        colors.pressedColor = backgroundColor * 0.85f;
+        colors.selectedColor = backgroundColor;
+        colors.disabledColor = new Color(backgroundColor.r, backgroundColor.g, backgroundColor.b, 0.4f);
+        button.colors = colors;
+
+        Text label = button.GetComponentInChildren<Text>();
+        if (label != null)
+        {
+            label.text = labelText;
+        }
+    }
+
+    void RefreshSplatButtons()
+    {
+        if (splatButtons == null || splatButtonIndices == null || splatButtonLabels == null)
+        {
+            return;
+        }
+
+        int visibleButtonCount = splatButtons.Length;
+        int totalSplatCount = splatButtonLabels.Length;
+        if (splatButtonIndices.Length < totalSplatCount)
+        {
+            totalSplatCount = splatButtonIndices.Length;
+        }
+
+        if (totalSplatCount == 0)
+        {
+            for (int i = 0; i < visibleButtonCount; i++)
+            {
+                if (splatButtons[i] != null)
+                {
+                    SetButtonEnabled(splatButtons[i], false, "", _defaultSplatColor, _scrollDisabledColor);
+                }
+            }
+
+            SetButtonEnabled(splatScrollUpButton, false, "Up", _scrollEnabledColor, _scrollDisabledColor);
+            SetButtonEnabled(splatScrollDownButton, false, "Down", _scrollEnabledColor, _scrollDisabledColor);
+            return;
+        }
+
+        int maxStartIndex = Mathf.Max(0, totalSplatCount - visibleButtonCount);
+        if (gaussianSplatRenderer.splatObjectIndex < _splatListStartIndex)
+        {
+            _splatListStartIndex = gaussianSplatRenderer.splatObjectIndex;
+        }
+        else if (gaussianSplatRenderer.splatObjectIndex >= _splatListStartIndex + visibleButtonCount)
+        {
+            _splatListStartIndex = gaussianSplatRenderer.splatObjectIndex - visibleButtonCount + 1;
+        }
+        _splatListStartIndex = Mathf.Clamp(_splatListStartIndex, 0, maxStartIndex);
+
+        for (int i = 0; i < visibleButtonCount; i++)
+        {
+            Button slotButton = splatButtons[i];
+            if (slotButton == null)
+            {
+                continue;
+            }
+
+            int splatDataIndex = _splatListStartIndex + i;
+            bool hasSplat = splatDataIndex < totalSplatCount;
+            if (!hasSplat)
+            {
+                SetButtonEnabled(slotButton, false, "", _defaultSplatColor, _scrollDisabledColor);
+                continue;
+            }
+
+            bool isCurrent = gaussianSplatRenderer.splatObjectIndex == splatButtonIndices[splatDataIndex];
+            string label = splatButtonLabels[splatDataIndex];
+            if (isCurrent)
+            {
+                label += " (Current)";
+            }
+
+            SetButtonEnabled(slotButton, true, label, isCurrent ? _selectedSplatColor : _defaultSplatColor, _scrollDisabledColor);
+        }
+
+        SetButtonEnabled(splatScrollUpButton, _splatListStartIndex > 0, "Up", _scrollEnabledColor, _scrollDisabledColor);
+        SetButtonEnabled(splatScrollDownButton, _splatListStartIndex < maxStartIndex, "Down", _scrollEnabledColor, _scrollDisabledColor);
+    }
+
+    void SelectSplatSlot(int slotIndex)
+    {
+        if (gaussianSplatRenderer == null || splatButtonIndices == null)
+        {
+            return;
+        }
+
+        int splatDataIndex = _splatListStartIndex + slotIndex;
+        if (splatDataIndex < 0 || splatDataIndex >= splatButtonIndices.Length)
+        {
+            return;
+        }
+
+        gaussianSplatRenderer.SelectSplatObject(splatButtonIndices[splatDataIndex]);
+        RefreshUI();
+    }
+
+    public void SelectSplatSlot0() { SelectSplatSlot(0); }
+    public void SelectSplatSlot1() { SelectSplatSlot(1); }
+    public void SelectSplatSlot2() { SelectSplatSlot(2); }
+    public void SelectSplatSlot3() { SelectSplatSlot(3); }
+    public void SelectSplatSlot4() { SelectSplatSlot(4); }
+    public void SelectSplatSlot5() { SelectSplatSlot(5); }
+    public void SelectSplatSlot6() { SelectSplatSlot(6); }
+    public void SelectSplatSlot7() { SelectSplatSlot(7); }
+
+    public void ScrollSplatListUp()
+    {
+        _splatListStartIndex = Mathf.Max(0, _splatListStartIndex - 1);
+        RefreshUI();
+    }
+
+    public void ScrollSplatListDown()
+    {
+        int visibleButtonCount = splatButtons == null ? 0 : splatButtons.Length;
+        int totalSplatCount = splatButtonLabels == null ? 0 : splatButtonLabels.Length;
+        int maxStartIndex = Mathf.Max(0, totalSplatCount - visibleButtonCount);
+        _splatListStartIndex = Mathf.Min(maxStartIndex, _splatListStartIndex + 1);
+        RefreshUI();
+    }
+
+    public void RefreshUI()
+    {
+        if (gaussianSplatRenderer == null)
+        {
+            return;
+        }
+
+        if (currentSplatText != null)
+        {
+            currentSplatText.text = "Current Splat: " + gaussianSplatRenderer.GetCurrentSplatName();
+        }
+
+        if (gaussianScaleText != null)
+        {
+            gaussianScaleText.text = FormatFloat(gaussianSplatRenderer.gaussianScale);
+        }
+
+        if (alphaCutoffText != null)
+        {
+            alphaCutoffText.text = FormatFloat(gaussianSplatRenderer.alphaCutoff);
+        }
+
+        RefreshSplatButtons();
+    }
+
+    public void IncreaseGaussianScale()
+    {
+        if (gaussianSplatRenderer == null)
+        {
+            return;
+        }
+
+        gaussianSplatRenderer.SetGaussianScale(gaussianSplatRenderer.gaussianScale + gaussianScaleStep);
+        RefreshUI();
+    }
+
+    public void DecreaseGaussianScale()
+    {
+        if (gaussianSplatRenderer == null)
+        {
+            return;
+        }
+
+        gaussianSplatRenderer.SetGaussianScale(gaussianSplatRenderer.gaussianScale - gaussianScaleStep);
+        RefreshUI();
+    }
+
+    public void IncreaseAlphaCutoff()
+    {
+        if (gaussianSplatRenderer == null)
+        {
+            return;
+        }
+
+        gaussianSplatRenderer.SetAlphaCutoff(gaussianSplatRenderer.alphaCutoff + alphaCutoffStep);
+        RefreshUI();
+    }
+
+    public void DecreaseAlphaCutoff()
+    {
+        if (gaussianSplatRenderer == null)
+        {
+            return;
+        }
+
+        gaussianSplatRenderer.SetAlphaCutoff(gaussianSplatRenderer.alphaCutoff - alphaCutoffStep);
+        RefreshUI();
+    }
+}
+
+}
