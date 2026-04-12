@@ -2,7 +2,6 @@
 #pragma target 5.0
 #pragma exclude_renderers gles
 #pragma shader_feature_local _PRECOMPUTED_SORTING_ON
-#pragma shader_feature_local _SHBAND_SH0 _SHBAND_SH1 _SHBAND_SH2 _SHBAND_SH3
 #pragma shader_feature_local _VRC_LIGHT_VOLUMES_ON
 #pragma vertex vert
 #pragma fragment frag

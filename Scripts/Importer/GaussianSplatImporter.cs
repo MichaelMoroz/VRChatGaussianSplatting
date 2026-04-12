@@ -102,25 +102,6 @@ namespace GaussianSplatting
         static void SetMaterialSHBand(Material material, SHBand band)
         {
             material.SetFloat("_SHBand", (float)band);
-            material.DisableKeyword("_SHBAND_SH0");
-            material.DisableKeyword("_SHBAND_SH1");
-            material.DisableKeyword("_SHBAND_SH2");
-            material.DisableKeyword("_SHBAND_SH3");
-            switch (band)
-            {
-                case SHBand.SH0:
-                    material.EnableKeyword("_SHBAND_SH0");
-                    break;
-                case SHBand.SH1:
-                    material.EnableKeyword("_SHBAND_SH1");
-                    break;
-                case SHBand.SH2:
-                    material.EnableKeyword("_SHBAND_SH2");
-                    break;
-                default:
-                    material.EnableKeyword("_SHBAND_SH3");
-                    break;
-            }
         }
 
         static SHBand ClampDefaultSHBand(SHBand requestedBand, bool[] hasNonZeroBand)

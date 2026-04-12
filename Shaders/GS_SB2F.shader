@@ -62,7 +62,7 @@ Shader "VRChatGaussianSplatting/GaussianSplattingSimpleBackToFront"
         [HideInInspector] _GS_RenderOrderPrecomputed ("Precomputed Render Order", 2DArray) = "" {}
 
         _GaussianMul ("Gaussian Scale", Range(0, 2)) = 1.0
-        [KeywordEnum(SH0,SH1,SH2,SH3)] _SHBand ("SH Band", Float) = 3
+        [Enum(SH0,0,SH1,1,SH2,2,SH3,3)] _SHBand ("SH Band", Float) = 3
         _ThinThreshold ("Thinness Threshold", Range(0, 1)) = 0.005
         _AntiAliasing ("Antialiasing", Range(0, 5.0)) = 1.0
         _Log2MinScale ("Log2 of Minimum Scale", Range(-20, 10)) = -12.0

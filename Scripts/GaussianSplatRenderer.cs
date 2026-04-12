@@ -346,25 +346,6 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
 
         int clampedBand = Mathf.Clamp(band, 0, 3);
         material.SetFloat("_SHBand", clampedBand);
-        material.DisableKeyword("_SHBAND_SH0");
-        material.DisableKeyword("_SHBAND_SH1");
-        material.DisableKeyword("_SHBAND_SH2");
-        material.DisableKeyword("_SHBAND_SH3");
-        switch (clampedBand)
-        {
-            case 0:
-                material.EnableKeyword("_SHBAND_SH0");
-                break;
-            case 1:
-                material.EnableKeyword("_SHBAND_SH1");
-                break;
-            case 2:
-                material.EnableKeyword("_SHBAND_SH2");
-                break;
-            default:
-                material.EnableKeyword("_SHBAND_SH3");
-                break;
-        }
     }
 
     int GetSplatObjectMaxSHBand(GameObject rootObject)
