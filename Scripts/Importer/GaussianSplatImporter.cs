@@ -182,7 +182,7 @@ namespace GaussianSplatting
             SetMaterialSHBand(splatMat, defaultSHBand);
         }
 
-        public static GameObject CreatePrefab(List<Material> materials, Mesh mesh, string assetPath, string name, bool addGaussianSplatObject = true)
+        public static GameObject CreatePrefab(List<Material> materials, Mesh mesh, string assetPath, string name, int maxSHBand = -1, bool addGaussianSplatObject = true)
         {
             var go = new GameObject(name);
             go.transform.SetPositionAndRotation(Vector3.zero, Quaternion.identity);
@@ -195,6 +195,7 @@ namespace GaussianSplatting
             {
                 GaussianSplatObject splatObject = go.AddComponent<GaussianSplatObject>();
                 splatObject.sortedRenderer = meshRenderer;
+                splatObject.SetMaxSHBand(Mathf.Clamp(maxSHBand, 0, 3));
             }
             var prefab = PrefabUtility.SaveAsPrefabAssetAndConnect(go, assetPath, InteractionMode.AutomatedAction);
             GameObject.DestroyImmediate(go); // clean up the temporary GameObject
@@ -551,7 +552,7 @@ namespace GaussianSplatting
                 Mesh pointMesh = PointsMesh.GetMultiPassMesh(indexCounts, topologies, bbox);
                 AssetDatabase.CreateAsset(pointMesh, Path.Combine(outputDataFolder, materialName + "_mesh.asset"));
                 // Create prefab with the splat material and mesh
-                CreatePrefab(materials, pointMesh, prefabOutputPath, materialName);
+                CreatePrefab(materials, pointMesh, prefabOutputPath, materialName, (int)effectiveDefaultSHBand);
                 AssetDatabase.SaveAssets();
             }
             finally

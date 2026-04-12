@@ -7,6 +7,7 @@ namespace GaussianSplatting
     {
         [SerializeField] public GameObject sortedObject;
         [SerializeField] public MeshRenderer sortedRenderer;
+        [SerializeField] int maxShBand = -1;
 
         GameObject ResolveChildObject(GameObject childObject, string childName)
         {
@@ -49,6 +50,73 @@ namespace GaussianSplatting
             sortedObject = ResolveChildObject(sortedObject, "Sorted");
             sortedRenderer = ResolveRenderer(sortedRenderer, sortedObject, "Sorted");
             return sortedRenderer;
+        }
+
+        int InferMaxSHBandFromMaterial(Material material)
+        {
+            if (material == null)
+            {
+                return 0;
+            }
+
+            if (material.HasProperty("_GS_SH9") && material.GetTexture("_GS_SH9") != null)
+            {
+                return 3;
+            }
+
+            if (material.HasProperty("_GS_SH4") && material.GetTexture("_GS_SH4") != null)
+            {
+                return 2;
+            }
+
+            if (material.HasProperty("_GS_SH1") && material.GetTexture("_GS_SH1") != null)
+            {
+                return 1;
+            }
+
+            if (!material.HasProperty("_SHBand"))
+            {
+                return 0;
+            }
+
+            return 0;
+        }
+
+        public int GetMaxSHBand()
+        {
+            MeshRenderer renderer = GetSortedRenderer();
+            if (renderer == null)
+            {
+                return 0;
+            }
+
+            Material[] materials = renderer.sharedMaterials;
+            if (materials == null)
+            {
+                return 0;
+            }
+
+            int inferredMax = 0;
+            for (int i = 0; i < materials.Length; i++)
+            {
+                int materialMax = InferMaxSHBandFromMaterial(materials[i]);
+                if (materialMax > inferredMax)
+                {
+                    inferredMax = materialMax;
+                }
+            }
+
+            if (inferredMax >= 0)
+            {
+                maxShBand = inferredMax;
+            }
+
+            return inferredMax;
+        }
+
+        public void SetMaxSHBand(int value)
+        {
+            maxShBand = Mathf.Clamp(value, 0, 3);
         }
 
         public void ShowSorted()

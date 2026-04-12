@@ -15,8 +15,15 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
     public Text cameraQuantizationText;
     public Text sortingStepsText;
     public Button alwaysUpdateButton;
+    public Slider shBandSlider;
+    public Text shBandText;
     public Button vrcLightVolumesButton;
+    public Slider antiAliasingSlider;
+    public Text antiAliasingText;
+    public Slider lightVolumeIntensitySlider;
+    public Text lightVolumeIntensityText;
     public Text gaussianScaleText;
+    public Slider alphaCutoffSlider;
     public Text alphaCutoffText;
     public Button splatScrollUpButton;
     public Button splatScrollDownButton;
@@ -25,7 +32,6 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
     public string[] splatButtonLabels;
 
     [SerializeField] float gaussianScaleStep = 0.1f;
-    [SerializeField] float alphaCutoffStep = 0.01f;
     [SerializeField] float sortDistanceStep = 5.0f;
     [SerializeField] float cameraQuantizationStep = 0.05f;
 
@@ -37,6 +43,11 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
     Color _toggleDisabledColor = new Color(0.3f, 0.16f, 0.14f, 1.0f);
 
     int _splatListStartIndex;
+    bool _sliderValuesInitialized;
+    float _lastShBandSliderValue;
+    float _lastAntiAliasingSliderValue;
+    float _lastLightVolumeIntensitySliderValue;
+    float _lastAlphaCutoffSliderValue;
 
     void Start()
     {
@@ -200,6 +211,150 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
             bool enabled = gaussianSplatRenderer.GetUseVrcLightVolumes();
             ApplyButtonVisual(vrcLightVolumesButton, enabled ? "On" : "Off", enabled ? _toggleEnabledColor : _toggleDisabledColor);
         }
+
+        SyncShBandSlider();
+        SyncAntiAliasingSlider();
+        SyncLightVolumeIntensitySlider();
+        SyncAlphaCutoffSlider();
+    }
+
+    bool SliderValueChanged(float currentValue, float previousValue)
+    {
+        return Mathf.Abs(currentValue - previousValue) > 0.0001f;
+    }
+
+    void SyncShBandSlider()
+    {
+        if (shBandSlider == null)
+        {
+            return;
+        }
+
+        int maxBand = gaussianSplatRenderer.GetSelectedSplatMaxSHBand();
+        if (!Mathf.Approximately(shBandSlider.maxValue, maxBand))
+        {
+            shBandSlider.maxValue = maxBand;
+        }
+
+        int currentBand = gaussianSplatRenderer.GetCurrentSHBand();
+        if (!_sliderValuesInitialized)
+        {
+            shBandSlider.value = currentBand;
+            _lastShBandSliderValue = currentBand;
+        }
+        else if (SliderValueChanged(currentBand, _lastShBandSliderValue))
+        {
+            shBandSlider.value = currentBand;
+            _lastShBandSliderValue = currentBand;
+        }
+        else if (SliderValueChanged(shBandSlider.value, _lastShBandSliderValue))
+        {
+            gaussianSplatRenderer.SetSHBand(Mathf.RoundToInt(shBandSlider.value));
+            currentBand = gaussianSplatRenderer.GetCurrentSHBand();
+            shBandSlider.value = currentBand;
+            _lastShBandSliderValue = currentBand;
+        }
+
+        if (shBandText != null)
+        {
+            shBandText.text = currentBand.ToString();
+        }
+    }
+
+    void SyncAntiAliasingSlider()
+    {
+        if (antiAliasingSlider == null)
+        {
+            return;
+        }
+
+        float currentValue = gaussianSplatRenderer.GetAntiAliasing();
+        if (!_sliderValuesInitialized)
+        {
+            antiAliasingSlider.value = currentValue;
+            _lastAntiAliasingSliderValue = currentValue;
+        }
+        else if (SliderValueChanged(antiAliasingSlider.value, _lastAntiAliasingSliderValue))
+        {
+            gaussianSplatRenderer.SetAntiAliasing(antiAliasingSlider.value);
+            currentValue = gaussianSplatRenderer.GetAntiAliasing();
+            antiAliasingSlider.value = currentValue;
+            _lastAntiAliasingSliderValue = currentValue;
+        }
+        else if (SliderValueChanged(currentValue, _lastAntiAliasingSliderValue))
+        {
+            antiAliasingSlider.value = currentValue;
+            _lastAntiAliasingSliderValue = currentValue;
+        }
+
+        if (antiAliasingText != null)
+        {
+            antiAliasingText.text = FormatFloat(currentValue);
+        }
+    }
+
+    void SyncLightVolumeIntensitySlider()
+    {
+        if (lightVolumeIntensitySlider == null)
+        {
+            return;
+        }
+
+        float currentValue = gaussianSplatRenderer.GetLightVolumeIntensity();
+        if (!_sliderValuesInitialized)
+        {
+            lightVolumeIntensitySlider.value = currentValue;
+            _lastLightVolumeIntensitySliderValue = currentValue;
+        }
+        else if (SliderValueChanged(lightVolumeIntensitySlider.value, _lastLightVolumeIntensitySliderValue))
+        {
+            gaussianSplatRenderer.SetLightVolumeIntensity(lightVolumeIntensitySlider.value);
+            currentValue = gaussianSplatRenderer.GetLightVolumeIntensity();
+            lightVolumeIntensitySlider.value = currentValue;
+            _lastLightVolumeIntensitySliderValue = currentValue;
+        }
+        else if (SliderValueChanged(currentValue, _lastLightVolumeIntensitySliderValue))
+        {
+            lightVolumeIntensitySlider.value = currentValue;
+            _lastLightVolumeIntensitySliderValue = currentValue;
+        }
+
+        if (lightVolumeIntensityText != null)
+        {
+            lightVolumeIntensityText.text = FormatFloat(currentValue);
+        }
+    }
+
+    void SyncAlphaCutoffSlider()
+    {
+        if (alphaCutoffSlider == null)
+        {
+            return;
+        }
+
+        float currentValue = gaussianSplatRenderer.alphaCutoff;
+        if (!_sliderValuesInitialized)
+        {
+            alphaCutoffSlider.value = currentValue;
+            _lastAlphaCutoffSliderValue = currentValue;
+        }
+        else if (SliderValueChanged(alphaCutoffSlider.value, _lastAlphaCutoffSliderValue))
+        {
+            gaussianSplatRenderer.SetAlphaCutoff(alphaCutoffSlider.value);
+            currentValue = gaussianSplatRenderer.alphaCutoff;
+            alphaCutoffSlider.value = currentValue;
+            _lastAlphaCutoffSliderValue = currentValue;
+        }
+        else if (SliderValueChanged(currentValue, _lastAlphaCutoffSliderValue))
+        {
+            alphaCutoffSlider.value = currentValue;
+            _lastAlphaCutoffSliderValue = currentValue;
+        }
+
+        if (alphaCutoffText != null)
+        {
+            alphaCutoffText.text = FormatFloat(currentValue);
+        }
     }
 
     void SelectSplatSlot(int slotIndex)
@@ -276,6 +431,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         RefreshSortingControls();
         RefreshMaterialControls();
         RefreshSplatButtons();
+        _sliderValuesInitialized = true;
     }
 
     public void IncreaseMinSortDistance()
@@ -410,27 +566,6 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         RefreshUI();
     }
 
-    public void IncreaseAlphaCutoff()
-    {
-        if (gaussianSplatRenderer == null)
-        {
-            return;
-        }
-
-        gaussianSplatRenderer.SetAlphaCutoff(gaussianSplatRenderer.alphaCutoff + alphaCutoffStep);
-        RefreshUI();
-    }
-
-    public void DecreaseAlphaCutoff()
-    {
-        if (gaussianSplatRenderer == null)
-        {
-            return;
-        }
-
-        gaussianSplatRenderer.SetAlphaCutoff(gaussianSplatRenderer.alphaCutoff - alphaCutoffStep);
-        RefreshUI();
-    }
 }
 
 }
