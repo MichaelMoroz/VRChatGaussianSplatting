@@ -213,6 +213,10 @@ Splats are still rendered as projected billboards, but the ellipse projection pa
 
 Instead of relying on emulated double precision, the current implementation uses a more stable float-only ellipse fitting approach built around sampling the projected tangent outline of the ellipsoid and fitting the screen-space ellipse from those samples. The math now includes guarded divisions, bounded intermediate values, and safer normalization paths to keep thin splats stable without the older extended-precision workaround.
 
-This is still an approximation compared with fully perspective-correct Gaussian splatting, but it keeps perspective-correct outlines, stays practical for VRChat, and is much more stable than the older thin-ellipsoid path.
+Compared with normal 3DGS rendering, this avoids the center-Jacobian affine projection approximation entirely. Standard 3DGS uses the Jacobian of a local affine projection around the Gaussian center, which is fast but introduces projection error that shows up as blur, shape drift, and scene inconsistency, especially for larger or more eccentric splats.
+
+Numerically, this projection is intended to recover the same projected ellipse as exact ellipsoid-projection approaches such as "Projecting Gaussian Ellipsoids While Avoiding Affine Projection Approximation" (arXiv:2411.07579v2), rather than being a lower-quality substitute for them. The difference is in how that ellipse is obtained: here it is recovered through a practical float-based outline-sampling fit that stays robust inside VRChat's shader/runtime constraints.
+
+That also gives this approach an important practical advantage: it can naturally extend to distorted camera models as well, instead of being tied only to the standard pinhole-style projection derivation.
 
 Because splats are rendered as billboards, keeping the projected ellipse tight matters a lot for overdraw. The current projection path is aimed at preserving a practical, stable screen-space footprint for the Gaussian while avoiding the numerical instability that showed up on thin ellipsoids in the older implementation.
