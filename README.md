@@ -49,6 +49,17 @@ Gaussian splatting for VRChat worlds, with runtime sorted rendering, standalone 
 - `Max Alpha Mask Count` inserts optional alpha-mask passes between multi-pass chunks to occlude later chunks behind opaque geometry. This can help performance, but grab passes are expensive, so it is a tradeoff.
 - `Precompute Sorting` bakes direction-based order into the imported data so the splat can render standalone, including outside the runtime renderer path, but it uses much more texture memory and can introduce artifacts.
 
+### Exactness of Rendering
+
+For normally trained splats, exact color reproduction requires the color-space transform grab-pass path.
+
+If you turn `sRGB Color Correction` off, there are two important side effects:
+
+1. Rendering order has to fall back to back-to-front blending because there is no grab pass caching the current view color, so the multi-pass optimization path is no longer applicable.
+2. Colors are no longer reproduced exactly. The color conversion still happens per splat, but the blending itself is no longer mathematically valid for the original training color space.
+
+One workaround is to train the splats on images that were already color-converted into inverse sRGB space. Then the splats can be rendered without the runtime color-space conversion path, but you also need to turn off fake sRGB on the material.
+
 ### Runtime Sorted Rendering
 
 Use this path when you want the splat to be camera-sorted at runtime in VRChat:
@@ -118,7 +129,10 @@ The generated UI is intended as a practical in-world control surface, not just a
 > Lower `Alpha Cutoff` keeps more splats and improves quality, but it also increases rendering cost. More `Sorting Steps` improve ordering accuracy, but they also make sorting more expensive.
 
 > [!TIP]
-> `sRGB Color Correction` gives the correct transparency path, but it adds 2 grab passes. For small or performance-constrained splats you may want to disable it, understanding that it no longer will be rendered exactly correctly.
+> `sRGB Color Correction` gives the exact color/compositing path for normally trained splats, but it adds 2 grab passes. Disabling it can be worthwhile for performance, but rendering falls back to back-to-front blending, multi-pass optimization no longer applies, and the blended color is no longer exact unless the splat data was trained for that path.
+
+> [!TIP]
+> `VRC Light Volumes` is a scene-integration control. Leave it off if the splat should stay close to its baked appearance. Turn it on if you want the splat to pick up scene lighting, then tune `Light Volume Intensity` to control how strongly the sampled lighting affects it.
 
 ## Rendering Pipeline
 
@@ -133,6 +147,16 @@ The generated UI is intended as a practical in-world control surface, not just a
   - VRC Light Volumes on/off
   - light volume intensity
 - Game-mode MSAA is disabled by the renderer. Splats should not rely on MSAA for quality or performance.
+
+### VRC Light Volumes
+
+The shader can integrate with VRC Light Volumes through the `VRC Light Volumes (global)` toggle and the `Light Volume Intensity` control.
+
+- When enabled, the splat shader samples VRC Light Volume spherical-harmonic lighting at the splat world position.
+- The sampled lighting is applied to the non-emissive part of the splat color, while values above `1.0` are preserved as emissive.
+- `Light Volume Intensity` scales the contribution of the sampled light volume lighting.
+- This affects shading only. It does not change the sorting path or render-order generation.
+- Some splats look better as mostly self-lit imagery, while others benefit from picking up scene lighting, so this is intentionally exposed as a runtime control.
 
 ### Practical Tips
 
