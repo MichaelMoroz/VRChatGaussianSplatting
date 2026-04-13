@@ -415,7 +415,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
 
         if (currentSplatText != null)
         {
-            currentSplatText.text = "Current Splat: " + gaussianSplatRenderer.GetCurrentSplatName();
+            currentSplatText.text = "Current Splat (global): " + gaussianSplatRenderer.GetCurrentSplatName();
         }
 
         if (gaussianScaleText != null)

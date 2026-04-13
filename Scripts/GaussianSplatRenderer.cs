@@ -51,12 +51,12 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
     public RenderTexture splatRenderOrder;
 
     [Tooltip("If true, the material properties will be overridden with the values set in this script. If false, the material properties will be set to their default values.")]
-    [SerializeField] public bool overrideMaterialProperties = false;
-    [Range(0, 3)] [SerializeField] int requestedSHBand = 3;
-    [Range(0.0f, 2.0f)] [SerializeField] public float gaussianScale = 1.0f;
+    [UdonSynced, SerializeField] public bool overrideMaterialProperties = false;
+    [UdonSynced, Range(0, 3)] [SerializeField] int requestedSHBand = 3;
+    [UdonSynced, Range(0.0f, 2.0f)] [SerializeField] public float gaussianScale = 1.0f;
     [Range(0.0f, 3.0f)] [SerializeField] float antiAliasing = 1.0f;
     [Range(0.005f, 0.1f)] [SerializeField] public float alphaCutoff = 0.03f;
-    [SerializeField] bool useVrcLightVolumes = false;
+    [UdonSynced, SerializeField] bool useVrcLightVolumes = false;
     [Range(0.0f, 4.0f)] [SerializeField] float lightVolumeIntensity = 1.0f;
 
     // [Header("Optional Mirror")]
@@ -65,6 +65,11 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
 
     void ResetCameraPositions()
     {
+        if (_prevCameraPos == null)
+        {
+            return;
+        }
+
         for (int i = 0; i < MAX_CAMERA_COUNT; i++)
         {
             _prevCameraPos[i] = Vector3.positiveInfinity; // Reset to a value that will always trigger an update
@@ -180,7 +185,6 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         splatObject = selectedSplatObject;
         splatObject.SetActive(true);
         ShowSorted(splatObject);
-        requestedSHBand = GetSplatObjectMaxSHBand(splatObject);
         return true;
     }
 
@@ -271,6 +275,9 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         {
             return;
         }
+
+        requestedSHBand = GetSelectedSplatMaxSHBand();
+        ApplyMaterialSettingsToSelectedObject();
     }
 
     public GameObject GetObjectByIndex(int index)
@@ -289,21 +296,36 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         return splatObjects[index];
     }
 
-    public void SelectSplatObject(int index)
+    void EnsureLocalOwnership()
     {
         if (Networking.LocalPlayer != null)
         {
             Networking.SetOwner(Networking.LocalPlayer, gameObject);
         }
+    }
 
+    void RequestSyncedStateUpdate()
+    {
+        if (Networking.LocalPlayer != null)
+        {
+            RequestSerialization();
+        }
+    }
+
+    public void SelectSplatObject(int index)
+    {
+        EnsureLocalOwnership();
         SetSplatObjectIndex(index);
+        RequestSyncedStateUpdate();
     }
 
     public void SetGaussianScale(float value)
     {
+        EnsureLocalOwnership();
         overrideMaterialProperties = true;
         gaussianScale = Mathf.Clamp(value, 0.0f, 2.0f);
         ApplyMaterialSettingsToSelectedObject();
+        RequestSyncedStateUpdate();
     }
 
     public void SetAntiAliasing(float value)
@@ -420,8 +442,10 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
 
     public void SetSHBand(int value)
     {
+        EnsureLocalOwnership();
         requestedSHBand = Mathf.Clamp(value, 0, 3);
         ApplyMaterialSettingsToSelectedObject();
+        RequestSyncedStateUpdate();
     }
 
     void ApplyMaterialSettingsToSelectedObject()
@@ -535,8 +559,10 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
 
     public void SetUseVrcLightVolumes(bool value)
     {
+        EnsureLocalOwnership();
         useVrcLightVolumes = value;
         ApplyMaterialSettingsToSelectedObject();
+        RequestSyncedStateUpdate();
     }
 
     public void ToggleVrcLightVolumes()
@@ -741,6 +767,17 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
 
         Vector3 screenCamPos = VRCCameraSettings.ScreenCamera.Position;
         SortCameras(screenCamPos);
+    }
+
+    public override void OnDeserialization()
+    {
+        ResetCameraPositions();
+        if (!ApplySelectedSplatObject())
+        {
+            return;
+        }
+
+        ApplyMaterialSettingsToSelectedObject();
     }
 
 #if UNITY_EDITOR && !COMPILER_UDONSHARP
@@ -1330,7 +1367,7 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
 
         CreateTextElement("Title", settingsColumn.transform, "VRChatGaussianSplatting", 22, TextAnchor.MiddleLeft, Color.white);
         CreateTextElement("Subtitle", settingsColumn.transform, "Github: https://github.com/MichaelMoroz/VRChatGaussianSplatting\nDeveloped by misha_m", 12, TextAnchor.MiddleLeft, new Color(0.82f, 0.82f, 0.82f, 1.0f));
-        generatedUi.currentSplatText = CreateTextElement("Current Splat", settingsColumn.transform, "Current Splat: None", 16, TextAnchor.MiddleLeft, new Color(0.9f, 0.9f, 0.9f, 1.0f));
+        generatedUi.currentSplatText = CreateTextElement("Current Splat", settingsColumn.transform, "Current Splat (global): None", 16, TextAnchor.MiddleLeft, new Color(0.9f, 0.9f, 0.9f, 1.0f));
 
         CreateTextElement("Sorting Section", settingsColumn.transform, "Sorting Settings", 18, TextAnchor.MiddleLeft, Color.white);
 
@@ -1384,14 +1421,14 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         CreateTextElement("Settings Section", settingsColumn.transform, "Material Settings", 18, TextAnchor.MiddleLeft, Color.white);
 
         GameObject shBandRow = CreateHorizontalGroup("SH Band Row", settingsColumn.transform, 8.0f, false);
-        Text shBandLabel = CreateTextElement("SH Band Label", shBandRow.transform, "SH Band", 16, TextAnchor.MiddleLeft, Color.white);
+        Text shBandLabel = CreateTextElement("SH Band Label", shBandRow.transform, "SH Band (global)", 16, TextAnchor.MiddleLeft, Color.white);
         SetPreferredWidth(shBandLabel.gameObject, 210.0f, 0.0f);
         generatedUi.shBandSlider = CreateSliderElement("SH Band Slider", shBandRow.transform, 0.0f, 3.0f, true);
         generatedUi.shBandText = CreateTextElement("SH Band Value", shBandRow.transform, "3", 16, TextAnchor.MiddleCenter, new Color(0.95f, 0.95f, 0.95f, 1.0f));
         SetPreferredWidth(generatedUi.shBandText.gameObject, 72.0f, 0.0f);
 
         GameObject vrcLightVolumesRow = CreateHorizontalGroup("VRC Light Volumes Row", settingsColumn.transform, 8.0f, false);
-        Text vrcLightVolumesLabel = CreateTextElement("VRC Light Volumes Label", vrcLightVolumesRow.transform, "VRC Light Volumes", 16, TextAnchor.MiddleLeft, Color.white);
+        Text vrcLightVolumesLabel = CreateTextElement("VRC Light Volumes Label", vrcLightVolumesRow.transform, "VRC Light Volumes (global)", 16, TextAnchor.MiddleLeft, Color.white);
         SetPreferredWidth(vrcLightVolumesLabel.gameObject, 210.0f, 1.0f);
         Button vrcLightVolumesButton = CreateButtonElement("VRC Light Volumes Button", vrcLightVolumesRow.transform, "Off", new Color(0.3f, 0.16f, 0.14f, 1.0f), 72.0f, 0.0f);
         generatedUi.vrcLightVolumesButton = vrcLightVolumesButton;
@@ -1412,7 +1449,7 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         SetPreferredWidth(generatedUi.antiAliasingText.gameObject, 72.0f, 0.0f);
 
         GameObject gaussianScaleRow = CreateHorizontalGroup("Gaussian Scale Row", settingsColumn.transform, 8.0f, false);
-        Text gaussianScaleLabel = CreateTextElement("Gaussian Scale Label", gaussianScaleRow.transform, "Gaussian Scale", 16, TextAnchor.MiddleLeft, Color.white);
+        Text gaussianScaleLabel = CreateTextElement("Gaussian Scale Label", gaussianScaleRow.transform, "Gaussian Scale (global)", 16, TextAnchor.MiddleLeft, Color.white);
         SetPreferredWidth(gaussianScaleLabel.gameObject, 210.0f, 1.0f);
         Button gaussianScaleDownButton = CreateButtonElement("Gaussian Scale Down", gaussianScaleRow.transform, "-", new Color(0.45f, 0.24f, 0.18f, 1.0f), 42.0f, 0.0f);
         generatedUi.gaussianScaleText = CreateTextElement("Gaussian Scale Value", gaussianScaleRow.transform, "1", 16, TextAnchor.MiddleCenter, new Color(0.95f, 0.95f, 0.95f, 1.0f));
@@ -1434,7 +1471,7 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         const float splatScrollButtonHeight = 38.0f;
         const float splatSlotButtonHeight = 42.0f;
 
-        CreateTextElement("Splat Section", splatColumn.transform, "Splat Selection", 18, TextAnchor.MiddleLeft, Color.white);
+        CreateTextElement("Splat Section", splatColumn.transform, "Splat Selection (global)", 18, TextAnchor.MiddleLeft, Color.white);
         GameObject splatListPanel = CreateVerticalGroup("Splat List Panel", splatColumn.transform, new RectOffset(8, 8, 8, 8), 8.0f, TextAnchor.UpperLeft);
         Image splatListPanelImage = splatListPanel.AddComponent<Image>();
         splatListPanelImage.color = new Color(0.09f, 0.09f, 0.11f, 1.0f);

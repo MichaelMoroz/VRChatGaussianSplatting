@@ -35,7 +35,7 @@ Material:
     m_Floats:
     - _BitsPerStep: 4
     - _CurrentBit: 12
-    - _ElementCount: 2002225
+    - _ElementCount: 1000000
     - _GroupSize: 4
     - _ImageSizeLog2: 11
     m_Colors: []
