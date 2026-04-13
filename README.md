@@ -1,5 +1,7 @@
 # VRChat Gaussian Splatting
 
+![Example Scene View](image.png)
+
 Gaussian splatting for VRChat worlds, with runtime sorted rendering, standalone precomputed imports, and automatic editor Scene view sorting.
 
 ## Current Features
