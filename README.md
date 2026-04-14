@@ -64,7 +64,7 @@ One workaround is to train the splats on images that were already color-converte
 
 ### Runtime Sorted Rendering
 
-Use this path when you want the splat to be camera-sorted at runtime in VRChat:
+Use this path when you want the splat to be camera-sorted at runtime in VRChat worlds (uses Udon):
 
 1. Add a `GaussianSplatRenderer` to the scene.
 2. Add imported splat prefabs to its `splatObjects` list.
@@ -76,7 +76,7 @@ Use this path when you want the splat to be camera-sorted at runtime in VRChat:
 
 ### Standalone Precomputed Sorting
 
-Use `Precompute Sorting` in the importer when you want a splat to render without `GaussianSplatRenderer`.
+Use `Precompute Sorting` in the importer when you want a splat to render without `GaussianSplatRenderer` - for avatars or in general outside of VRChat.
 
 - This path bakes direction-based render order into the imported material data.
 - It is a standalone import mode.
