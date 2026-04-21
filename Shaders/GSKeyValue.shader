@@ -19,7 +19,6 @@ Shader "VRChatGaussianSplatting/ComputeKeyValue" {
             #include "../RadixSort/RadixSort.cginc"
             #include "GSData.cginc"
 
-            float4x4 _SplatToWorld;
             float3 _CameraPos;
 
             uint float_to_ordered_uint(float value)
@@ -30,8 +29,7 @@ Shader "VRChatGaussianSplatting/ComputeKeyValue" {
 
             uint ComputeD(uint id) {
                 SplatData splat = LoadSplatData(id);
-                float3 splat_pos = mul(_SplatToWorld, float4(splat.mean, 1.0)).xyz;
-                float dist = length(_CameraPos - splat_pos);
+                float dist = length(_CameraPos - splat.mean);
                 if(isnan(dist) || isinf(dist)) {
                     return 0xFFFFFFFFu;
                 }

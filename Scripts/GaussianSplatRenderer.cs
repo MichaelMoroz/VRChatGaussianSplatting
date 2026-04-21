@@ -714,8 +714,12 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         _radixSort.elementCount = positions.width * positions.height;
         keyValueMat = _radixSort.computeKeyValues;
         keyValueMat.SetTexture("_GS_Positions", positions);
-        keyValueMat.SetMatrix("_SplatToWorld", _sortedRenderer.transform.localToWorldMatrix);
         return true;
+    }
+
+    Vector3 WorldToSplatObjectPosition(Vector3 worldPosition)
+    {
+        return _sortedRenderer.transform.InverseTransformPoint(worldPosition);
     }
 
     int GetSortSubpassBudget()
@@ -749,7 +753,7 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
             return false;
         }
 
-        keyValueMat.SetVector("_CameraPos", _pendingCameraWorldPos[cameraID]);
+        keyValueMat.SetVector("_CameraPos", WorldToSplatObjectPosition(_pendingCameraWorldPos[cameraID]));
         _radixSort.BeginSort();
         _activeSortCameraId = cameraID;
         _activeSortQuantizedPos = _pendingCameraPos[cameraID];
@@ -811,7 +815,7 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
     void RunBlockingSort(Vector3 cameraPos, int cameraID)
     {
         Vector3 quantizedPos = QuantizePosition(cameraPos);
-        keyValueMat.SetVector("_CameraPos", cameraPos);
+        keyValueMat.SetVector("_CameraPos", WorldToSplatObjectPosition(cameraPos));
         _radixSort.BeginSort();
         _activeSortCameraId = cameraID;
         _activeSortQuantizedPos = quantizedPos;

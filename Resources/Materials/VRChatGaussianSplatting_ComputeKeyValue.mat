@@ -31,12 +31,6 @@ Material:
     m_Floats:
     - _CameraPosQuantization: 0.075
     - _ElementCount: 2002225
-    - _KeyScale: 65535
     m_Colors:
     - _CameraPos: {r: -1.9233884, g: 1.1488361, b: 1.7037393, a: 0}
-    - _MinMaxSortDistance: {r: 0, g: 350, b: 0, a: 0}
-    - _SplatToWorld0: {r: 0, g: 0, b: 0, a: 0}
-    - _SplatToWorld1: {r: 0, g: 0, b: 0, a: 0}
-    - _SplatToWorld2: {r: 0, g: 0, b: 0, a: 0}
-    - _SplatToWorld3: {r: 0, g: 0, b: 0, a: 0}
   m_BuildTextureStacks: []
