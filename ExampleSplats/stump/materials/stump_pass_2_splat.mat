@@ -11,8 +11,7 @@ Material:
   m_Shader: {fileID: 4800000, guid: f531a645849e0b067b8b09de4f72f60d, type: 3}
   m_Parent: {fileID: 2100000, guid: 4130ceebf03547d4eb3408f0ff719fba, type: 2}
   m_ModifiedSerializedProperties: 16
-  m_ValidKeywords:
-  - _SHBAND_SH0
+  m_ValidKeywords: []
   m_InvalidKeywords: []
   m_LightmapFlags: 4
   m_EnableInstancingVariants: 0
@@ -26,7 +25,7 @@ Material:
     m_TexEnvs: []
     m_Ints: []
     m_Floats:
-    - _SplatCount: 667407
-    - _SplatOffset: 1334818
+    - _SplatCount: 666665
+    - _SplatOffset: 1333334
     m_Colors: []
   m_BuildTextureStacks: []

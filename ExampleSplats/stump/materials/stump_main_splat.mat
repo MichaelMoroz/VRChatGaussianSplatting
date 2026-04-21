@@ -11,8 +11,7 @@ Material:
   m_Shader: {fileID: 4800000, guid: f531a645849e0b067b8b09de4f72f60d, type: 3}
   m_Parent: {fileID: 0}
   m_ModifiedSerializedProperties: 0
-  m_ValidKeywords:
-  - _SHBAND_SH0
+  m_ValidKeywords: []
   m_InvalidKeywords: []
   m_LightmapFlags: 4
   m_EnableInstancingVariants: 0
@@ -114,18 +113,20 @@ Material:
         m_Offset: {x: 0, y: 0}
     m_Ints:
     - _PRECOMPUTED_SORTING: 0
+    - _VRC_LIGHT_VOLUMES: 0
     m_Floats:
-    - _ActualSplatCount: 2002225
+    - _ActualSplatCount: 1999999
     - _AlphaCutoff: 0.03
     - _AntiAliasing: 1
     - _Exposure: 1
     - _Gamma: 1
     - _GaussianMul: 1
+    - _LightVolumeIntensity: 1
     - _Log2MinScale: -12
     - _Opacity: 1
     - _SHBand: 0
     - _ScaleCutoff: 100
-    - _SplatCount: 667409
+    - _SplatCount: 666667
     - _SplatOffset: 0
     - _ThinThreshold: 0.005
     m_Colors:
@@ -159,7 +160,6 @@ Material:
     - _GS_SHE_Range: {r: 1, g: 1, b: 1, a: 0}
     - _GS_SHF_Min: {r: 0, g: 0, b: 0, a: 0}
     - _GS_SHF_Range: {r: 1, g: 1, b: 1, a: 0}
-    - _MinMaxSortDistance: {r: 0, g: 0, b: 0, a: 0}
     - _MirrorCameraPos: {r: 0, g: 0, b: 0, a: 0}
     - _OKLCHShift: {r: 0, g: 0, b: 0, a: 0}
   m_BuildTextureStacks: []
