@@ -43,7 +43,7 @@ Shader "Misha/RadixSort"
                 uint mask = ((1u << _BitsPerStep) - 1u);
                 for(int i = 0; i < groupElements; i++) {
                     uint2 groupPixel = IndexToUV(keyIndex + i);
-                    uint key = _KeyValues[groupPixel].y;
+                    uint key = asuint(_KeyValues[groupPixel].y);
                     uint digit = (key >> _CurrentBit) & mask;
                     count += uint(digit == digitIndex);
                 }
@@ -91,7 +91,7 @@ Shader "Misha/RadixSort"
                 for(int i = 0; i < groupElements; i++) {
                     uint2 groupPixel = IndexToUV(keyIndex + i);
                     keyValue = _KeyValues[groupPixel];
-                    uint key = uint(keyValue.y);
+                    uint key = asuint(keyValue.y);
                     uint digit = (key >> _CurrentBit) & mask;
                     count += uint(digit == digitIndex);
                     if(count > index) break;
@@ -101,5 +101,6 @@ Shader "Misha/RadixSort"
             }
             ENDCG
         }
+
     }
 }

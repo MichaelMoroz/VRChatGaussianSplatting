@@ -54,7 +54,6 @@ Shader "VRChatGaussianSplatting/GaussianSplattingSimpleBackToFront"
         [HideInInspector] _GS_RenderOrder ("Rendering Orders", 2DArray) = "" {}
         [HideInInspector] _GS_RenderOrderMirror ("Rendering Order Mirror", 2D) = "" {}
         [HideInInspector] _MirrorCameraPos ("Mirror Camera Position", Vector) = (0, 0, 0, 0)
-        [HideInInspector] _MinMaxSortDistance ("Min Max Distance", Vector) = (0, 0, 0, 0)
         [HideInInspector] _SplatCount ("Splat Count", Int) = 0
         [HideInInspector] _ActualSplatCount ("Actual Splat Count", Int) = 0
         [HideInInspector] _SplatOffset ("Splat Offset", Int) = 0

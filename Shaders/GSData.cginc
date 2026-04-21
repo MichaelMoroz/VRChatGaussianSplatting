@@ -29,7 +29,6 @@ float _Gamma;
 float _Opacity;
 float _SHBand;
 float _ScaleCutoff;
-float2 _MinMaxSortDistance;
 int _SplatCount;
 int _ActualSplatCount;
 int _SplatOffset;
@@ -250,7 +249,7 @@ SplatData LoadSplatDataRenderOrder(uint id) {
             //reordered_id = _GS_RenderOrderMirror[coord1];
         } else {
             uint slice = (_VRChatCameraMode > 0);
-            reordered_id = _GS_RenderOrder[uint3(coord1, slice)];
+            reordered_id = (uint)_GS_RenderOrder[uint3(coord1, slice)];
         }
     } else {
         reordered_id = pcg(reordered_id) % _ActualSplatCount; // randomize order for alpha blending to somewhat work

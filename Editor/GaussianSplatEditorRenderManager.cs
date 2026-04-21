@@ -10,11 +10,10 @@ namespace GaussianSplatting.Editor
     [InitializeOnLoad]
     static class GaussianSplatEditorRenderManager
     {
-        const float MinSortDistance = 0.0f;
-        const float MaxSortDistance = 150.0f;
         const float CameraPositionQuantization = 0.1f;
-        const int SortingSteps = 4;
         const int BitsPerPass = 4;
+        const int TotalSortPasses = 8;
+        const int MaxKeyBits = BitsPerPass * TotalSortPasses;
         const int GroupSizeLog2 = 4;
 
         static readonly Dictionary<int, GaussianSplatEditorRenderState> States = new Dictionary<int, GaussianSplatEditorRenderState>();
@@ -22,12 +21,10 @@ namespace GaussianSplatting.Editor
 
         static readonly int GSPositionsId = Shader.PropertyToID("_GS_Positions");
         static readonly int GSRenderOrderId = Shader.PropertyToID("_GS_RenderOrder");
-        static readonly int MinMaxSortDistanceId = Shader.PropertyToID("_MinMaxSortDistance");
         static readonly int GaussianMulId = Shader.PropertyToID("_GaussianMul");
         static readonly int AlphaCutoffId = Shader.PropertyToID("_AlphaCutoff");
         static readonly int SplatToWorldId = Shader.PropertyToID("_SplatToWorld");
         static readonly int CameraPosId = Shader.PropertyToID("_CameraPos");
-        static readonly int KeyScaleId = Shader.PropertyToID("_KeyScale");
         static readonly int PrefixSumsId = Shader.PropertyToID("_PrefixSums");
         static readonly int KeyValuesId = Shader.PropertyToID("_KeyValues");
         static readonly int CurrentBitId = Shader.PropertyToID("_CurrentBit");
@@ -252,7 +249,6 @@ namespace GaussianSplatting.Editor
             RenderTexture _renderOrder;
             Vector3 _previousLocalCameraPosition = Vector3.positiveInfinity;
             int _elementCount;
-            int _maxKeyBits;
             int _imageSizeX;
             int _imageSizeY;
             MaterialPropertyBlock[] _originalPropertyBlocks;
@@ -293,7 +289,6 @@ namespace GaussianSplatting.Editor
                 }
 
                 _elementCount = positions.width * positions.height;
-                _maxKeyBits = SortingSteps * BitsPerPass;
                 ComputeImageSize(_elementCount, out _imageSizeX, out _imageSizeY);
 
                 EnsureMaterials();
@@ -326,7 +321,7 @@ namespace GaussianSplatting.Editor
                 Graphics.Blit(null, _keyValues0, _computeKeyValues);
 
                 _radixSort.SetTexture(PrefixSumsId, _prefixSums);
-                for (int bit = 0; bit < _maxKeyBits; bit += BitsPerPass)
+                for (int bit = 0; bit < MaxKeyBits; bit += BitsPerPass)
                 {
                     _radixSort.SetTexture(KeyValuesId, _keyValues0);
                     _radixSort.SetInt(CurrentBitId, bit);
@@ -463,7 +458,7 @@ namespace GaussianSplatting.Editor
                     _prefixSums = null;
                 }
 
-                if (_renderOrder != null && (_renderOrder.width != _imageSizeX || _renderOrder.height != _imageSizeY))
+                if (_renderOrder != null && (_renderOrder.width != _imageSizeX || _renderOrder.height != _imageSizeY || _renderOrder.dimension != TextureDimension.Tex2DArray || _renderOrder.volumeDepth < 2))
                 {
                     SafeDestroy(_renderOrder);
                     _renderOrder = null;
@@ -528,10 +523,7 @@ namespace GaussianSplatting.Editor
                     return;
                 }
 
-                Vector4 minMaxSortDistance = new Vector4(MinSortDistance, MaxSortDistance, 0.0f, 0.0f);
                 _computeKeyValues.SetTexture(GSPositionsId, positions);
-                _computeKeyValues.SetVector(MinMaxSortDistanceId, minMaxSortDistance);
-                _computeKeyValues.SetFloat(KeyScaleId, (float)((1 << _maxKeyBits) - 1));
             }
 
             void CopySortedOrder()
@@ -544,9 +536,12 @@ namespace GaussianSplatting.Editor
                 _copyRenderOrder.SetTexture(MainTexId, _keyValues0);
 
                 RenderTexture active = RenderTexture.active;
-                Graphics.SetRenderTarget(_renderOrder, 0, CubemapFace.Unknown, 0);
-                GL.Clear(false, true, Color.clear);
-                DrawFullscreenQuad(_copyRenderOrder);
+                for (int slice = 0; slice < 2; slice++)
+                {
+                    Graphics.SetRenderTarget(_renderOrder, 0, CubemapFace.Unknown, slice);
+                    GL.Clear(false, true, Color.clear);
+                    DrawFullscreenQuad(_copyRenderOrder);
+                }
                 RenderTexture.active = active;
             }
 
@@ -563,7 +558,6 @@ namespace GaussianSplatting.Editor
                     return;
                 }
 
-                Vector4 minMaxSortDistance = new Vector4(MinSortDistance, MaxSortDistance, 0.0f, 0.0f);
                 float gaussianMul = _sourceMaterial.HasProperty(GaussianMulId) ? _sourceMaterial.GetFloat(GaussianMulId) : 1.0f;
                 float alphaCutoff = _sourceMaterial.HasProperty(AlphaCutoffId) ? _sourceMaterial.GetFloat(AlphaCutoffId) : 0.03f;
 
@@ -577,7 +571,6 @@ namespace GaussianSplatting.Editor
 
                     _renderer.GetPropertyBlock(_propertyBlock, materialIndex);
                     _propertyBlock.SetTexture(GSRenderOrderId, _renderOrder);
-                    _propertyBlock.SetVector(MinMaxSortDistanceId, minMaxSortDistance);
                     if (sharedMaterial.HasProperty(GaussianMulId))
                     {
                         _propertyBlock.SetFloat(GaussianMulId, gaussianMul);

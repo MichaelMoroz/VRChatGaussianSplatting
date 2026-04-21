@@ -10,8 +10,6 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
 {
     public GaussianSplatRenderer gaussianSplatRenderer;
     public Text currentSplatText;
-    public Text minSortDistanceText;
-    public Text maxSortDistanceText;
     public Text cameraQuantizationText;
     public Text sortingStepsText;
     public Button alwaysUpdateButton;
@@ -32,7 +30,6 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
     public string[] splatButtonLabels;
 
     [SerializeField] float gaussianScaleStep = 0.1f;
-    [SerializeField] float sortDistanceStep = 5.0f;
     [SerializeField] float cameraQuantizationStep = 0.05f;
 
     Color _selectedSplatColor = new Color(0.55f, 0.39f, 0.12f, 1.0f);
@@ -177,16 +174,6 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
 
     void RefreshSortingControls()
     {
-        if (minSortDistanceText != null)
-        {
-            minSortDistanceText.text = FormatFloat(gaussianSplatRenderer.GetMinSortDistance());
-        }
-
-        if (maxSortDistanceText != null)
-        {
-            maxSortDistanceText.text = FormatFloat(gaussianSplatRenderer.GetMaxSortDistance());
-        }
-
         if (cameraQuantizationText != null)
         {
             cameraQuantizationText.text = FormatFloat(gaussianSplatRenderer.GetCameraPositionQuantization());
@@ -194,7 +181,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
 
         if (sortingStepsText != null)
         {
-            sortingStepsText.text = gaussianSplatRenderer.GetSortingSteps().ToString();
+            sortingStepsText.text = gaussianSplatRenderer.GetSortPipelineFrames().ToString();
         }
 
         if (alwaysUpdateButton != null)
@@ -436,46 +423,18 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
 
     public void IncreaseMinSortDistance()
     {
-        if (gaussianSplatRenderer == null)
-        {
-            return;
-        }
-
-        gaussianSplatRenderer.SetMinSortDistance(gaussianSplatRenderer.GetMinSortDistance() + sortDistanceStep);
-        RefreshUI();
     }
 
     public void DecreaseMinSortDistance()
     {
-        if (gaussianSplatRenderer == null)
-        {
-            return;
-        }
-
-        gaussianSplatRenderer.SetMinSortDistance(gaussianSplatRenderer.GetMinSortDistance() - sortDistanceStep);
-        RefreshUI();
     }
 
     public void IncreaseMaxSortDistance()
     {
-        if (gaussianSplatRenderer == null)
-        {
-            return;
-        }
-
-        gaussianSplatRenderer.SetMaxSortDistance(gaussianSplatRenderer.GetMaxSortDistance() + sortDistanceStep);
-        RefreshUI();
     }
 
     public void DecreaseMaxSortDistance()
     {
-        if (gaussianSplatRenderer == null)
-        {
-            return;
-        }
-
-        gaussianSplatRenderer.SetMaxSortDistance(gaussianSplatRenderer.GetMaxSortDistance() - sortDistanceStep);
-        RefreshUI();
     }
 
     public void IncreaseCameraQuantization()
@@ -507,7 +466,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
             return;
         }
 
-        gaussianSplatRenderer.SetSortingSteps(gaussianSplatRenderer.GetSortingSteps() + 1);
+        gaussianSplatRenderer.SetSortPipelineFrames(gaussianSplatRenderer.GetSortPipelineFrames() + 1);
         RefreshUI();
     }
 
@@ -518,7 +477,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
             return;
         }
 
-        gaussianSplatRenderer.SetSortingSteps(gaussianSplatRenderer.GetSortingSteps() - 1);
+        gaussianSplatRenderer.SetSortPipelineFrames(gaussianSplatRenderer.GetSortPipelineFrames() - 1);
         RefreshUI();
     }
 

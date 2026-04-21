@@ -23,8 +23,18 @@ namespace GaussianSplatting
 [UdonBehaviourSyncMode(BehaviourSyncMode.Continuous)]
 public class GaussianSplatRenderer : UdonSharpBehaviour
 {
-    const int MAX_CAMERA_COUNT = 3; // Screen camera + Photo camera + Mirror camera
-    private Vector3[] _prevCameraPos;
+    const int MAX_CAMERA_COUNT = 2; // Screen camera + Photo camera
+    const int SCREEN_CAMERA_ID = 0;
+    const int PHOTO_CAMERA_ID = 1;
+    const int NO_ACTIVE_SORT = -1;
+
+    private Vector3[] _completedCameraPos;
+    private Vector3[] _pendingCameraPos;
+    private Vector3[] _pendingCameraWorldPos;
+    private bool[] _hasCompletedSort;
+    private bool[] _hasPendingSort;
+    private int _activeSortCameraId = NO_ACTIVE_SORT;
+    private Vector3 _activeSortQuantizedPos = Vector3.positiveInfinity;
     private RadixSort _radixSort;
     private MeshRenderer _sortedRenderer;
     private Material keyValueMat;
@@ -37,17 +47,13 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
     public GameObject[] splatObjects;
 
     [Header("Render Settings")]
-    [Tooltip("Minimum distance for sorting splats. Splat positions closer than this will not be sorted. The smaller the minmax range the more accurate the sorting")]
-    [SerializeField] float minSortDistance = 0.0f;
-    [Tooltip("Maximum distance for sorting splats. Splat positions further than this will not be sorted. The smaller the minmax range the more accurate the sorting")]
-    [SerializeField] float maxSortDistance = 150.0f;
     [Tooltip("Quantization of camera position to avoid unnecessary updates and jitter. Set to 0 to disable. Default is 10 cm.")]
     [SerializeField] float cameraPositionQuantization = 0.1f;
     [Tooltip("If true, the splat render order will be updated every frame. Useful for animated splats. If false, it will only update when the camera position changes.")]
     [SerializeField] bool alwaysUpdate = false;
-    [Tooltip("Number of sorting steps for the radix sort. The more steps the more bits of the distance can be sorted, so the render order is more accurate. The fewer steps the faster the sorting, so it is a tradeoff between performance and accuracy. Default is 16 bits, which is 4 sorting steps.")]
-    [Range(2, 8)] [SerializeField] int sortingSteps = 4;
-    [Tooltip("Render texture used to store the sorted splat render order. This should be a RenderTexture with the same dimensions as the sorting textures used in the radix sort.")]
+    [Tooltip("Number of frames used to pipeline the 8 radix sort subpasses. 1 sorts fully in one frame; 8 runs one subpass per frame.")]
+    [Range(1, 8)] [SerializeField] int sortPipelineFrames = 2;
+    [Tooltip("Render texture array used to store sorted splat render order. Slice 0 is screen, slice 1 is photo.")]
     public RenderTexture splatRenderOrder;
 
     [Tooltip("If true, the material properties will be overridden with the values set in this script. If false, the material properties will be set to their default values.")]
@@ -65,14 +71,25 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
 
     void ResetCameraPositions()
     {
-        if (_prevCameraPos == null)
+        if (_completedCameraPos == null || _pendingCameraPos == null || _pendingCameraWorldPos == null || _hasCompletedSort == null || _hasPendingSort == null)
         {
             return;
         }
 
         for (int i = 0; i < MAX_CAMERA_COUNT; i++)
         {
-            _prevCameraPos[i] = Vector3.positiveInfinity; // Reset to a value that will always trigger an update
+            _completedCameraPos[i] = Vector3.positiveInfinity;
+            _pendingCameraPos[i] = Vector3.positiveInfinity;
+            _pendingCameraWorldPos[i] = Vector3.positiveInfinity;
+            _hasCompletedSort[i] = false;
+            _hasPendingSort[i] = false;
+        }
+
+        _activeSortCameraId = NO_ACTIVE_SORT;
+        _activeSortQuantizedPos = Vector3.positiveInfinity;
+        if (_radixSort != null)
+        {
+            _radixSort.CancelSort();
         }
     }
 
@@ -492,28 +509,6 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         }
     }
 
-    public float GetMinSortDistance()
-    {
-        return minSortDistance;
-    }
-
-    public void SetMinSortDistance(float value)
-    {
-        minSortDistance = Mathf.Clamp(value, 0.0f, maxSortDistance);
-        ResetCameraPositions();
-    }
-
-    public float GetMaxSortDistance()
-    {
-        return maxSortDistance;
-    }
-
-    public void SetMaxSortDistance(float value)
-    {
-        maxSortDistance = Mathf.Max(value, minSortDistance);
-        ResetCameraPositions();
-    }
-
     public float GetCameraPositionQuantization()
     {
         return cameraPositionQuantization;
@@ -525,15 +520,25 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         ResetCameraPositions();
     }
 
+    public int GetSortPipelineFrames()
+    {
+        return sortPipelineFrames;
+    }
+
+    public void SetSortPipelineFrames(int value)
+    {
+        sortPipelineFrames = Mathf.Clamp(value, 1, 8);
+        ResetCameraPositions();
+    }
+
     public int GetSortingSteps()
     {
-        return sortingSteps;
+        return GetSortPipelineFrames();
     }
 
     public void SetSortingSteps(int value)
     {
-        sortingSteps = Mathf.Clamp(value, 2, 8);
-        ResetCameraPositions();
+        SetSortPipelineFrames(value);
     }
 
     public bool GetAlwaysUpdate()
@@ -624,7 +629,11 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
             return;
         }
 
-        _prevCameraPos = new Vector3[MAX_CAMERA_COUNT];
+        _completedCameraPos = new Vector3[MAX_CAMERA_COUNT];
+        _pendingCameraPos = new Vector3[MAX_CAMERA_COUNT];
+        _pendingCameraWorldPos = new Vector3[MAX_CAMERA_COUNT];
+        _hasCompletedSort = new bool[MAX_CAMERA_COUNT];
+        _hasPendingSort = new bool[MAX_CAMERA_COUNT];
         ResetCameraPositions();
         InitializeSplatObject();
         DisableMsaaInGame();
@@ -656,13 +665,11 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         }
 
         Material[] splatMats = _sortedRenderer.materials;
-        Vector4 minMaxSortDistance = new Vector4(minSortDistance, maxSortDistance, 0, 0);
         int currentSHBand = GetCurrentSHBand();
         for (int i = 0; i < splatMats.Length; i++)
         {
             Material splatMat = splatMats[i];
             splatMat.SetTexture("_GS_RenderOrder", splatRenderOrder);
-            splatMat.SetVector("_MinMaxSortDistance", minMaxSortDistance);
             SetMaterialSHBand(splatMat, currentSHBand);
             SetMaterialVrcLightVolumes(splatMat, useVrcLightVolumes);
             if (splatMat.HasProperty("_LightVolumeIntensity"))
@@ -698,29 +705,118 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
             positions = splatMats[0].GetTexture("_GS_Positions");
         }
 
+        if (positions == null)
+        {
+            Debug.LogError($"No _GS_Positions texture found on {splatObject.name}.");
+            return false;
+        }
+
         _radixSort.elementCount = positions.width * positions.height;
-        _radixSort.maxKeyBits = sortingSteps * 4; // Each sorting step sorts 4 bits, so total bits = steps * 4
         keyValueMat = _radixSort.computeKeyValues;
         keyValueMat.SetTexture("_GS_Positions", positions);
-        keyValueMat.SetVector("_MinMaxSortDistance", minMaxSortDistance);
-        keyValueMat.SetFloat("_KeyScale", (float)((1 << (sortingSteps * 4)) - 1));
         keyValueMat.SetMatrix("_SplatToWorld", _sortedRenderer.transform.localToWorldMatrix);
         return true;
     }
 
-    bool SortCamera(Vector3 cameraPos, int cameraID, bool forceUpdate = false)
+    int GetSortSubpassBudget()
+    {
+        return Mathf.CeilToInt((float)RadixSort.TotalSortPasses / Mathf.Clamp(sortPipelineFrames, 1, RadixSort.TotalSortPasses));
+    }
+
+    void RequestCameraSort(Vector3 cameraPos, int cameraID, bool forceUpdate)
     {
         Vector3 quantizedPos = QuantizePosition(cameraPos);
-        if (quantizedPos == _prevCameraPos[cameraID] && !alwaysUpdate && !forceUpdate)
+        if (!forceUpdate && !alwaysUpdate && _hasCompletedSort[cameraID] && quantizedPos == _completedCameraPos[cameraID])
+        {
+            return;
+        }
+
+        _pendingCameraPos[cameraID] = quantizedPos;
+        _pendingCameraWorldPos[cameraID] = cameraPos;
+        _hasPendingSort[cameraID] = true;
+    }
+
+    bool TryStartPendingSort(int cameraID)
+    {
+        if (!_hasPendingSort[cameraID])
         {
             return false;
         }
 
-        _prevCameraPos[cameraID] = quantizedPos;
-        keyValueMat.SetVector("_CameraPos", cameraPos);
-        _radixSort.Sort();
-        VRCGraphics.Blit(_radixSort.keyValues0, splatRenderOrder, 0, cameraID);
+        if (!alwaysUpdate && _hasCompletedSort[cameraID] && _pendingCameraPos[cameraID] == _completedCameraPos[cameraID])
+        {
+            _hasPendingSort[cameraID] = false;
+            return false;
+        }
+
+        keyValueMat.SetVector("_CameraPos", _pendingCameraWorldPos[cameraID]);
+        _radixSort.BeginSort();
+        _activeSortCameraId = cameraID;
+        _activeSortQuantizedPos = _pendingCameraPos[cameraID];
+        _hasPendingSort[cameraID] = false;
         return true;
+    }
+
+    void StartNextPendingSort()
+    {
+        if (_activeSortCameraId != NO_ACTIVE_SORT)
+        {
+            return;
+        }
+
+        if (TryStartPendingSort(SCREEN_CAMERA_ID))
+        {
+            return;
+        }
+
+        TryStartPendingSort(PHOTO_CAMERA_ID);
+    }
+
+    void PublishActiveSort()
+    {
+        if (_activeSortCameraId == NO_ACTIVE_SORT)
+        {
+            return;
+        }
+
+        _radixSort.CopySortedOrder(splatRenderOrder, _activeSortCameraId);
+        _completedCameraPos[_activeSortCameraId] = _activeSortQuantizedPos;
+        _hasCompletedSort[_activeSortCameraId] = true;
+
+        if (_activeSortCameraId == SCREEN_CAMERA_ID)
+        {
+            ShowSorted(splatObject);
+        }
+
+        _activeSortCameraId = NO_ACTIVE_SORT;
+        _activeSortQuantizedPos = Vector3.positiveInfinity;
+    }
+
+    void ProcessSortPipeline()
+    {
+        StartNextPendingSort();
+        if (_activeSortCameraId == NO_ACTIVE_SORT)
+        {
+            return;
+        }
+
+        _radixSort.StepSort(GetSortSubpassBudget());
+        if (_radixSort.IsSortComplete())
+        {
+            PublishActiveSort();
+            StartNextPendingSort();
+        }
+    }
+
+    void RunBlockingSort(Vector3 cameraPos, int cameraID)
+    {
+        Vector3 quantizedPos = QuantizePosition(cameraPos);
+        keyValueMat.SetVector("_CameraPos", cameraPos);
+        _radixSort.BeginSort();
+        _activeSortCameraId = cameraID;
+        _activeSortQuantizedPos = quantizedPos;
+        _radixSort.StepSort(RadixSort.TotalSortPasses);
+        PublishActiveSort();
     }
 
     public void SortCameras(Vector3 screenCamPos)
@@ -735,13 +831,29 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
             return;
         }
 
-        if (SortCamera(screenCamPos, 0))
+        if (!_hasCompletedSort[SCREEN_CAMERA_ID])
         {
-            ShowSorted(splatObject);
+            RunBlockingSort(screenCamPos, SCREEN_CAMERA_ID);
+        }
+        else
+        {
+            RequestCameraSort(screenCamPos, SCREEN_CAMERA_ID, false);
         }
 
         VRCCameraSettings photoCam = VRCCameraSettings.PhotoCamera;
-        if (photoCam != null && photoCam.Active) SortCamera(photoCam.Position, 1);
+        if (photoCam != null && photoCam.Active)
+        {
+            if (!_hasCompletedSort[PHOTO_CAMERA_ID])
+            {
+                RunBlockingSort(photoCam.Position, PHOTO_CAMERA_ID);
+            }
+            else
+            {
+                RequestCameraSort(photoCam.Position, PHOTO_CAMERA_ID, false);
+            }
+        }
+
+        ProcessSortPipeline();
 
         // if (mirror != null && mirror.activeInHierarchy) //Mirror order is currently broken in VRChat
         // {
@@ -930,18 +1042,7 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
 
     string GetSortResourceFolderPath()
     {
-        string scenePath = gameObject.scene.path;
-        if (!string.IsNullOrEmpty(scenePath))
-        {
-            string sceneFolder = Path.GetDirectoryName(scenePath);
-            string sceneName = Path.GetFileNameWithoutExtension(scenePath);
-            if (!string.IsNullOrEmpty(sceneFolder) && !string.IsNullOrEmpty(sceneName))
-            {
-                return (sceneFolder.Replace('\\', '/') + "/" + sceneName + "_GaussianSplatSortResources");
-            }
-        }
-
-        return "Assets/VRChatGaussianSplatting/GeneratedSortingResources";
+        return "Assets/VRChatGaussianSplatting/RadixSort/RTs";
     }
 
     Texture GetPositionsTexture(GameObject rootObject)
@@ -986,7 +1087,7 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         renderTexture.dimension = volumeDepth > 1 ? TextureDimension.Tex2DArray : TextureDimension.Tex2D;
         renderTexture.volumeDepth = volumeDepth;
         renderTexture.useMipMap = useMipMap;
-        renderTexture.autoGenerateMips = useMipMap;
+        renderTexture.autoGenerateMips = false;
         renderTexture.wrapMode = TextureWrapMode.Clamp;
         renderTexture.filterMode = FilterMode.Point;
         renderTexture.enableRandomWrite = false;
@@ -1001,10 +1102,18 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
 
     void EnsureSortRenderTexture(ref RenderTexture targetTexture, string folderPath, string assetName, int width, int height, RenderTextureFormat format, bool useMipMap, int volumeDepth)
     {
-        if (targetTexture == null)
+        string normalizedFolderPath = folderPath.Replace('\\', '/');
+        string expectedAssetPath = normalizedFolderPath + "/" + assetName + ".renderTexture";
+        string currentAssetPath = targetTexture == null ? string.Empty : AssetDatabase.GetAssetPath(targetTexture).Replace('\\', '/');
+        bool needsPackageResource = targetTexture == null || string.IsNullOrEmpty(currentAssetPath) || !currentAssetPath.StartsWith(normalizedFolderPath + "/");
+
+        if (needsPackageResource)
         {
-            targetTexture = CreateSortRenderTextureAsset(folderPath, assetName, width, height, format, useMipMap, volumeDepth);
-            return;
+            EnsureFolderExists(normalizedFolderPath);
+            RenderTexture existingTexture = AssetDatabase.LoadAssetAtPath<RenderTexture>(expectedAssetPath);
+            targetTexture = existingTexture != null
+                ? existingTexture
+                : CreateSortRenderTextureAsset(normalizedFolderPath, assetName, width, height, format, useMipMap, volumeDepth);
         }
 
         Undo.RecordObject(targetTexture, "Resize Gaussian Splat Sort Texture");
@@ -1015,7 +1124,7 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         targetTexture.dimension = volumeDepth > 1 ? TextureDimension.Tex2DArray : TextureDimension.Tex2D;
         targetTexture.volumeDepth = volumeDepth;
         targetTexture.useMipMap = useMipMap;
-        targetTexture.autoGenerateMips = useMipMap;
+        targetTexture.autoGenerateMips = false;
         targetTexture.wrapMode = TextureWrapMode.Clamp;
         targetTexture.filterMode = FilterMode.Point;
         targetTexture.enableRandomWrite = false;
@@ -1044,6 +1153,16 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
 
     static Material CreateOpaqueBackgroundMaterial()
     {
+        const string materialFolderPath = "Assets/VRChatGaussianSplatting/Resources/Materials";
+        const string materialAssetPath = materialFolderPath + "/GaussianSplatUIBackground.mat";
+
+        EnsureFolderExists(materialFolderPath);
+        Material material = AssetDatabase.LoadAssetAtPath<Material>(materialAssetPath);
+        if (material != null)
+        {
+            return material;
+        }
+
         Shader shader = Shader.Find("Standard");
         if (shader == null)
         {
@@ -1055,9 +1174,10 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
             return null;
         }
 
-        Material material = new Material(shader);
+        material = new Material(shader);
         material.name = "Gaussian Splat UI Background";
         material.color = new Color(0.08f, 0.08f, 0.1f, 1.0f);
+        AssetDatabase.CreateAsset(material, materialAssetPath);
         return material;
     }
 
@@ -1371,43 +1491,23 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
 
         CreateTextElement("Sorting Section", settingsColumn.transform, "Sorting Settings", 18, TextAnchor.MiddleLeft, Color.white);
 
-        GameObject minSortDistanceRow = CreateHorizontalGroup("Min Sort Distance Row", settingsColumn.transform, 8.0f, false);
-        Text minSortDistanceLabel = CreateTextElement("Min Sort Distance Label", minSortDistanceRow.transform, "Min Sort Dist", 16, TextAnchor.MiddleLeft, Color.white);
-        SetPreferredWidth(minSortDistanceLabel.gameObject, 210.0f, 1.0f);
-        Button minSortDistanceDownButton = CreateButtonElement("Min Sort Distance Down", minSortDistanceRow.transform, "-", new Color(0.45f, 0.24f, 0.18f, 1.0f), 42.0f, 0.0f);
-        generatedUi.minSortDistanceText = CreateTextElement("Min Sort Distance Value", minSortDistanceRow.transform, "0", 16, TextAnchor.MiddleCenter, new Color(0.95f, 0.95f, 0.95f, 1.0f));
-        SetPreferredWidth(generatedUi.minSortDistanceText.gameObject, 72.0f, 0.0f);
-        Button minSortDistanceUpButton = CreateButtonElement("Min Sort Distance Up", minSortDistanceRow.transform, "+", new Color(0.18f, 0.4f, 0.24f, 1.0f), 42.0f, 0.0f);
-        AddUdonSharpButtonEvent(minSortDistanceDownButton, generatedUi, nameof(GaussianSplatRendererUI.DecreaseMinSortDistance));
-        AddUdonSharpButtonEvent(minSortDistanceUpButton, generatedUi, nameof(GaussianSplatRendererUI.IncreaseMinSortDistance));
-
-        GameObject maxSortDistanceRow = CreateHorizontalGroup("Max Sort Distance Row", settingsColumn.transform, 8.0f, false);
-        Text maxSortDistanceLabel = CreateTextElement("Max Sort Distance Label", maxSortDistanceRow.transform, "Max Sort Dist", 16, TextAnchor.MiddleLeft, Color.white);
-        SetPreferredWidth(maxSortDistanceLabel.gameObject, 210.0f, 1.0f);
-        Button maxSortDistanceDownButton = CreateButtonElement("Max Sort Distance Down", maxSortDistanceRow.transform, "-", new Color(0.45f, 0.24f, 0.18f, 1.0f), 42.0f, 0.0f);
-        generatedUi.maxSortDistanceText = CreateTextElement("Max Sort Distance Value", maxSortDistanceRow.transform, "150", 16, TextAnchor.MiddleCenter, new Color(0.95f, 0.95f, 0.95f, 1.0f));
-        SetPreferredWidth(generatedUi.maxSortDistanceText.gameObject, 72.0f, 0.0f);
-        Button maxSortDistanceUpButton = CreateButtonElement("Max Sort Distance Up", maxSortDistanceRow.transform, "+", new Color(0.18f, 0.4f, 0.24f, 1.0f), 42.0f, 0.0f);
-        AddUdonSharpButtonEvent(maxSortDistanceDownButton, generatedUi, nameof(GaussianSplatRendererUI.DecreaseMaxSortDistance));
-        AddUdonSharpButtonEvent(maxSortDistanceUpButton, generatedUi, nameof(GaussianSplatRendererUI.IncreaseMaxSortDistance));
-
-        GameObject cameraQuantizationRow = CreateHorizontalGroup("Camera Quantization Row", settingsColumn.transform, 8.0f, false);
-        Text cameraQuantizationLabel = CreateTextElement("Camera Quantization Label", cameraQuantizationRow.transform, "Camera Quant", 16, TextAnchor.MiddleLeft, Color.white);
+        GameObject cameraQuantizationRow = CreateHorizontalGroup("Camera Resort Move Row", settingsColumn.transform, 8.0f, false);
+        Text cameraQuantizationLabel = CreateTextElement("Camera Resort Move Label", cameraQuantizationRow.transform, "Camera move amount to trigger resort", 16, TextAnchor.MiddleLeft, Color.white);
         SetPreferredWidth(cameraQuantizationLabel.gameObject, 210.0f, 1.0f);
-        Button cameraQuantizationDownButton = CreateButtonElement("Camera Quantization Down", cameraQuantizationRow.transform, "-", new Color(0.45f, 0.24f, 0.18f, 1.0f), 42.0f, 0.0f);
-        generatedUi.cameraQuantizationText = CreateTextElement("Camera Quantization Value", cameraQuantizationRow.transform, "0.1", 16, TextAnchor.MiddleCenter, new Color(0.95f, 0.95f, 0.95f, 1.0f));
+        Button cameraQuantizationDownButton = CreateButtonElement("Camera Resort Move Down", cameraQuantizationRow.transform, "-", new Color(0.45f, 0.24f, 0.18f, 1.0f), 42.0f, 0.0f);
+        generatedUi.cameraQuantizationText = CreateTextElement("Camera Resort Move Value", cameraQuantizationRow.transform, "0.1", 16, TextAnchor.MiddleCenter, new Color(0.95f, 0.95f, 0.95f, 1.0f));
         SetPreferredWidth(generatedUi.cameraQuantizationText.gameObject, 72.0f, 0.0f);
-        Button cameraQuantizationUpButton = CreateButtonElement("Camera Quantization Up", cameraQuantizationRow.transform, "+", new Color(0.18f, 0.4f, 0.24f, 1.0f), 42.0f, 0.0f);
+        Button cameraQuantizationUpButton = CreateButtonElement("Camera Resort Move Up", cameraQuantizationRow.transform, "+", new Color(0.18f, 0.4f, 0.24f, 1.0f), 42.0f, 0.0f);
         AddUdonSharpButtonEvent(cameraQuantizationDownButton, generatedUi, nameof(GaussianSplatRendererUI.DecreaseCameraQuantization));
         AddUdonSharpButtonEvent(cameraQuantizationUpButton, generatedUi, nameof(GaussianSplatRendererUI.IncreaseCameraQuantization));
 
-        GameObject sortingStepsRow = CreateHorizontalGroup("Sorting Steps Row", settingsColumn.transform, 8.0f, false);
-        Text sortingStepsLabel = CreateTextElement("Sorting Steps Label", sortingStepsRow.transform, "Sorting Steps", 16, TextAnchor.MiddleLeft, Color.white);
+        GameObject sortingStepsRow = CreateHorizontalGroup("Pipeline Sort Frames Row", settingsColumn.transform, 8.0f, false);
+        Text sortingStepsLabel = CreateTextElement("Pipeline Sort Frames Label", sortingStepsRow.transform, "Pipeline sort over N frames", 16, TextAnchor.MiddleLeft, Color.white);
         SetPreferredWidth(sortingStepsLabel.gameObject, 210.0f, 1.0f);
-        Button sortingStepsDownButton = CreateButtonElement("Sorting Steps Down", sortingStepsRow.transform, "-", new Color(0.45f, 0.24f, 0.18f, 1.0f), 42.0f, 0.0f);
-        generatedUi.sortingStepsText = CreateTextElement("Sorting Steps Value", sortingStepsRow.transform, "4", 16, TextAnchor.MiddleCenter, new Color(0.95f, 0.95f, 0.95f, 1.0f));
+        Button sortingStepsDownButton = CreateButtonElement("Pipeline Sort Frames Down", sortingStepsRow.transform, "-", new Color(0.45f, 0.24f, 0.18f, 1.0f), 42.0f, 0.0f);
+        generatedUi.sortingStepsText = CreateTextElement("Pipeline Sort Frames Value", sortingStepsRow.transform, "2", 16, TextAnchor.MiddleCenter, new Color(0.95f, 0.95f, 0.95f, 1.0f));
         SetPreferredWidth(generatedUi.sortingStepsText.gameObject, 72.0f, 0.0f);
-        Button sortingStepsUpButton = CreateButtonElement("Sorting Steps Up", sortingStepsRow.transform, "+", new Color(0.18f, 0.4f, 0.24f, 1.0f), 42.0f, 0.0f);
+        Button sortingStepsUpButton = CreateButtonElement("Pipeline Sort Frames Up", sortingStepsRow.transform, "+", new Color(0.18f, 0.4f, 0.24f, 1.0f), 42.0f, 0.0f);
         AddUdonSharpButtonEvent(sortingStepsDownButton, generatedUi, nameof(GaussianSplatRendererUI.DecreaseSortingSteps));
         AddUdonSharpButtonEvent(sortingStepsUpButton, generatedUi, nameof(GaussianSplatRendererUI.IncreaseSortingSteps));
 

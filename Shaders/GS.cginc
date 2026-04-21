@@ -76,10 +76,6 @@ void geo(point v2g input[1], inout TriangleStream<g2f> triStream, uint instanceI
     if (!splat.valid || (splat.color.a < _AlphaCutoff) || any(splat.scale > _ScaleCutoff)) return; 
 
     float3 splatWorldPos = mul(unity_ObjectToWorld, float4(splat.mean, 1)).xyz;
-    float cameraDistance = length(splatWorldPos - _WorldSpaceCameraPos);
-    if (_MinMaxSortDistance.x != _MinMaxSortDistance.y  && (cameraDistance < _MinMaxSortDistance.x || cameraDistance > _MinMaxSortDistance.y)) {
-        return; // skip splats outside of the sorting distance range
-    }
 
     float4 splatClipPos = mul(UNITY_MATRIX_VP, float4(splatWorldPos, 1));
     if (splatClipPos.w <= 0) return; // behind camera

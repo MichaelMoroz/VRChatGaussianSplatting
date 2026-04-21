@@ -6,7 +6,7 @@ RenderTexture:
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
   m_PrefabAsset: {fileID: 0}
-  m_Name: SplatRenderOrderMirror
+  m_Name: GaussianSplatRenderer_KeyValues1
   m_ImageContentsHash:
     serializedVersion: 2
     Hash: 00000000000000000000000000000000
@@ -14,14 +14,14 @@ RenderTexture:
   m_DownscaleFallback: 0
   m_IsAlphaChannelOptional: 0
   serializedVersion: 5
-  m_Width: 4096
-  m_Height: 2048
+  m_Width: 2048
+  m_Height: 1024
   m_AntiAliasing: 1
   m_MipCount: -1
   m_DepthStencilFormat: 0
-  m_ColorFormat: 49
+  m_ColorFormat: 50
   m_MipMap: 0
-  m_GenerateMips: 1
+  m_GenerateMips: 0
   m_SRGB: 0
   m_UseDynamicScale: 0
   m_BindMS: 0
@@ -36,5 +36,5 @@ RenderTexture:
     m_WrapV: 1
     m_WrapW: 1
   m_Dimension: 2
-  m_VolumeDepth: 3
+  m_VolumeDepth: 1
   m_ShadowSamplingMode: 2

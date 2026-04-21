@@ -9,6 +9,8 @@ using UnityEditor;
 using UnityEngine;
 using GaussianSplatting.Editor.Utils;
 using GaussianSplatting;
+using UdonSharp;
+using UdonSharpEditor;
 
 namespace GaussianSplatting
 {
@@ -174,9 +176,10 @@ namespace GaussianSplatting
             meshRenderer.allowOcclusionWhenDynamic = false;
             if (addGaussianSplatObject)
             {
-                GaussianSplatObject splatObject = go.AddComponent<GaussianSplatObject>();
+                GaussianSplatObject splatObject = go.AddUdonSharpComponent<GaussianSplatObject>();
                 splatObject.sortedRenderer = meshRenderer;
                 splatObject.SetMaxSHBand(Mathf.Clamp(maxSHBand, 0, 3));
+                UdonSharpEditorUtility.CopyProxyToUdon(splatObject);
             }
             var prefab = PrefabUtility.SaveAsPrefabAssetAndConnect(go, assetPath, InteractionMode.AutomatedAction);
             GameObject.DestroyImmediate(go); // clean up the temporary GameObject
