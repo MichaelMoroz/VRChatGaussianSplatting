@@ -7,6 +7,10 @@
 #pragma fragment frag
 #pragma geometry geo
 
+//#define DEBUG_PROJECTED_POINTS
+//#define DEBUG_RAW_SPLAT_ORDER
+#define PROJECTION_MAX_ANISOTROPY 32.0
+
 #include "UnityCG.cginc"
 #include "GSData.cginc"
 #include "GSMath.cginc"
@@ -14,6 +18,12 @@
 #ifdef _VRC_LIGHT_VOLUMES_ON
 #include "LightVolumes.cginc"
 float _LightVolumeIntensity;
+#endif
+
+#ifdef DEBUG_PROJECTED_POINTS
+#define GS_MAX_VERTEX_COUNT 20
+#else
+#define GS_MAX_VERTEX_COUNT 4
 #endif
 
 struct appdata {
@@ -47,7 +57,7 @@ v2g vert(appdata v) {
     return o;
 }
 
-[maxvertexcount(4)]
+[maxvertexcount(GS_MAX_VERTEX_COUNT)]
 [instance(32)]
 void geo(point v2g input[1], inout TriangleStream<g2f> triStream, uint instanceID : SV_GSInstanceID, uint geoPrimID : SV_PrimitiveID) {
     uint id = geoPrimID * 32 + instanceID;
@@ -64,9 +74,13 @@ void geo(point v2g input[1], inout TriangleStream<g2f> triStream, uint instanceI
     UNITY_INITIALIZE_OUTPUT(g2f, o);
     UNITY_TRANSFER_VERTEX_OUTPUT_STEREO(input[0], o);
 
-    #ifdef _LEGACY_RANDOMIZED_ORDER
+#if defined(DEBUG_PROJECTED_POINTS) || defined(DEBUG_RAW_SPLAT_ORDER)
+    SplatData splat = LoadSplatData(id);
+    splat.id = id;
+    splat.valid = true;
+    #elif defined(_LEGACY_RANDOMIZED_ORDER)
     SplatData splat = LoadSplatDataRandomized(id);
-    #elif _PRECOMPUTED_SORTING_ON
+    #elif defined(_PRECOMPUTED_SORTING_ON)
     float3 cam_dir = mul(transpose(UNITY_MATRIX_IT_MV), float4(0, 0, 1, 0)).xyz; // camera direction in object space
     SplatData splat = LoadSplatDataPrecomputedOrder(id, cam_dir);
     #else 
@@ -87,16 +101,40 @@ void geo(point v2g input[1], inout TriangleStream<g2f> triStream, uint instanceI
     float cutoffSigmaRadius = sqrt(max(-2.0 * log(_AlphaCutoff / peakAlpha), 0.0));
     float scale_max = max(splat.scale.x, max(splat.scale.y, splat.scale.z));
     float3 clamped_scale = clamp(splat.scale, scale_max * _ThinThreshold, scale_max);
+    float3 projection_scale = max(clamped_scale, scale_max / PROJECTION_MAX_ANISOTROPY);
     float supportScale = _GaussianMul * cutoffSigmaRadius;
 
     if (o.color.a < _AlphaCutoff) {
         return; // skip splats with too small area or invalid alpha
     }
 
-    // Project the ellipsoid onto the screen
-    Ellipse ell = GetProjectedEllipsoid(splat.mean, supportScale * clamped_scale, splat.quat);
+#ifdef DEBUG_PROJECTED_POINTS
+    float2 centerNdc;
+    float2 projectedPoints[5];
+    GetProjectedEllipsoidOutline(splat.mean, supportScale * projection_scale, splat.quat, projectedPoints, centerNdc);
 
-    if(any(ell.size > 1.75)) {
+    o.color = float4(1.0, 0.1, 0.0, 1.0);
+    o.gaussianExp = 0.0;
+    float2 debugHalfSize = 4.0 / _ScreenParams.xy;
+
+    [unroll] for (uint pointID = 0; pointID < 5; pointID++)
+    {
+        [unroll] for (uint vtxID = 0; vtxID < 4; vtxID++)
+        {
+            o.quadPos = float2(vtxID & 1, (vtxID >> 1) & 1) * 2.0 - 1.0;
+            float2 ndc = projectedPoints[pointID] + o.quadPos * debugHalfSize;
+            o.position = float4(ndc, splatClipPos.z, 1.0);
+            triStream.Append(o);
+        }
+        triStream.RestartStrip();
+    }
+    return;
+#endif
+
+    // Project the ellipsoid onto the screen
+    Ellipse ell = GetProjectedEllipsoid(splat.mean, supportScale * projection_scale, splat.quat);
+
+    if(!valid_ellipse(ell) || any(ell.size > 1.75)) {
         return;
     }
 
@@ -197,6 +235,10 @@ uint GetFullCoverageMask()
 float4 frag(g2f input, out uint coverage : SV_Coverage) : SV_Target {
     UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
     float dist2 = dot(input.quadPos, input.quadPos);
+#ifdef DEBUG_PROJECTED_POINTS
+    coverage = GetFullCoverageMask();
+    return input.color;
+#endif
 #ifdef DEBUG_OUTLINES
     coverage = GetFullCoverageMask();
     return (dist2 < 1.0) ? float4(1, 0, 0, 1) : float4(0, 0, 0, 1); // red outline for debugging

@@ -115,7 +115,22 @@ Ellipse extractEllipse(float a, float b, float c, float d, float e, float f) {
 float2 project_object_to_ndc(float3 p)
 {
     float4 clip = UnityObjectToClipPos(float4(p, 1.0));
-    return clip.xy / clip.w;
+    float clipW = max(clip.w, DIV_EPSILON);
+    return clamp(clip.xy / clipW, -SAFE_NDC_LIMIT, SAFE_NDC_LIMIT);
+}
+
+void stable_tangent_basis(float3 n, out float3 u, out float3 v)
+{
+    if (n.z < -0.999999)
+    {
+        u = float3(0.0, -1.0, 0.0);
+        v = float3(-1.0, 0.0, 0.0);
+        return;
+    }
+
+    float a = 1.0 / (1.0 + n.z);
+    u = normalize(float3(1.0 - n.x * n.x * a, -n.x * n.y * a, -n.x));
+    v = cross(n, u);
 }
 
 Ellipse fit_outline_ellipse_5(float2 points[5], float2 centerNdc)
@@ -235,34 +250,33 @@ Ellipse fit_outline_ellipse_5(float2 points[5], float2 centerNdc)
     return extractEllipse(finalA, finalB, finalC, finalD, finalE, -1.0);
 }
 
-Ellipse GetProjectedEllipsoid(float3 pos, float3 scale, float4 rotation)
+void GetProjectedEllipsoidOutline(float3 pos, float3 scale, float4 rotation, out float2 points[5], out float2 centerNdc)
 {
-    Ellipse ellipse;
-    ellipse.center = 0.0;
-    ellipse.axis = float2(1.0, 0.0);
-    ellipse.size = 0.0;
-
-    float2 centerNdc = project_object_to_ndc(pos);
+    centerNdc = project_object_to_ndc(pos);
     float3 cameraObjectPos = mul(unity_WorldToObject, float4(_WorldSpaceCameraPos, 1.0)).xyz;
     float3 invScale = 1.0 / max(scale, float3(DIV_EPSILON, DIV_EPSILON, DIV_EPSILON));
     float3 viewOriginLocal = q_rotate(cameraObjectPos - pos, conj_q(rotation)) * invScale;
-    float viewDistance = length(viewOriginLocal);
-    float3 viewDirLocal = viewOriginLocal / viewDistance;
+    float viewDistanceRaw = length(viewOriginLocal);
+    float3 viewDirLocal = viewDistanceRaw > DIV_EPSILON ? viewOriginLocal / viewDistanceRaw : float3(0.0, 0.0, 1.0);
+    float viewDistance = max(viewDistanceRaw, 1.0 + DIV_EPSILON);
     float3 tangentCircleCenter = viewDirLocal / viewDistance;
     float tangentCircleRadius = sqrt(max(1.0 - 1.0 / (viewDistance * viewDistance), 0.0));
-    float3 tangentAxis = abs(viewDirLocal.z) < 0.999 ? float3(0.0, 0.0, 1.0) : float3(0.0, 1.0, 0.0);
-    float3 tangentBasisU = cross(tangentAxis, viewDirLocal);
-    float tangentBasisULength = length(tangentBasisU);
-    tangentBasisU /= tangentBasisULength;
-    float3 tangentBasisV = cross(viewDirLocal, tangentBasisU);
+    float3 tangentBasisU;
+    float3 tangentBasisV;
+    stable_tangent_basis(viewDirLocal, tangentBasisU, tangentBasisV);
 
-    float2 points[5];
     [unroll] for (uint i = 0; i < 5; i++)
     {
         float theta = 6.2831853 * float(i) / 5.0;
         float3 localPoint = tangentCircleCenter + tangentCircleRadius * (cos(theta) * tangentBasisU + sin(theta) * tangentBasisV);
         points[i] = project_object_to_ndc(unit_space_to_model(localPoint, pos, rotation, scale));
     }
+}
 
+Ellipse GetProjectedEllipsoid(float3 pos, float3 scale, float4 rotation)
+{
+    float2 centerNdc;
+    float2 points[5];
+    GetProjectedEllipsoidOutline(pos, scale, rotation, points, centerNdc);
     return fit_outline_ellipse_5(points, centerNdc);
 }

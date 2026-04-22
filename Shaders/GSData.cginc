@@ -238,7 +238,8 @@ int GetPrecomputedRenderOrderIndex(uint id, float3 cam_dir) {
 }
 
 SplatData LoadSplatDataRenderOrder(uint id) {
-    bool validOrder = _GS_RenderOrder_TexelSize.z >= _GS_Positions_TexelSize.z;
+    uint renderOrderCapacity = uint(_GS_RenderOrder_TexelSize.z) * uint(_GS_RenderOrder_TexelSize.w);
+    bool validOrder = renderOrderCapacity >= uint(_ActualSplatCount);
     uint reordered_id = id;
     bool valid = true;
     if(validOrder) { // if valid order texture
@@ -249,7 +250,7 @@ SplatData LoadSplatDataRenderOrder(uint id) {
             //reordered_id = _GS_RenderOrderMirror[coord1];
         } else {
             uint slice = (_VRChatCameraMode > 0);
-            reordered_id = (uint)_GS_RenderOrder[uint3(coord1, slice)];
+            reordered_id = ASUINT_NO_DENORM(_GS_RenderOrder[uint3(coord1, slice)]);
         }
     } else {
         reordered_id = pcg(reordered_id) % _ActualSplatCount; // randomize order for alpha blending to somewhat work

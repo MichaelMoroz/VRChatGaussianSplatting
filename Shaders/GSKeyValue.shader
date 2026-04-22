@@ -40,7 +40,7 @@ Shader "VRChatGaussianSplatting/ComputeKeyValue" {
                 uint2 pixel = floor(i.pos.xy);
                 uint index = UVToIndex(pixel);
                 if (index >= _ElementCount) discard;
-                return float2(index, asfloat(ComputeD(index)));
+                return float2(ASFLOAT_NO_DENORM(index), asfloat(ComputeD(index)));
             }
             ENDCG
         }
