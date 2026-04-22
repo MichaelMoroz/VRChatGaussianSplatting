@@ -696,13 +696,19 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         }
 
         Texture positions = null;
+        Material positionsMaterial = null;
         if (splatMats.Length > 1)
         {
-            positions = splatMats[1].GetTexture("_GS_Positions");
+            positionsMaterial = splatMats[1];
         }
         else
         {
-            positions = splatMats[0].GetTexture("_GS_Positions");
+            positionsMaterial = splatMats[0];
+        }
+
+        if (positionsMaterial != null)
+        {
+            positions = positionsMaterial.GetTexture("_GS_Positions");
         }
 
         if (positions == null)
@@ -711,7 +717,11 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
             return false;
         }
 
-        _radixSort.elementCount = positions.width * positions.height;
+        int textureElementCount = positions.width * positions.height;
+        int actualSplatCount = positionsMaterial != null && positionsMaterial.HasProperty("_ActualSplatCount")
+            ? positionsMaterial.GetInt("_ActualSplatCount")
+            : 0;
+        _radixSort.elementCount = actualSplatCount > 0 && actualSplatCount <= textureElementCount ? actualSplatCount : textureElementCount;
         keyValueMat = _radixSort.computeKeyValues;
         keyValueMat.SetTexture("_GS_Positions", positions);
         return true;
@@ -1070,6 +1080,39 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         }
 
         return positionsMaterial.GetTexture("_GS_Positions");
+    }
+
+    int GetSortElementCount(GameObject rootObject, out Texture positionsTexture)
+    {
+        positionsTexture = null;
+
+        MeshRenderer renderer = GetSortedRenderer(rootObject);
+        if (renderer == null)
+        {
+            return 0;
+        }
+
+        Material[] materials = renderer.sharedMaterials;
+        if (materials == null || materials.Length == 0)
+        {
+            return 0;
+        }
+
+        Material positionsMaterial = materials.Length > 1 && materials[1] != null ? materials[1] : materials[0];
+        if (positionsMaterial == null || !positionsMaterial.HasProperty("_GS_Positions"))
+        {
+            return 0;
+        }
+
+        positionsTexture = positionsMaterial.GetTexture("_GS_Positions");
+        if (positionsTexture == null)
+        {
+            return 0;
+        }
+
+        int textureElementCount = positionsTexture.width * positionsTexture.height;
+        int actualSplatCount = positionsMaterial.HasProperty("_ActualSplatCount") ? positionsMaterial.GetInt("_ActualSplatCount") : 0;
+        return actualSplatCount > 0 && actualSplatCount <= textureElementCount ? actualSplatCount : textureElementCount;
     }
 
     static void ComputeRequiredSortTextureSize(int elementCount, out int width, out int height)
@@ -1691,13 +1734,12 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
                 continue;
             }
 
-            Texture positionsTexture = GetPositionsTexture(currentSplatObject);
+            int elementCount = GetSortElementCount(currentSplatObject, out Texture positionsTexture);
             if (positionsTexture == null)
             {
                 continue;
             }
 
-            int elementCount = positionsTexture.width * positionsTexture.height;
             if (elementCount > largestElementCount)
             {
                 largestElementCount = elementCount;
@@ -1728,7 +1770,7 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         EditorUtility.SetDirty(this);
         AssetDatabase.SaveAssets();
 
-        Debug.Log($"Updated sorting textures to {requiredWidth}x{requiredHeight} for largest splat '{largestSplatName}' ({largestElementCount} padded elements).");
+        Debug.Log($"Updated sorting textures to {requiredWidth}x{requiredHeight} for largest splat '{largestSplatName}' ({largestElementCount} splats).");
     }
 
     List<GaussianSplatObject> GetAllObjectsOnlyInScene()

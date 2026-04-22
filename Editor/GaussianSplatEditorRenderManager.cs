@@ -21,9 +21,9 @@ namespace GaussianSplatting.Editor
 
         static readonly int GSPositionsId = Shader.PropertyToID("_GS_Positions");
         static readonly int GSRenderOrderId = Shader.PropertyToID("_GS_RenderOrder");
+        static readonly int ActualSplatCountId = Shader.PropertyToID("_ActualSplatCount");
         static readonly int GaussianMulId = Shader.PropertyToID("_GaussianMul");
         static readonly int AlphaCutoffId = Shader.PropertyToID("_AlphaCutoff");
-        static readonly int SplatToWorldId = Shader.PropertyToID("_SplatToWorld");
         static readonly int CameraPosId = Shader.PropertyToID("_CameraPos");
         static readonly int PrefixSumsId = Shader.PropertyToID("_PrefixSums");
         static readonly int KeyValuesId = Shader.PropertyToID("_KeyValues");
@@ -173,11 +173,6 @@ namespace GaussianSplatting.Editor
 
         static Vector3 QuantizePosition(Vector3 position)
         {
-            if (CameraPositionQuantization <= 0.0f)
-            {
-                return position;
-            }
-
             return new Vector3(
                 Mathf.Round(position.x / CameraPositionQuantization) * CameraPositionQuantization,
                 Mathf.Round(position.y / CameraPositionQuantization) * CameraPositionQuantization,
@@ -288,7 +283,9 @@ namespace GaussianSplatting.Editor
                     return false;
                 }
 
-                _elementCount = positions.width * positions.height;
+                int textureElementCount = positions.width * positions.height;
+                int actualSplatCount = _sourceMaterial.HasProperty(ActualSplatCountId) ? _sourceMaterial.GetInt(ActualSplatCountId) : 0;
+                _elementCount = actualSplatCount > 0 && actualSplatCount <= textureElementCount ? actualSplatCount : textureElementCount;
                 ComputeImageSize(_elementCount, out _imageSizeX, out _imageSizeY);
 
                 EnsureMaterials();
@@ -315,8 +312,7 @@ namespace GaussianSplatting.Editor
                 _previousLocalCameraPosition = quantizedLocalCameraPosition;
 
                 ConfigureStaticUniforms();
-                _computeKeyValues.SetVector(CameraPosId, camera.transform.position);
-                _computeKeyValues.SetMatrix(SplatToWorldId, _renderer.transform.localToWorldMatrix);
+                _computeKeyValues.SetVector(CameraPosId, localCameraPosition);
 
                 Graphics.Blit(null, _keyValues0, _computeKeyValues);
 
