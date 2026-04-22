@@ -66,6 +66,7 @@ namespace GaussianSplatting
     {
         const int SHCoeffCount = 15;
         const float SHNonZeroEpsilon = 1e-8f;
+        const int MaxImportSplatCount = 4096 * 4096;
 
         static uint Morton3D(float nx, float ny, float nz)
         {
@@ -195,6 +196,8 @@ namespace GaussianSplatting
             int count = GaussianFileReader.ReadFileHeader(plyFile);
             if (count == 0)
                 throw new Exception("Empty or unsupported splat file");
+            if (count > MaxImportSplatCount)
+                throw new InvalidOperationException($"Import aborted: '{Path.GetFileName(plyFile)}' contains {count:N0} splats, exceeding the importer limit of {MaxImportSplatCount:N0}.");
 
             int requestedSHCoeffCount = importSphericalHarmonics ? SHCoeffCountForBand(defaultSHBand) : 0;
             GaussianFileReader.ReadFile(plyFile, requestedSHCoeffCount, out NativeArray<ImportSplatData> splats, out NativeArray<Vector3> shCoeffs);
@@ -723,6 +726,7 @@ namespace GaussianSplatting.Editor.Importers
             }
             catch (Exception e)
             {
+                EditorUtility.DisplayDialog("PLY Import Failed", e.Message, "OK");
                 Debug.LogException(e);
             }
             finally
