@@ -647,7 +647,7 @@ namespace GaussianSplatting.Editor.Importers
                 }
             }
             
-            EditorGUILayout.HelpBox("Large imports still depend on available RAM, but SH import memory now scales with the selected SH band. .PLY files larger than 2GB are still not supported.", MessageType.Info);
+            EditorGUILayout.HelpBox("Large imports still depend on available RAM, but the PLY importer now streams vertex data so file size is no longer capped by a 2GB raw read buffer. SH import memory still scales with the selected SH band.", MessageType.Info);
 
             EditorGUILayout.Space(10);
             EditorGUILayout.LabelField("Output Folder", EditorStyles.boldLabel);

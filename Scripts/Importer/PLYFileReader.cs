@@ -18,16 +18,12 @@ namespace GaussianSplatting.Editor.Utils
             attrs = new List<(string, ElementType)>();
             if (!File.Exists(filePath))
                 return;
-            using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read);
+            using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, 1, FileOptions.SequentialScan);
             ReadHeaderImpl(filePath, out vertexCount, out vertexStride, out attrs, fs);
         }
 
         static void ReadHeaderImpl(string filePath, out int vertexCount, out int vertexStride, out List<(string, ElementType)> attrs, FileStream fs)
         {
-            // C# arrays and NativeArrays make it hard to have a "byte" array larger than 2GB :/
-            if (fs.Length >= 2 * 1024 * 1024 * 1024L)
-                throw new IOException($"PLY {filePath} read error: currently files larger than 2GB are not supported");
-
             // read header
             vertexCount = 0;
             vertexStride = 0;
@@ -64,10 +60,20 @@ namespace GaussianSplatting.Editor.Utils
             }
         }
 
+        public static FileStream OpenDataStream(string filePath, out int vertexCount, out int vertexStride, out List<(string, ElementType)> attrs)
+        {
+            var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, 1, FileOptions.SequentialScan);
+            ReadHeaderImpl(filePath, out vertexCount, out vertexStride, out attrs, fs);
+            return fs;
+        }
+
         public static void ReadFile(string filePath, out int vertexCount, out int vertexStride, out List<(string, ElementType)> attrs, out NativeArray<byte> vertices)
         {
-            using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read);
-            ReadHeaderImpl(filePath, out vertexCount, out vertexStride, out attrs, fs);
+            using var fs = OpenDataStream(filePath, out vertexCount, out vertexStride, out attrs);
+
+            long totalBytes = (long)vertexCount * vertexStride;
+            if (totalBytes > int.MaxValue)
+                throw new IOException($"PLY {filePath} read error: raw vertex data exceeds NativeArray<byte> size limits; use streamed import instead");
 
             vertices = new NativeArray<byte>(vertexCount * vertexStride, Allocator.Persistent);
             var readBytes = fs.Read(vertices);

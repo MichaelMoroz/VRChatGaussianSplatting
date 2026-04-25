@@ -1,4 +1,5 @@
 ﻿#if UNITY_EDITOR && !COMPILER_UDONSHARP
+using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
@@ -10,7 +11,6 @@ using Unity.Collections.LowLevel.Unsafe;
 using Unity.Jobs;
 using Unity.Mathematics;
 using UnityEngine;
-using UnityEngine.Assertions;
 
 namespace GaussianSplatting.Editor.Utils
 {
@@ -44,23 +44,9 @@ namespace GaussianSplatting.Editor.Utils
         {
             if (isPLY(filePath))
             {
-                NativeArray<byte> plyRawData = default;
-                try
-                {
-                    List<(string, PLYFileReader.ElementType)> attributes;
-                    PLYFileReader.ReadFile(filePath, out var splatCount, out var vertexStride, out attributes, out plyRawData);
-                    string attrError = CheckPLYAttributes(attributes);
-                    if (!string.IsNullOrEmpty(attrError))
-                        throw new IOException($"PLY file is probably not a Gaussian Splat file? Missing properties: {attrError}");
-                    PLYDataToCompactSplats(plyRawData, splatCount, vertexStride, attributes, shCoeffCount, out splats, out shCoeffs);
-                    LinearizeData(splats);
-                    return;
-                }
-                finally
-                {
-                    if (plyRawData.IsCreated)
-                        plyRawData.Dispose();
-                }
+                PLYFileToCompactSplats(filePath, shCoeffCount, out splats, out shCoeffs);
+                LinearizeData(splats);
+                return;
             }
             if (isSPZ(filePath))
             {
@@ -82,17 +68,41 @@ namespace GaussianSplatting.Editor.Utils
             return string.Join(",", missing);
         }
 
-        static unsafe void PLYDataToCompactSplats(NativeArray<byte> input, int count, int stride, List<(string, PLYFileReader.ElementType)> attributes, int shCoeffCount, out NativeArray<ImportSplatData> splats, out NativeArray<Vector3> shCoeffs)
+        static void PLYFileToCompactSplats(string filePath, int shCoeffCount, out NativeArray<ImportSplatData> splats, out NativeArray<Vector3> shCoeffs)
         {
-            NativeArray<int> fileAttrOffsets = new NativeArray<int>(attributes.Count, Allocator.Temp);
+            using var fs = PLYFileReader.OpenDataStream(filePath, out var count, out var stride, out var attributes);
+
+            string attrError = CheckPLYAttributes(attributes);
+            if (!string.IsNullOrEmpty(attrError))
+                throw new IOException($"PLY file is probably not a Gaussian Splat file? Missing properties: {attrError}");
+
+            Dictionary<string, int> floatAttributeOffsets = BuildFloatAttributeOffsets(attributes);
+            int[] srcOffsets = BuildSplatAttributeOffsets(floatAttributeOffsets);
+            int[] shSrcOffsets = BuildSHAttributeOffsets(floatAttributeOffsets, shCoeffCount);
+
+            splats = new NativeArray<ImportSplatData>(count, Allocator.Persistent);
+            shCoeffs = shCoeffCount > 0 ? new NativeArray<Vector3>(count * shCoeffCount, Allocator.Persistent, NativeArrayOptions.ClearMemory) : default;
+
+            StreamPLYData(fs, filePath, count, stride, srcOffsets, splats, shCoeffCount, shSrcOffsets, shCoeffs);
+        }
+
+        static Dictionary<string, int> BuildFloatAttributeOffsets(List<(string, PLYFileReader.ElementType)> attributes)
+        {
+            var result = new Dictionary<string, int>(attributes.Count);
             int offset = 0;
-            for (var ai = 0; ai < attributes.Count; ai++)
+            for (int ai = 0; ai < attributes.Count; ai++)
             {
                 var attr = attributes[ai];
-                fileAttrOffsets[ai] = offset;
+                if (attr.Item2 == PLYFileReader.ElementType.Float)
+                    result[attr.Item1] = offset;
                 offset += PLYFileReader.TypeToSize(attr.Item2);
             }
 
+            return result;
+        }
+
+        static int[] BuildSplatAttributeOffsets(Dictionary<string, int> floatAttributeOffsets)
+        {
             string[] splatAttributes =
             {
                 "x",
@@ -110,47 +120,82 @@ namespace GaussianSplatting.Editor.Utils
                 "rot_2",
                 "rot_3",                
             };
-            Assert.AreEqual(UnsafeUtility.SizeOf<ImportSplatData>() / 4, splatAttributes.Length);
-            NativeArray<int> srcOffsets = new NativeArray<int>(splatAttributes.Length, Allocator.Temp);
+            int[] srcOffsets = new int[splatAttributes.Length];
             for (int ai = 0; ai < splatAttributes.Length; ai++)
-            {
-                int attrIndex = attributes.IndexOf((splatAttributes[ai], PLYFileReader.ElementType.Float));
-                int attrOffset = attrIndex >= 0 ? fileAttrOffsets[attrIndex] : -1;
-                srcOffsets[ai] = attrOffset;
-            }
+                srcOffsets[ai] = floatAttributeOffsets.TryGetValue(splatAttributes[ai], out int attrOffset) ? attrOffset : -1;
 
-            NativeArray<int> shSrcOffsets = new NativeArray<int>(shCoeffCount * 3, Allocator.Temp);
+            if (UnsafeUtility.SizeOf<ImportSplatData>() / 4 != srcOffsets.Length)
+                throw new InvalidOperationException("ImportSplatData layout no longer matches the expected PLY float attribute count");
+
+            return srcOffsets;
+        }
+
+        static int[] BuildSHAttributeOffsets(Dictionary<string, int> floatAttributeOffsets, int shCoeffCount)
+        {
+            int[] shSrcOffsets = new int[shCoeffCount * 3];
             for (int coeff = 0; coeff < shCoeffCount; coeff++)
             {
                 for (int channel = 0; channel < 3; channel++)
                 {
                     string attrName = $"f_rest_{coeff + (channel * 15)}";
-                    int attrIndex = attributes.IndexOf((attrName, PLYFileReader.ElementType.Float));
-                    shSrcOffsets[coeff * 3 + channel] = attrIndex >= 0 ? fileAttrOffsets[attrIndex] : -1;
+                    shSrcOffsets[coeff * 3 + channel] = floatAttributeOffsets.TryGetValue(attrName, out int attrOffset) ? attrOffset : -1;
                 }
             }
 
-            splats = new NativeArray<ImportSplatData>(count, Allocator.Persistent);
-            shCoeffs = shCoeffCount > 0 ? new NativeArray<Vector3>(count * shCoeffCount, Allocator.Persistent, NativeArrayOptions.ClearMemory) : default;
-            float3* shCoeffPtr = shCoeffCount > 0 ? (float3*)shCoeffs.GetUnsafePtr() : null;
-            ReorderPLYData(count, (byte*)input.GetUnsafeReadOnlyPtr(), stride, (byte*)splats.GetUnsafePtr(), UnsafeUtility.SizeOf<ImportSplatData>(), (int*)srcOffsets.GetUnsafeReadOnlyPtr(), shCoeffPtr, shCoeffCount, (int*)shSrcOffsets.GetUnsafeReadOnlyPtr());
-
-            fileAttrOffsets.Dispose();
-            srcOffsets.Dispose();
-            shSrcOffsets.Dispose();
+            return shSrcOffsets;
         }
 
-        [BurstCompile]
-        static unsafe void ReorderPLYData(int splatCount, byte* src, int srcStride, byte* dst, int dstStride, int* srcOffsets, float3* shDst, int shCoeffCount, int* shSrcOffsets)
+        static unsafe void StreamPLYData(FileStream fs, string filePath, int splatCount, int srcStride, int[] srcOffsets, NativeArray<ImportSplatData> splats, int shCoeffCount, int[] shSrcOffsets, NativeArray<Vector3> shCoeffs)
+        {
+            const int kMaxChunkBytes = 64 * 1024 * 1024;
+            int rowsPerChunk = Math.Max(1, kMaxChunkBytes / Math.Max(1, srcStride));
+            byte[] chunk = new byte[rowsPerChunk * srcStride];
+            int dstStride = UnsafeUtility.SizeOf<ImportSplatData>();
+            byte* dstBase = (byte*)splats.GetUnsafePtr();
+            float3* shDstBase = shCoeffCount > 0 ? (float3*)shCoeffs.GetUnsafePtr() : null;
+
+            int processed = 0;
+            while (processed < splatCount)
+            {
+                int rowsThisChunk = Math.Min(rowsPerChunk, splatCount - processed);
+                int bytesToRead = rowsThisChunk * srcStride;
+                ReadExact(fs, chunk, bytesToRead, filePath);
+
+                fixed (byte* srcBase = chunk)
+                fixed (int* srcOffsetsPtr = srcOffsets)
+                fixed (int* shSrcOffsetsPtr = shSrcOffsets)
+                {
+                    ReorderPLYChunk(rowsThisChunk, srcBase, srcStride, dstBase + (processed * dstStride), dstStride, srcOffsetsPtr, shDstBase == null ? null : shDstBase + (processed * shCoeffCount), shCoeffCount, shSrcOffsetsPtr);
+                }
+
+                processed += rowsThisChunk;
+            }
+        }
+
+        static void ReadExact(FileStream fs, byte[] buffer, int bytesToRead, string filePath)
+        {
+            int totalRead = 0;
+            while (totalRead < bytesToRead)
+            {
+                int read = fs.Read(buffer, totalRead, bytesToRead - totalRead);
+                if (read <= 0)
+                    throw new IOException($"PLY {filePath} read error, expected {bytesToRead} data bytes got {totalRead}");
+                totalRead += read;
+            }
+        }
+
+        static unsafe void ReorderPLYChunk(int splatCount, byte* src, int srcStride, byte* dst, int dstStride, int* srcOffsets, float3* shDst, int shCoeffCount, int* shSrcOffsets)
         {
             for (int i = 0; i < splatCount; i++)
             {
+                byte* rowSrc = src + (i * srcStride);
+                byte* rowDst = dst + (i * dstStride);
                 for (int attr = 0; attr < dstStride / 4; attr++)
                 {
                     if (srcOffsets[attr] >= 0)
-                        *(int*)(dst + attr * 4) = *(int*)(src + srcOffsets[attr]);
+                        *(int*)(rowDst + attr * 4) = *(int*)(rowSrc + srcOffsets[attr]);
                     else
-                        *(int*)(dst + attr * 4) = 0;
+                        *(int*)(rowDst + attr * 4) = 0;
                 }
 
                 for (int coeff = 0; coeff < shCoeffCount; coeff++)
@@ -158,15 +203,13 @@ namespace GaussianSplatting.Editor.Utils
                     float3 sh = 0f;
                     int baseOffset = coeff * 3;
                     if (shSrcOffsets[baseOffset + 0] >= 0)
-                        sh.x = *(float*)(src + shSrcOffsets[baseOffset + 0]);
+                        sh.x = *(float*)(rowSrc + shSrcOffsets[baseOffset + 0]);
                     if (shSrcOffsets[baseOffset + 1] >= 0)
-                        sh.y = *(float*)(src + shSrcOffsets[baseOffset + 1]);
+                        sh.y = *(float*)(rowSrc + shSrcOffsets[baseOffset + 1]);
                     if (shSrcOffsets[baseOffset + 2] >= 0)
-                        sh.z = *(float*)(src + shSrcOffsets[baseOffset + 2]);
+                        sh.z = *(float*)(rowSrc + shSrcOffsets[baseOffset + 2]);
                     shDst[i * shCoeffCount + coeff] = sh;
                 }
-                src += srcStride;
-                dst += dstStride;
             }
         }
 
