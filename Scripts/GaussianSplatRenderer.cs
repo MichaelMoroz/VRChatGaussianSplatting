@@ -608,11 +608,11 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         {
             VRCCameraSettings.ScreenCamera.AllowMSAA = false;
         }
-
-        if (VRCCameraSettings.PhotoCamera != null)
-        {
-            VRCCameraSettings.PhotoCamera.AllowMSAA = false;
-        }
+        // Commented out to prevent the VRChat Photo Camera from crashing!
+       // if (VRCCameraSettings.PhotoCamera != null)
+       // {
+       //     VRCCameraSettings.PhotoCamera.AllowMSAA = false;
+       // }
     }
 
     void Start()
