@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using Unity.Collections;
+using Unity.Collections.LowLevel.Unsafe;
 
 namespace GaussianSplatting.Editor.Utils
 {
@@ -18,13 +19,12 @@ namespace GaussianSplatting.Editor.Utils
             attrs = new List<(string, ElementType)>();
             if (!File.Exists(filePath))
                 return;
-            using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, 1, FileOptions.SequentialScan);
+            using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read);
             ReadHeaderImpl(filePath, out vertexCount, out vertexStride, out attrs, fs);
         }
 
         static void ReadHeaderImpl(string filePath, out int vertexCount, out int vertexStride, out List<(string, ElementType)> attrs, FileStream fs)
         {
-            // read header
             vertexCount = 0;
             vertexStride = 0;
             attrs = new List<(string, ElementType)>();
@@ -60,25 +60,37 @@ namespace GaussianSplatting.Editor.Utils
             }
         }
 
-        public static FileStream OpenDataStream(string filePath, out int vertexCount, out int vertexStride, out List<(string, ElementType)> attrs)
+        public static unsafe void ReadFile(string filePath, out int vertexCount, out int vertexStride, out List<(string, ElementType)> attrs, out byte* rawData)
         {
-            var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, 1, FileOptions.SequentialScan);
+            using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read);
             ReadHeaderImpl(filePath, out vertexCount, out vertexStride, out attrs, fs);
-            return fs;
-        }
-
-        public static void ReadFile(string filePath, out int vertexCount, out int vertexStride, out List<(string, ElementType)> attrs, out NativeArray<byte> vertices)
-        {
-            using var fs = OpenDataStream(filePath, out vertexCount, out vertexStride, out attrs);
 
             long totalBytes = (long)vertexCount * vertexStride;
-            if (totalBytes > int.MaxValue)
-                throw new IOException($"PLY {filePath} read error: raw vertex data exceeds NativeArray<byte> size limits; use streamed import instead");
 
-            vertices = new NativeArray<byte>(vertexCount * vertexStride, Allocator.Persistent);
-            var readBytes = fs.Read(vertices);
-            if (readBytes != vertices.Length)
-                throw new IOException($"PLY {filePath} read error, expected {vertices.Length} data bytes got {readBytes}");
+            rawData = (byte*)UnsafeUtility.Malloc(totalBytes, 16, Allocator.Persistent);
+
+            const int bufferSize = 128 * 1024 * 1024;
+            byte[] buffer = new byte[bufferSize];
+            long remaining = totalBytes;
+            long offset = 0;
+
+            while (remaining > 0)
+            {
+                int toRead = (int)Math.Min(remaining, (long)bufferSize);
+                int readBytes = fs.Read(buffer, 0, toRead);
+                if (readBytes == 0)
+                {
+                    UnsafeUtility.Free(rawData, Allocator.Persistent);
+                    throw new IOException($"PLY {filePath} read error, expected {totalBytes} data bytes got {offset}");
+                }
+
+                fixed (byte* pBuffer = buffer)
+                {
+                    UnsafeUtility.MemCpy(rawData + offset, pBuffer, readBytes);
+                }
+                offset += readBytes;
+                remaining -= readBytes;
+            }
         }
 
         public enum ElementType
@@ -111,9 +123,8 @@ namespace GaussianSplatting.Editor.Utils
                     break;
                 byteBuffer.Add((byte)b);
             }
-            // if line had CRLF line endings, remove the CR part
             if (byteBuffer.Count > 0 && byteBuffer.Last() == '\r')
-                byteBuffer.RemoveAt(byteBuffer.Count-1);
+                byteBuffer.RemoveAt(byteBuffer.Count - 1);
             return Encoding.UTF8.GetString(byteBuffer.ToArray());
         }
     }

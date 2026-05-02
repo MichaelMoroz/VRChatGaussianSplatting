@@ -8,18 +8,17 @@ using Unity.Burst;
 using Unity.Jobs;
 using Unity.Mathematics;
 using UnityEngine;
+using Unity.Collections.LowLevel.Unsafe;
 
 namespace GaussianSplatting.Editor.Utils
 {
-    // reads Niantic/Scaniverse .SPZ files:
-    // https://github.com/nianticlabs/spz
-    // https://scaniverse.com/spz
     [BurstCompile]
     public static class SPZFileReader
     {
-        struct SpzHeader {
-            public uint magic; // 0x5053474e "NGSP"
-            public uint version; // 2
+        struct SpzHeader
+        {
+            public uint magic;
+            public uint version;
             public uint numPoints;
             public uint sh_fracbits_flags_reserved;
         };
@@ -63,30 +62,27 @@ namespace GaussianSplatting.Editor.Utils
             };
         }
 
-        public static void ReadFile(string filePath, int requestedSHCoeffCount, out NativeArray<ImportSplatData> splats, out NativeArray<Vector3> shCoeffs)
+        public static void ReadFile(string filePath, out UnsafeSplatBuffer splats)
         {
             using var fs = File.OpenRead(filePath);
             using var gz = new GZipStream(fs, CompressionMode.Decompress);
             ReadHeaderImpl(filePath, gz, out var splatCount, out var shLevel, out var fractBits, out var flags);
 
-            if (splatCount < 1 || splatCount > 10_000_000) // 10M hardcoded in SPZ code
+            if (splatCount < 1 || splatCount > 10_000_000)
                 throw new IOException($"SPZ {filePath} read error, out of range splat count {splatCount}");
             if (shLevel < 0 || shLevel > 3)
                 throw new IOException($"SPZ {filePath} read error, out of range SH level {shLevel}");
             if (fractBits < 0 || fractBits > 24)
                 throw new IOException($"SPZ {filePath} read error, out of range fractional bits {fractBits}");
 
-            // allocate temporary storage
-            int fileSHCoeffCount = SHCoeffsForLevel(shLevel);
-            int importedSHCoeffCount = math.min(requestedSHCoeffCount, fileSHCoeffCount);
+            int shCoeffs = SHCoeffsForLevel(shLevel);
             NativeArray<byte> packedPos = new(splatCount * 3 * 3, Allocator.Persistent);
             NativeArray<byte> packedScale = new(splatCount * 3, Allocator.Persistent);
             NativeArray<byte> packedRot = new(splatCount * 3, Allocator.Persistent);
             NativeArray<byte> packedAlpha = new(splatCount, Allocator.Persistent);
             NativeArray<byte> packedCol = new(splatCount * 3, Allocator.Persistent);
-            NativeArray<byte> packedSh = new(splatCount * 3 * fileSHCoeffCount, Allocator.Persistent);
+            NativeArray<byte> packedSh = new(splatCount * 3 * shCoeffs, Allocator.Persistent);
 
-            // read file contents into temporaries
             bool readOk = true;
             readOk &= gz.Read(packedPos) == packedPos.Length;
             readOk &= gz.Read(packedAlpha) == packedAlpha.Length;
@@ -95,9 +91,7 @@ namespace GaussianSplatting.Editor.Utils
             readOk &= gz.Read(packedRot) == packedRot.Length;
             readOk &= gz.Read(packedSh) == packedSh.Length;
 
-            // unpack into full splat data
-            splats = new NativeArray<ImportSplatData>(splatCount, Allocator.Persistent);
-            shCoeffs = importedSHCoeffCount > 0 ? new NativeArray<Vector3>(splatCount * importedSHCoeffCount, Allocator.Persistent, NativeArrayOptions.ClearMemory) : default;
+            splats = new UnsafeSplatBuffer(splatCount);
             UnpackDataJob job = new UnpackDataJob();
             job.packedPos = packedPos;
             job.packedScale = packedScale;
@@ -105,14 +99,11 @@ namespace GaussianSplatting.Editor.Utils
             job.packedAlpha = packedAlpha;
             job.packedCol = packedCol;
             job.packedSh = packedSh;
-            job.fileSHCoeffCount = fileSHCoeffCount;
-            job.importedSHCoeffCount = importedSHCoeffCount;
+            job.shCoeffs = shCoeffs;
             job.fractScale = 1.0f / (1 << fractBits);
             job.splats = splats;
-            job.shCoeffs = shCoeffs;
             job.Schedule(splatCount, 4096).Complete();
 
-            // cleanup
             packedPos.Dispose();
             packedScale.Dispose();
             packedRot.Dispose();
@@ -123,8 +114,6 @@ namespace GaussianSplatting.Editor.Utils
             if (!readOk)
             {
                 splats.Dispose();
-                if (shCoeffs.IsCreated)
-                    shCoeffs.Dispose();
                 throw new IOException($"SPZ {filePath} read error, file smaller than it should be");
             }
         }
@@ -132,17 +121,15 @@ namespace GaussianSplatting.Editor.Utils
         [BurstCompile]
         struct UnpackDataJob : IJobParallelFor
         {
-            [NativeDisableParallelForRestriction] [ReadOnly] public NativeArray<byte> packedPos;
-            [NativeDisableParallelForRestriction] [ReadOnly] public NativeArray<byte> packedScale;
-            [NativeDisableParallelForRestriction] [ReadOnly] public NativeArray<byte> packedRot;
-            [NativeDisableParallelForRestriction] [ReadOnly] public NativeArray<byte> packedAlpha;
-            [NativeDisableParallelForRestriction] [ReadOnly] public NativeArray<byte> packedCol;
-            [NativeDisableParallelForRestriction] [ReadOnly] public NativeArray<byte> packedSh;
+            [NativeDisableParallelForRestriction][ReadOnly] public NativeArray<byte> packedPos;
+            [NativeDisableParallelForRestriction][ReadOnly] public NativeArray<byte> packedScale;
+            [NativeDisableParallelForRestriction][ReadOnly] public NativeArray<byte> packedRot;
+            [NativeDisableParallelForRestriction][ReadOnly] public NativeArray<byte> packedAlpha;
+            [NativeDisableParallelForRestriction][ReadOnly] public NativeArray<byte> packedCol;
+            [NativeDisableParallelForRestriction][ReadOnly] public NativeArray<byte> packedSh;
             public float fractScale;
-            public int fileSHCoeffCount;
-            public int importedSHCoeffCount;
-            public NativeArray<ImportSplatData> splats;
-            public NativeArray<Vector3> shCoeffs;
+            public int shCoeffs;
+            [NativeDisableUnsafePtrRestriction] public UnsafeSplatBuffer splats;
 
             public void Execute(int index)
             {
@@ -167,12 +154,22 @@ namespace GaussianSplatting.Editor.Utils
                 col /= 0.15f;
                 splat.dc0 = GaussianUtils.SH0ToColor(col);
 
-                int shIdx = index * fileSHCoeffCount * 3;
-                for (int coeff = 0; coeff < importedSHCoeffCount; coeff++)
-                {
-                    shCoeffs[index * importedSHCoeffCount + coeff] = UnpackSH(shIdx);
-                    shIdx += 3;
-                }
+                int shIdx = index * shCoeffs * 3;
+                splat.sh1 = UnpackSH(shIdx); shIdx += 3;
+                splat.sh2 = UnpackSH(shIdx); shIdx += 3;
+                splat.sh3 = UnpackSH(shIdx); shIdx += 3;
+                splat.sh4 = UnpackSH(shIdx); shIdx += 3;
+                splat.sh5 = UnpackSH(shIdx); shIdx += 3;
+                splat.sh6 = UnpackSH(shIdx); shIdx += 3;
+                splat.sh7 = UnpackSH(shIdx); shIdx += 3;
+                splat.sh8 = UnpackSH(shIdx); shIdx += 3;
+                splat.sh9 = UnpackSH(shIdx); shIdx += 3;
+                splat.shA = UnpackSH(shIdx); shIdx += 3;
+                splat.shB = UnpackSH(shIdx); shIdx += 3;
+                splat.shC = UnpackSH(shIdx); shIdx += 3;
+                splat.shD = UnpackSH(shIdx); shIdx += 3;
+                splat.shE = UnpackSH(shIdx); shIdx += 3;
+                splat.shF = UnpackSH(shIdx); shIdx += 3;
 
                 splats[index] = splat;
             }
@@ -180,7 +177,7 @@ namespace GaussianSplatting.Editor.Utils
             float UnpackFloat(int idx)
             {
                 int fx = packedPos[idx * 3 + 0] | (packedPos[idx * 3 + 1] << 8) | (packedPos[idx * 3 + 2] << 16);
-                fx |= (fx & 0x800000) != 0 ? -16777216 : 0; // sign extension with 0xff000000
+                fx |= (fx & 0x800000) != 0 ? -16777216 : 0;
                 return fx;
             }
 
@@ -191,7 +188,6 @@ namespace GaussianSplatting.Editor.Utils
                 return sh;
             }
         }
-
     }
 }
-#endif // UNITY_EDITOR
+#endif
