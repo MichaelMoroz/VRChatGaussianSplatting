@@ -366,6 +366,8 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
             return;
         }
 
+        material.SetFloat("_VRC_LIGHT_VOLUMES", enabled ? 1.0f : 0.0f);
+
         if (enabled)
         {
             material.EnableKeyword("_VRC_LIGHT_VOLUMES_ON");
