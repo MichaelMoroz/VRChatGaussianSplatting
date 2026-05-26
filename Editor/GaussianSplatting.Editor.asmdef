@@ -4,7 +4,8 @@
     "references": [
         "GaussianSplatting",
         "RadixSort",
-        "UdonSharp.Runtime"
+        "UdonSharp.Runtime",
+        "UdonSharp.Editor"
     ],
     "includePlatforms": [
         "Editor"

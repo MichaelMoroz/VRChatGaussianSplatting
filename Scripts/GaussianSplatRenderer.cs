@@ -60,8 +60,15 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
     [UdonSynced, SerializeField] public bool overrideMaterialProperties = false;
     [UdonSynced, Range(0, 3)] [SerializeField] int requestedSHBand = 3;
     [UdonSynced, Range(0.0f, 2.0f)] [SerializeField] public float gaussianScale = 1.0f;
+    [Range(0.0f, 1.0f)] [SerializeField] float thinThreshold = 0.005f;
     [Range(0.0f, 3.0f)] [SerializeField] float antiAliasing = 1.0f;
+    [Range(-20.0f, 10.0f)] [SerializeField] float log2MinScale = -12.0f;
     [Range(0.005f, 0.1f)] [SerializeField] public float alphaCutoff = 0.03f;
+    [Range(0.0f, 100.0f)] [SerializeField] float scaleCutoff = 100.0f;
+    [Range(0.0f, 5.0f)] [SerializeField] float exposure = 1.0f;
+    [Range(0.0f, 5.0f)] [SerializeField] float opacity = 1.0f;
+    [SerializeField] Vector3 oklchShift = Vector3.zero;
+    [SerializeField] float gamma = 1.0f;
     [UdonSynced, SerializeField] bool useVrcLightVolumes = false;
     [Range(0.0f, 4.0f)] [SerializeField] float lightVolumeIntensity = 1.0f;
 
@@ -389,6 +396,54 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         material.SetFloat("_SHBand", clampedBand);
     }
 
+    void SetMaterialFloatIfPresent(Material material, string propertyName, float value)
+    {
+        if (material == null || !material.HasProperty(propertyName))
+        {
+            return;
+        }
+
+        material.SetFloat(propertyName, value);
+    }
+
+    void SetMaterialVectorIfPresent(Material material, string propertyName, Vector4 value)
+    {
+        if (material == null || !material.HasProperty(propertyName))
+        {
+            return;
+        }
+
+        material.SetVector(propertyName, value);
+    }
+
+    void ApplyConfiguredMaterialSettings(Material material, int currentSHBand)
+    {
+        if (material == null)
+        {
+            return;
+        }
+
+        SetMaterialSHBand(material, currentSHBand);
+        SetMaterialVrcLightVolumes(material, useVrcLightVolumes);
+        SetMaterialFloatIfPresent(material, "_LightVolumeIntensity", lightVolumeIntensity);
+
+        if (!overrideMaterialProperties)
+        {
+            return;
+        }
+
+        SetMaterialFloatIfPresent(material, "_GaussianMul", gaussianScale);
+        SetMaterialFloatIfPresent(material, "_ThinThreshold", thinThreshold);
+        SetMaterialFloatIfPresent(material, "_AntiAliasing", antiAliasing);
+        SetMaterialFloatIfPresent(material, "_Log2MinScale", log2MinScale);
+        SetMaterialFloatIfPresent(material, "_AlphaCutoff", alphaCutoff);
+        SetMaterialFloatIfPresent(material, "_ScaleCutoff", scaleCutoff);
+        SetMaterialFloatIfPresent(material, "_Exposure", exposure);
+        SetMaterialFloatIfPresent(material, "_Opacity", opacity);
+        SetMaterialVectorIfPresent(material, "_OKLCHShift", new Vector4(oklchShift.x, oklchShift.y, oklchShift.z, 0.0f));
+        SetMaterialFloatIfPresent(material, "_Gamma", Mathf.Max(0.001f, gamma));
+    }
+
     int GetSplatObjectMaxSHBand(GameObject rootObject)
     {
         if (rootObject == null)
@@ -485,29 +540,7 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         for (int i = 0; i < splatMats.Length; i++)
         {
             Material splatMat = splatMats[i];
-            SetMaterialSHBand(splatMat, currentSHBand);
-            SetMaterialVrcLightVolumes(splatMat, useVrcLightVolumes);
-            if (splatMat.HasProperty("_LightVolumeIntensity"))
-            {
-                splatMat.SetFloat("_LightVolumeIntensity", lightVolumeIntensity);
-            }
-            if (overrideMaterialProperties)
-            {
-                if (splatMat.HasProperty("_GaussianMul"))
-                {
-                    splatMat.SetFloat("_GaussianMul", gaussianScale);
-                }
-
-                if (splatMat.HasProperty("_AntiAliasing"))
-                {
-                    splatMat.SetFloat("_AntiAliasing", antiAliasing);
-                }
-
-                if (splatMat.HasProperty("_AlphaCutoff"))
-                {
-                    splatMat.SetFloat("_AlphaCutoff", alphaCutoff);
-                }
-            }
+            ApplyConfiguredMaterialSettings(splatMat, currentSHBand);
         }
     }
 
@@ -672,29 +705,7 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         {
             Material splatMat = splatMats[i];
             splatMat.SetTexture("_GS_RenderOrder", splatRenderOrder);
-            SetMaterialSHBand(splatMat, currentSHBand);
-            SetMaterialVrcLightVolumes(splatMat, useVrcLightVolumes);
-            if (splatMat.HasProperty("_LightVolumeIntensity"))
-            {
-                splatMat.SetFloat("_LightVolumeIntensity", lightVolumeIntensity);
-            }
-            if (overrideMaterialProperties)
-            {
-                if (splatMat.HasProperty("_GaussianMul"))
-                {
-                    splatMat.SetFloat("_GaussianMul", gaussianScale);
-                }
-
-                if (splatMat.HasProperty("_AntiAliasing"))
-                {
-                    splatMat.SetFloat("_AntiAliasing", antiAliasing);
-                }
-
-                if (splatMat.HasProperty("_AlphaCutoff"))
-                {
-                    splatMat.SetFloat("_AlphaCutoff", alphaCutoff);
-                }
-            }
+            ApplyConfiguredMaterialSettings(splatMat, currentSHBand);
         }
 
         Texture positions = null;

@@ -1,0 +1,151 @@
+#if UNITY_EDITOR
+using GaussianSplatting;
+using UdonSharpEditor;
+using UnityEditor;
+using UnityEngine;
+
+namespace GaussianSplatting.Editor
+{
+    [CustomEditor(typeof(GaussianSplatRenderer))]
+    [CanEditMultipleObjects]
+    class GaussianSplatRendererEditor : UnityEditor.Editor
+    {
+        SerializedProperty _cameraPositionQuantization;
+        SerializedProperty _alwaysUpdate;
+        SerializedProperty _sortPipelineFrames;
+        SerializedProperty _splatRenderOrder;
+
+        SerializedProperty _overrideMaterialProperties;
+        SerializedProperty _requestedSHBand;
+        SerializedProperty _gaussianScale;
+        SerializedProperty _thinThreshold;
+        SerializedProperty _antiAliasing;
+        SerializedProperty _log2MinScale;
+        SerializedProperty _alphaCutoff;
+        SerializedProperty _scaleCutoff;
+        SerializedProperty _exposure;
+        SerializedProperty _opacity;
+        SerializedProperty _oklchShift;
+        SerializedProperty _gamma;
+        SerializedProperty _useVrcLightVolumes;
+        SerializedProperty _lightVolumeIntensity;
+
+        void OnEnable()
+        {
+            _cameraPositionQuantization = serializedObject.FindProperty("cameraPositionQuantization");
+            _alwaysUpdate = serializedObject.FindProperty("alwaysUpdate");
+            _sortPipelineFrames = serializedObject.FindProperty("sortPipelineFrames");
+            _splatRenderOrder = serializedObject.FindProperty("splatRenderOrder");
+
+            _overrideMaterialProperties = serializedObject.FindProperty("overrideMaterialProperties");
+            _requestedSHBand = serializedObject.FindProperty("requestedSHBand");
+            _gaussianScale = serializedObject.FindProperty("gaussianScale");
+            _thinThreshold = serializedObject.FindProperty("thinThreshold");
+            _antiAliasing = serializedObject.FindProperty("antiAliasing");
+            _log2MinScale = serializedObject.FindProperty("log2MinScale");
+            _alphaCutoff = serializedObject.FindProperty("alphaCutoff");
+            _scaleCutoff = serializedObject.FindProperty("scaleCutoff");
+            _exposure = serializedObject.FindProperty("exposure");
+            _opacity = serializedObject.FindProperty("opacity");
+            _oklchShift = serializedObject.FindProperty("oklchShift");
+            _gamma = serializedObject.FindProperty("gamma");
+            _useVrcLightVolumes = serializedObject.FindProperty("useVrcLightVolumes");
+            _lightVolumeIntensity = serializedObject.FindProperty("lightVolumeIntensity");
+        }
+
+        public override void OnInspectorGUI()
+        {
+            DrawUdonSharpHeader();
+
+            serializedObject.Update();
+
+            DrawSettingsGroup("Sorting Settings", DrawSortingSettings);
+            EditorGUILayout.Space();
+            DrawSettingsGroup("Material Settings", DrawMaterialSettings);
+
+            serializedObject.ApplyModifiedProperties();
+
+            EditorGUILayout.Space();
+            DrawUdonSharpUtilities();
+        }
+
+        void DrawSortingSettings()
+        {
+            EditorGUILayout.PropertyField(_cameraPositionQuantization, new GUIContent("Camera Position Quantization"));
+            EditorGUILayout.PropertyField(_alwaysUpdate, new GUIContent("Always Update"));
+            EditorGUILayout.IntSlider(_sortPipelineFrames, 1, 8, new GUIContent("Sort Pipeline Frames"));
+            EditorGUILayout.PropertyField(_splatRenderOrder, new GUIContent("Splat Render Order"));
+        }
+
+        void DrawMaterialSettings()
+        {
+            EditorGUILayout.IntSlider(_requestedSHBand, 0, 3, new GUIContent("Requested SH Band"));
+            EditorGUILayout.PropertyField(_useVrcLightVolumes, new GUIContent("Use VRC Light Volumes"));
+            using (new EditorGUI.DisabledScope(!_useVrcLightVolumes.boolValue))
+            {
+                EditorGUILayout.Slider(_lightVolumeIntensity, 0.0f, 10.0f, new GUIContent("Light Volume Intensity"));
+            }
+
+            EditorGUILayout.Space();
+            EditorGUILayout.PropertyField(_overrideMaterialProperties, new GUIContent("Override Material Properties"));
+            using (new EditorGUI.DisabledScope(!_overrideMaterialProperties.boolValue))
+            {
+                EditorGUILayout.Slider(_gaussianScale, 0.0f, 2.0f, new GUIContent("Gaussian Scale"));
+                EditorGUILayout.Slider(_thinThreshold, 0.0f, 1.0f, new GUIContent("Thinness Threshold"));
+                EditorGUILayout.Slider(_antiAliasing, 0.0f, 5.0f, new GUIContent("Anti Aliasing"));
+                EditorGUILayout.Slider(_log2MinScale, -20.0f, 10.0f, new GUIContent("Log2 Minimum Scale"));
+                EditorGUILayout.Slider(_alphaCutoff, 0.0f, 1.0f, new GUIContent("Alpha Cutoff"));
+                EditorGUILayout.Slider(_scaleCutoff, 0.0f, 100.0f, new GUIContent("Scale Cutoff"));
+                EditorGUILayout.Slider(_exposure, 0.0f, 5.0f, new GUIContent("Exposure"));
+                EditorGUILayout.Slider(_opacity, 0.0f, 5.0f, new GUIContent("Opacity"));
+                EditorGUILayout.PropertyField(_oklchShift, new GUIContent("OKLCH Color Shift"));
+                DrawMinFloatField(_gamma, new GUIContent("Gamma"), 0.001f);
+            }
+        }
+
+        static void DrawMinFloatField(SerializedProperty property, GUIContent label, float minValue)
+        {
+            EditorGUI.showMixedValue = property.hasMultipleDifferentValues;
+            EditorGUI.BeginChangeCheck();
+            float nextValue = EditorGUILayout.FloatField(label, property.floatValue);
+            if (EditorGUI.EndChangeCheck())
+            {
+                property.floatValue = Mathf.Max(minValue, nextValue);
+            }
+            EditorGUI.showMixedValue = false;
+        }
+
+        static void DrawSettingsGroup(string title, System.Action drawContents)
+        {
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            EditorGUILayout.LabelField(title, EditorStyles.boldLabel);
+            drawContents();
+            EditorGUILayout.EndVertical();
+        }
+
+        void DrawUdonSharpHeader()
+        {
+            if (targets != null && targets.Length > 1)
+            {
+                UdonSharpGUI.DrawDefaultUdonSharpBehaviourHeader(targets);
+            }
+            else
+            {
+                UdonSharpGUI.DrawDefaultUdonSharpBehaviourHeader(target);
+            }
+        }
+
+        void DrawUdonSharpUtilities()
+        {
+            if (targets != null && targets.Length > 1)
+            {
+                UdonSharpGUI.DrawUtilities(targets);
+            }
+            else
+            {
+                UdonSharpGUI.DrawUtilities(target);
+            }
+        }
+    }
+}
+#endif
