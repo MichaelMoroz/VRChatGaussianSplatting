@@ -2,6 +2,11 @@ using UdonSharp;
 using UnityEngine;
 using UnityEngine.UI;
 
+#if UNITY_EDITOR && !COMPILER_UDONSHARP
+using System.Collections.Generic;
+using UnityEditor;
+#endif
+
 namespace GaussianSplatting
 {
 
@@ -26,8 +31,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
     public Button splatScrollUpButton;
     public Button splatScrollDownButton;
     public Button[] splatButtons;
-    public int[] splatButtonIndices;
-    public string[] splatButtonLabels;
+    [HideInInspector] public GaussianSplatObject[] cachedSceneSplatObjects;
 
     [SerializeField] float gaussianScaleStep = 0.1f;
     [SerializeField] float cameraQuantizationStep = 0.05f;
@@ -45,6 +49,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
     float _lastAntiAliasingSliderValue;
     float _lastLightVolumeIntensitySliderValue;
     float _lastAlphaCutoffSliderValue;
+    GaussianSplatObject[] _sceneSplatObjects;
 
     void Start()
     {
@@ -56,10 +61,157 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         RefreshUI();
     }
 
+#if UNITY_EDITOR && !COMPILER_UDONSHARP
+    static bool _editorRefreshRequested = true;
+    static double _nextEditorRefreshTime;
+
+    [InitializeOnLoadMethod]
+    static void RegisterEditorRefresh()
+    {
+        EditorApplication.update -= RefreshEditorUis;
+        EditorApplication.update += RefreshEditorUis;
+        EditorApplication.hierarchyChanged -= RequestEditorRefresh;
+        EditorApplication.hierarchyChanged += RequestEditorRefresh;
+    }
+
+    internal static void RequestEditorRefresh()
+    {
+        _editorRefreshRequested = true;
+    }
+
+    static bool IsSceneUi(GaussianSplatRendererUI ui)
+    {
+        if (ui == null)
+        {
+            return false;
+        }
+
+        GameObject rootObject = ui.transform.root != null ? ui.transform.root.gameObject : ui.gameObject;
+        if (rootObject == null || EditorUtility.IsPersistent(rootObject))
+        {
+            return false;
+        }
+
+        if ((ui.hideFlags & (HideFlags.HideAndDontSave | HideFlags.NotEditable)) != 0)
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    static void RefreshEditorUis()
+    {
+        if (Application.isPlaying)
+        {
+            return;
+        }
+
+        double currentTime = EditorApplication.timeSinceStartup;
+        if (!_editorRefreshRequested && currentTime < _nextEditorRefreshTime)
+        {
+            return;
+        }
+
+        _editorRefreshRequested = false;
+        _nextEditorRefreshTime = currentTime + 0.25f;
+
+        GaussianSplatRendererUI[] sceneUis = Resources.FindObjectsOfTypeAll<GaussianSplatRendererUI>();
+        for (int i = 0; i < sceneUis.Length; i++)
+        {
+            GaussianSplatRendererUI ui = sceneUis[i];
+            if (!IsSceneUi(ui))
+            {
+                continue;
+            }
+
+            ui.RefreshUI();
+            EditorUtility.SetDirty(ui);
+        }
+    }
+
+    void OnValidate()
+    {
+        RefreshUI();
+        EditorUtility.SetDirty(this);
+    }
+#endif
+
     string FormatFloat(float value)
     {
         float roundedValue = Mathf.Round(value * 100.0f) * 0.01f;
         return roundedValue.ToString();
+    }
+
+    void FindRenderer()
+    {
+        if (gaussianSplatRenderer != null)
+        {
+            return;
+        }
+
+#if !COMPILER_UDONSHARP
+        gaussianSplatRenderer = Object.FindObjectOfType<GaussianSplatRenderer>();
+#endif
+    }
+
+    void RefreshSceneSplatObjects()
+    {
+#if UNITY_EDITOR && !COMPILER_UDONSHARP
+        List<GaussianSplatObject> sceneObjects = new List<GaussianSplatObject>();
+        GaussianSplatObject[] allObjects = Resources.FindObjectsOfTypeAll<GaussianSplatObject>();
+        for (int i = 0; i < allObjects.Length; i++)
+        {
+            GaussianSplatObject currentObject = allObjects[i];
+            if (currentObject == null)
+            {
+                continue;
+            }
+
+            GameObject rootObject = currentObject.transform.root != null ? currentObject.transform.root.gameObject : currentObject.gameObject;
+            if (rootObject == null || EditorUtility.IsPersistent(rootObject))
+            {
+                continue;
+            }
+
+            if ((currentObject.hideFlags & (HideFlags.HideAndDontSave | HideFlags.NotEditable)) != 0)
+            {
+                continue;
+            }
+
+            sceneObjects.Add(currentObject);
+        }
+
+        _sceneSplatObjects = sceneObjects.ToArray();
+        cachedSceneSplatObjects = _sceneSplatObjects;
+#else
+        if (cachedSceneSplatObjects != null && cachedSceneSplatObjects.Length > 0)
+        {
+            _sceneSplatObjects = cachedSceneSplatObjects;
+            return;
+        }
+
+#if COMPILER_UDONSHARP
+        _sceneSplatObjects = new GaussianSplatObject[0];
+#else
+        _sceneSplatObjects = Object.FindObjectsOfType<GaussianSplatObject>(true);
+#endif
+#endif
+    }
+
+    int GetSceneSplatCount()
+    {
+        return _sceneSplatObjects == null ? 0 : _sceneSplatObjects.Length;
+    }
+
+    GaussianSplatObject GetSceneSplatObject(int index)
+    {
+        if (_sceneSplatObjects == null || index < 0 || index >= _sceneSplatObjects.Length)
+        {
+            return null;
+        }
+
+        return _sceneSplatObjects[index];
     }
 
     void SetButtonEnabled(Button button, bool enabled, string label, Color enabledColor, Color disabledColor)
@@ -104,17 +256,13 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
 
     void RefreshSplatButtons()
     {
-        if (splatButtons == null || splatButtonIndices == null || splatButtonLabels == null)
+        if (splatButtons == null)
         {
             return;
         }
 
         int visibleButtonCount = splatButtons.Length;
-        int totalSplatCount = splatButtonLabels.Length;
-        if (splatButtonIndices.Length < totalSplatCount)
-        {
-            totalSplatCount = splatButtonIndices.Length;
-        }
+        int totalSplatCount = GetSceneSplatCount();
 
         if (totalSplatCount == 0)
         {
@@ -132,14 +280,6 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         }
 
         int maxStartIndex = Mathf.Max(0, totalSplatCount - visibleButtonCount);
-        if (gaussianSplatRenderer.splatObjectIndex < _splatListStartIndex)
-        {
-            _splatListStartIndex = gaussianSplatRenderer.splatObjectIndex;
-        }
-        else if (gaussianSplatRenderer.splatObjectIndex >= _splatListStartIndex + visibleButtonCount)
-        {
-            _splatListStartIndex = gaussianSplatRenderer.splatObjectIndex - visibleButtonCount + 1;
-        }
         _splatListStartIndex = Mathf.Clamp(_splatListStartIndex, 0, maxStartIndex);
 
         for (int i = 0; i < visibleButtonCount; i++)
@@ -158,14 +298,26 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
                 continue;
             }
 
-            bool isCurrent = gaussianSplatRenderer.splatObjectIndex == splatButtonIndices[splatDataIndex];
-            string label = splatButtonLabels[splatDataIndex];
-            if (isCurrent)
+            GaussianSplatObject splatObject = GetSceneSplatObject(splatDataIndex);
+            if (splatObject == null)
             {
-                label += " (Current)";
+                SetButtonEnabled(slotButton, false, "", _defaultSplatColor, _scrollDisabledColor);
+                continue;
             }
 
-            SetButtonEnabled(slotButton, true, label, isCurrent ? _selectedSplatColor : _defaultSplatColor, _scrollDisabledColor);
+            bool isRendered = gaussianSplatRenderer != null && gaussianSplatRenderer.GetCurrentSplatObject() == splatObject.gameObject;
+            bool isActive = splatObject.gameObject.activeInHierarchy;
+            string label = splatObject.gameObject.name;
+            if (isRendered)
+            {
+                label += " (Rendering)";
+            }
+            else if (isActive)
+            {
+                label += " (On)";
+            }
+
+            SetButtonEnabled(slotButton, true, label, isRendered ? _selectedSplatColor : _defaultSplatColor, _scrollDisabledColor);
         }
 
         SetButtonEnabled(splatScrollUpButton, _splatListStartIndex > 0, "Up", _scrollEnabledColor, _scrollDisabledColor);
@@ -346,18 +498,30 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
 
     void SelectSplatSlot(int slotIndex)
     {
-        if (gaussianSplatRenderer == null || splatButtonIndices == null)
-        {
-            return;
-        }
-
         int splatDataIndex = _splatListStartIndex + slotIndex;
-        if (splatDataIndex < 0 || splatDataIndex >= splatButtonIndices.Length)
+        GaussianSplatObject selectedSplatObject = GetSceneSplatObject(splatDataIndex);
+        if (selectedSplatObject == null)
         {
             return;
         }
 
-        gaussianSplatRenderer.SelectSplatObject(splatButtonIndices[splatDataIndex]);
+        int totalSplatCount = GetSceneSplatCount();
+        for (int i = 0; i < totalSplatCount; i++)
+        {
+            GaussianSplatObject sceneSplatObject = GetSceneSplatObject(i);
+            if (sceneSplatObject != null)
+            {
+                sceneSplatObject.gameObject.SetActive(false);
+            }
+        }
+
+        selectedSplatObject.gameObject.SetActive(true);
+        selectedSplatObject.NotifyRendererEnabled();
+        if (gaussianSplatRenderer != null)
+        {
+            gaussianSplatRenderer.NotifySplatObjectEnabled(selectedSplatObject);
+        }
+
         RefreshUI();
     }
 
@@ -387,7 +551,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
     public void ScrollSplatListDown()
     {
         int visibleButtonCount = splatButtons == null ? 0 : splatButtons.Length;
-        int totalSplatCount = splatButtonLabels == null ? 0 : splatButtonLabels.Length;
+        int totalSplatCount = GetSceneSplatCount();
         int maxStartIndex = Mathf.Max(0, totalSplatCount - visibleButtonCount);
         _splatListStartIndex = Mathf.Min(maxStartIndex, _splatListStartIndex + 1);
         RefreshUI();
@@ -395,14 +559,23 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
 
     public void RefreshUI()
     {
+        FindRenderer();
+        RefreshSceneSplatObjects();
+
         if (gaussianSplatRenderer == null)
         {
+            if (currentSplatText != null)
+            {
+                currentSplatText.text = "Current Splat: None";
+            }
+
+            RefreshSplatButtons();
             return;
         }
 
         if (currentSplatText != null)
         {
-            currentSplatText.text = "Current Splat (global): " + gaussianSplatRenderer.GetCurrentSplatName();
+            currentSplatText.text = "Current Splat: " + gaussianSplatRenderer.GetCurrentSplatName();
         }
 
         if (gaussianScaleText != null)

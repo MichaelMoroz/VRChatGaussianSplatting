@@ -17,6 +17,18 @@ public class QualityToggle : UdonSharpBehaviour
 
     public override void Interact()
     {
+        if (gaussianSplatRenderer == null)
+        {
+#if !COMPILER_UDONSHARP
+            gaussianSplatRenderer = Object.FindObjectOfType<GaussianSplatRenderer>();
+#endif
+        }
+
+        if (gaussianSplatRenderer == null)
+        {
+            return;
+        }
+
         gaussianSplatRenderer.overrideMaterialProperties = true;
         gaussianSplatRenderer.gaussianScale = gaussianScale;
         gaussianSplatRenderer.alphaCutoff = alphaCutoff;

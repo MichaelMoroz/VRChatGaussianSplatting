@@ -1,13 +1,59 @@
 using UnityEngine;
 using UdonSharp;
 
+#if UNITY_EDITOR && !COMPILER_UDONSHARP
+using UnityEditor;
+#endif
+
 namespace GaussianSplatting
 {
     public class GaussianSplatObject : UdonSharpBehaviour
     {
+        [SerializeField] public GaussianSplatRenderer gaussianSplatRenderer;
         [SerializeField] public GameObject sortedObject;
         [SerializeField] public MeshRenderer sortedRenderer;
         [SerializeField] int maxShBand = -1;
+
+#if UNITY_EDITOR && !COMPILER_UDONSHARP
+        void Reset()
+        {
+            EnsureSceneRenderer();
+        }
+
+        void OnValidate()
+        {
+            EnsureSceneRenderer();
+        }
+
+        void EnsureSceneRenderer()
+        {
+            if (EditorUtility.IsPersistent(this))
+            {
+                return;
+            }
+
+            gaussianSplatRenderer = GaussianSplatRenderer.EnsureSceneRendererExists();
+            EditorUtility.SetDirty(this);
+        }
+#endif
+
+        void Start()
+        {
+            NotifyRendererEnabled();
+        }
+
+        void OnEnable()
+        {
+            NotifyRendererEnabled();
+        }
+
+        public void NotifyRendererEnabled()
+        {
+            if (gaussianSplatRenderer != null && gameObject.activeInHierarchy)
+            {
+                gaussianSplatRenderer.NotifySplatObjectEnabled(this);
+            }
+        }
 
         GameObject ResolveChildObject(GameObject childObject, string childName)
         {
@@ -50,6 +96,15 @@ namespace GaussianSplatting
             sortedObject = ResolveChildObject(sortedObject, "Sorted");
             sortedRenderer = ResolveRenderer(sortedRenderer, sortedObject, "Sorted");
             return sortedRenderer;
+        }
+
+        public void SetSortedRendererEnabled(bool enabled)
+        {
+            MeshRenderer renderer = GetSortedRenderer();
+            if (renderer != null)
+            {
+                renderer.enabled = enabled;
+            }
         }
 
         int InferMaxSHBandFromMaterial(Material material)
@@ -126,6 +181,8 @@ namespace GaussianSplatting
             {
                 sortedObject.SetActive(true);
             }
+
+            SetSortedRendererEnabled(true);
 
             for (int i = 0; i < transform.childCount; i++)
             {

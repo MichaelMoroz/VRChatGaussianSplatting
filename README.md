@@ -67,12 +67,9 @@ One workaround is to train the splats on images that were already color-converte
 Use this path when you want the splat to be camera-sorted at runtime in VRChat worlds (uses Udon):
 
 1. Add a `GaussianSplatRenderer` to the scene.
-2. Add imported splat prefabs to its `splatObjects` list.
-3. Or use the component context menu:
-   - `Collect Gaussian Splat Objects for the renderer`
-   - `Update Sorting Resource Textures`
-   - `Generate UI`
-4. Enter play mode or build the world. The renderer selects one splat at a time and updates sorted render order for the active cameras.
+2. Enable the Gaussian Splat Object you want rendered. The renderer uses the first active Gaussian Splat Object in the scene.
+3. Use `GameObject / Gaussian Splatting / Gaussian Splat UI` to create a UI that switches splats by enabling one object and disabling the others.
+4. Enter play mode or build the world. The renderer updates sorted render order for the active cameras.
 
 ### Standalone Precomputed Sorting
 
