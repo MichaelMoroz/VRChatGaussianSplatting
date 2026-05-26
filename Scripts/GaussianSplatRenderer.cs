@@ -1056,9 +1056,35 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         }
     }
 
+    static string GetSceneSortResourceFolderName(string sceneName)
+    {
+        if (string.IsNullOrEmpty(sceneName))
+        {
+            return "GS_UnsavedScene";
+        }
+
+        string sanitizedSceneName = SanitizeAssetName(sceneName);
+        if (string.IsNullOrEmpty(sanitizedSceneName))
+        {
+            return "GS_UnsavedScene";
+        }
+
+        return "GS_" + sanitizedSceneName;
+    }
+
     string GetSortResourceFolderPath()
     {
-        return "Assets/VRChatGaussianSplatting/RadixSort/RTs";
+        string sceneName = string.Empty;
+        if (gameObject != null)
+        {
+            sceneName = gameObject.scene.name;
+            if (string.IsNullOrEmpty(sceneName) && !string.IsNullOrEmpty(gameObject.scene.path))
+            {
+                sceneName = Path.GetFileNameWithoutExtension(gameObject.scene.path);
+            }
+        }
+
+        return "Assets/Temp/" + GetSceneSortResourceFolderName(sceneName) + "/RTs";
     }
 
     Texture GetPositionsTexture(GameObject rootObject)

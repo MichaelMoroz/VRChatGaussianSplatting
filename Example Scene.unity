@@ -2036,7 +2036,7 @@ MonoBehaviour:
   cameraPositionQuantization: 0.1
   alwaysUpdate: 0
   sortPipelineFrames: 2
-  splatRenderOrder: {fileID: 8400000, guid: 6e55aa4e29ae147408508a30a15e870d, type: 2}
+  splatRenderOrder: {fileID: 0}
   overrideMaterialProperties: 0
   requestedSHBand: 3
   gaussianScale: 1
@@ -2120,9 +2120,9 @@ MonoBehaviour:
   _udonSharpBackingUdonBehaviour: {fileID: 258407250}
   computeKeyValues: {fileID: 2100000, guid: 0f320cd4349a6fd468d11aefebddabd2, type: 2}
   radixSort: {fileID: 2100000, guid: f7cf9fca282d3d240907704845e3678e, type: 2}
-  keyValues0: {fileID: 8400000, guid: 8a2043d5560ea4543b3f654cfcaabe28, type: 2}
-  keyValues1: {fileID: 8400000, guid: 83183f34d75d99e459c0993961364acc, type: 2}
-  prefixSums: {fileID: 8400000, guid: c45dc15a58689554db1668a840bb716f, type: 2}
+  keyValues0: {fileID: 0}
+  keyValues1: {fileID: 0}
+  prefixSums: {fileID: 0}
   elementCount: 2002225
 --- !u!4 &258407252
 Transform:
