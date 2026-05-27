@@ -114,24 +114,25 @@ namespace GaussianSplatting
                 return 0;
             }
 
-            if (material.HasProperty("_GS_SH9") && material.GetTexture("_GS_SH9") != null)
+            if (!material.HasProperty("_GS_SH") || material.GetTexture("_GS_SH") == null || !material.HasProperty("_GS_SH_CoeffCount"))
+            {
+                return 0;
+            }
+
+            int coeffCount = material.GetInt("_GS_SH_CoeffCount");
+            if (coeffCount >= 15)
             {
                 return 3;
             }
 
-            if (material.HasProperty("_GS_SH4") && material.GetTexture("_GS_SH4") != null)
+            if (coeffCount >= 8)
             {
                 return 2;
             }
 
-            if (material.HasProperty("_GS_SH1") && material.GetTexture("_GS_SH1") != null)
+            if (coeffCount >= 3)
             {
                 return 1;
-            }
-
-            if (!material.HasProperty("_SHBand"))
-            {
-                return 0;
             }
 
             return 0;
