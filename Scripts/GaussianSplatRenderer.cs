@@ -1880,10 +1880,11 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         CreateTextElement("Subtitle", settingsColumn.transform, "Github: https://github.com/MichaelMoroz/VRChatGaussianSplatting\nDeveloped by misha_m", 12, TextAnchor.MiddleLeft, new Color(0.82f, 0.82f, 0.82f, 1.0f));
         generatedUi.currentSplatText = CreateTextElement("Current Splat", settingsColumn.transform, "Current Splat: None", 16, TextAnchor.MiddleLeft, new Color(0.9f, 0.9f, 0.9f, 1.0f));
 
-        CreateTextElement("Sorting Section", settingsColumn.transform, "Sorting Settings", 18, TextAnchor.MiddleLeft, Color.white);
+        generatedUi.sortingSectionText = CreateTextElement("Sorting Section", settingsColumn.transform, "Sorting Settings", 18, TextAnchor.MiddleLeft, Color.white);
 
         GameObject cameraQuantizationRow = CreateHorizontalGroup("Camera Resort Move Row", settingsColumn.transform, 8.0f, false);
         Text cameraQuantizationLabel = CreateTextElement("Camera Resort Move Label", cameraQuantizationRow.transform, "Camera move amount to trigger resort", 16, TextAnchor.MiddleLeft, Color.white);
+        generatedUi.cameraQuantizationLabelText = cameraQuantizationLabel;
         SetPreferredWidth(cameraQuantizationLabel.gameObject, 210.0f, 1.0f);
         Button cameraQuantizationDownButton = CreateButtonElement("Camera Resort Move Down", cameraQuantizationRow.transform, "-", new Color(0.45f, 0.24f, 0.18f, 1.0f), 42.0f, 0.0f);
         generatedUi.cameraQuantizationText = CreateTextElement("Camera Resort Move Value", cameraQuantizationRow.transform, "0.1", 16, TextAnchor.MiddleCenter, new Color(0.95f, 0.95f, 0.95f, 1.0f));
@@ -1894,6 +1895,7 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
 
         GameObject sortingStepsRow = CreateHorizontalGroup("Pipeline Sort Frames Row", settingsColumn.transform, 8.0f, false);
         Text sortingStepsLabel = CreateTextElement("Pipeline Sort Frames Label", sortingStepsRow.transform, "Pipeline sort over N frames", 16, TextAnchor.MiddleLeft, Color.white);
+        generatedUi.sortingStepsLabelText = sortingStepsLabel;
         SetPreferredWidth(sortingStepsLabel.gameObject, 210.0f, 1.0f);
         Button sortingStepsDownButton = CreateButtonElement("Pipeline Sort Frames Down", sortingStepsRow.transform, "-", new Color(0.45f, 0.24f, 0.18f, 1.0f), 42.0f, 0.0f);
         generatedUi.sortingStepsText = CreateTextElement("Pipeline Sort Frames Value", sortingStepsRow.transform, "2", 16, TextAnchor.MiddleCenter, new Color(0.95f, 0.95f, 0.95f, 1.0f));
@@ -1904,15 +1906,17 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
 
         GameObject alwaysUpdateRow = CreateHorizontalGroup("Sort Every Frame Row", settingsColumn.transform, 8.0f, false);
         Text alwaysUpdateLabel = CreateTextElement("Sort Every Frame Label", alwaysUpdateRow.transform, "Sort every frame", 16, TextAnchor.MiddleLeft, Color.white);
+        generatedUi.alwaysUpdateLabelText = alwaysUpdateLabel;
         SetPreferredWidth(alwaysUpdateLabel.gameObject, 210.0f, 1.0f);
         Button alwaysUpdateButton = CreateButtonElement("Sort Every Frame Button", alwaysUpdateRow.transform, "Off", new Color(0.3f, 0.16f, 0.14f, 1.0f), 72.0f, 0.0f);
         generatedUi.alwaysUpdateButton = alwaysUpdateButton;
         AddUdonSharpButtonEvent(alwaysUpdateButton, generatedUi, nameof(GaussianSplatRendererUI.ToggleAlwaysUpdate));
 
-        CreateTextElement("Settings Section", settingsColumn.transform, "Material Settings", 18, TextAnchor.MiddleLeft, Color.white);
+        generatedUi.materialSectionText = CreateTextElement("Settings Section", settingsColumn.transform, "Material Settings", 18, TextAnchor.MiddleLeft, Color.white);
 
         GameObject shBandRow = CreateHorizontalGroup("SH Band Row", settingsColumn.transform, 8.0f, false);
         Text shBandLabel = CreateTextElement("SH Band Label", shBandRow.transform, "SH Band (global)", 16, TextAnchor.MiddleLeft, Color.white);
+        generatedUi.shBandLabelText = shBandLabel;
         SetPreferredWidth(shBandLabel.gameObject, 210.0f, 0.0f);
         generatedUi.shBandSlider = CreateSliderElement("SH Band Slider", shBandRow.transform, 0.0f, 3.0f, true);
         generatedUi.shBandText = CreateTextElement("SH Band Value", shBandRow.transform, "3", 16, TextAnchor.MiddleCenter, new Color(0.95f, 0.95f, 0.95f, 1.0f));
@@ -1920,6 +1924,7 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
 
         GameObject vrcLightVolumesRow = CreateHorizontalGroup("VRC Light Volumes Row", settingsColumn.transform, 8.0f, false);
         Text vrcLightVolumesLabel = CreateTextElement("VRC Light Volumes Label", vrcLightVolumesRow.transform, "VRC Light Volumes (global)", 16, TextAnchor.MiddleLeft, Color.white);
+        generatedUi.vrcLightVolumesLabelText = vrcLightVolumesLabel;
         SetPreferredWidth(vrcLightVolumesLabel.gameObject, 210.0f, 1.0f);
         Button vrcLightVolumesButton = CreateButtonElement("VRC Light Volumes Button", vrcLightVolumesRow.transform, "Off", new Color(0.3f, 0.16f, 0.14f, 1.0f), 72.0f, 0.0f);
         generatedUi.vrcLightVolumesButton = vrcLightVolumesButton;
@@ -1927,6 +1932,7 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
 
         GameObject lightVolumeIntensityRow = CreateHorizontalGroup("Light Volume Intensity Row", settingsColumn.transform, 8.0f, false);
         Text lightVolumeIntensityLabel = CreateTextElement("Light Volume Intensity Label", lightVolumeIntensityRow.transform, "Light Volume Intensity", 16, TextAnchor.MiddleLeft, Color.white);
+        generatedUi.lightVolumeIntensityLabelText = lightVolumeIntensityLabel;
         SetPreferredWidth(lightVolumeIntensityLabel.gameObject, 210.0f, 0.0f);
         generatedUi.lightVolumeIntensitySlider = CreateSliderElement("Light Volume Intensity Slider", lightVolumeIntensityRow.transform, 0.0f, 4.0f, false);
         generatedUi.lightVolumeIntensityText = CreateTextElement("Light Volume Intensity Value", lightVolumeIntensityRow.transform, "1", 16, TextAnchor.MiddleCenter, new Color(0.95f, 0.95f, 0.95f, 1.0f));
@@ -1934,6 +1940,7 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
 
         GameObject antiAliasingRow = CreateHorizontalGroup("AntiAliasing Row", settingsColumn.transform, 8.0f, false);
         Text antiAliasingLabel = CreateTextElement("AntiAliasing Label", antiAliasingRow.transform, "Antialiasing", 16, TextAnchor.MiddleLeft, Color.white);
+        generatedUi.antiAliasingLabelText = antiAliasingLabel;
         SetPreferredWidth(antiAliasingLabel.gameObject, 210.0f, 0.0f);
         generatedUi.antiAliasingSlider = CreateSliderElement("AntiAliasing Slider", antiAliasingRow.transform, 0.0f, 3.0f, false);
         generatedUi.antiAliasingText = CreateTextElement("AntiAliasing Value", antiAliasingRow.transform, "1", 16, TextAnchor.MiddleCenter, new Color(0.95f, 0.95f, 0.95f, 1.0f));
@@ -1941,6 +1948,7 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
 
         GameObject gaussianScaleRow = CreateHorizontalGroup("Gaussian Scale Row", settingsColumn.transform, 8.0f, false);
         Text gaussianScaleLabel = CreateTextElement("Gaussian Scale Label", gaussianScaleRow.transform, "Gaussian Scale (global)", 16, TextAnchor.MiddleLeft, Color.white);
+        generatedUi.gaussianScaleLabelText = gaussianScaleLabel;
         SetPreferredWidth(gaussianScaleLabel.gameObject, 210.0f, 1.0f);
         Button gaussianScaleDownButton = CreateButtonElement("Gaussian Scale Down", gaussianScaleRow.transform, "-", new Color(0.45f, 0.24f, 0.18f, 1.0f), 42.0f, 0.0f);
         generatedUi.gaussianScaleText = CreateTextElement("Gaussian Scale Value", gaussianScaleRow.transform, "1", 16, TextAnchor.MiddleCenter, new Color(0.95f, 0.95f, 0.95f, 1.0f));
@@ -1951,10 +1959,20 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
 
         GameObject alphaCutoffRow = CreateHorizontalGroup("Alpha Cutoff Row", settingsColumn.transform, 8.0f, false);
         Text alphaCutoffLabel = CreateTextElement("Alpha Cutoff Label", alphaCutoffRow.transform, "Alpha Cutoff\n(lower = better quality)", 16, TextAnchor.MiddleLeft, Color.white);
+        generatedUi.alphaCutoffLabelText = alphaCutoffLabel;
         SetPreferredWidth(alphaCutoffLabel.gameObject, 210.0f, 0.0f);
         generatedUi.alphaCutoffSlider = CreateSliderElement("Alpha Cutoff Slider", alphaCutoffRow.transform, 0.005f, 0.1f, false);
         generatedUi.alphaCutoffText = CreateTextElement("Alpha Cutoff Value", alphaCutoffRow.transform, "0.03", 16, TextAnchor.MiddleCenter, new Color(0.95f, 0.95f, 0.95f, 1.0f));
         SetPreferredWidth(generatedUi.alphaCutoffText.gameObject, 72.0f, 0.0f);
+
+        generatedUi.languageSectionText = CreateTextElement("Language Section", settingsColumn.transform, "Language", 18, TextAnchor.MiddleLeft, Color.white);
+        GameObject languageRow = CreateHorizontalGroup("Language Row", settingsColumn.transform, 8.0f, false);
+        Button englishLanguageButton = CreateButtonElement("English Button", languageRow.transform, "English", new Color(0.2f, 0.2f, 0.24f, 1.0f), 0.0f, 1.0f);
+        Button japaneseLanguageButton = CreateButtonElement("Japanese Button", languageRow.transform, "日本語", new Color(0.2f, 0.2f, 0.24f, 1.0f), 0.0f, 1.0f);
+        generatedUi.englishLanguageButton = englishLanguageButton;
+        generatedUi.japaneseLanguageButton = japaneseLanguageButton;
+        AddUdonSharpButtonEvent(englishLanguageButton, generatedUi, nameof(GaussianSplatRendererUI.SetLanguageEnglish));
+        AddUdonSharpButtonEvent(japaneseLanguageButton, generatedUi, nameof(GaussianSplatRendererUI.SetLanguageJapanese));
 
         const float splatListPanelHeight = 840.0f;
         const float splatListPanelSpacing = 8.0f;
@@ -1962,7 +1980,7 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         const float splatScrollButtonHeight = 38.0f;
         const float splatSlotButtonHeight = 42.0f;
 
-        CreateTextElement("Splat Section", splatColumn.transform, "Splat Objects", 18, TextAnchor.MiddleLeft, Color.white);
+        generatedUi.splatSectionText = CreateTextElement("Splat Section", splatColumn.transform, "Splat Objects", 18, TextAnchor.MiddleLeft, Color.white);
         GameObject splatListPanel = CreateVerticalGroup("Splat List Panel", splatColumn.transform, new RectOffset(8, 8, 8, 8), 8.0f, TextAnchor.UpperLeft);
         Image splatListPanelImage = splatListPanel.AddComponent<Image>();
         splatListPanelImage.color = new Color(0.09f, 0.09f, 0.11f, 1.0f);

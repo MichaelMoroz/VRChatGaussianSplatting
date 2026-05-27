@@ -13,21 +13,39 @@ namespace GaussianSplatting
 [UdonBehaviourSyncMode(BehaviourSyncMode.None)]
 public class GaussianSplatRendererUI : UdonSharpBehaviour
 {
+    const int LanguageEnglish = 0;
+    const int LanguageJapanese = 1;
+
     public GaussianSplatRenderer gaussianSplatRenderer;
     public Text currentSplatText;
+    public Text sortingSectionText;
+    public Text cameraQuantizationLabelText;
     public Text cameraQuantizationText;
+    public Text sortingStepsLabelText;
     public Text sortingStepsText;
+    public Text alwaysUpdateLabelText;
     public Button alwaysUpdateButton;
+    public Text materialSectionText;
+    public Text shBandLabelText;
     public Slider shBandSlider;
     public Text shBandText;
+    public Text vrcLightVolumesLabelText;
     public Button vrcLightVolumesButton;
+    public Text antiAliasingLabelText;
     public Slider antiAliasingSlider;
     public Text antiAliasingText;
+    public Text lightVolumeIntensityLabelText;
     public Slider lightVolumeIntensitySlider;
     public Text lightVolumeIntensityText;
+    public Text gaussianScaleLabelText;
     public Text gaussianScaleText;
+    public Text alphaCutoffLabelText;
     public Slider alphaCutoffSlider;
     public Text alphaCutoffText;
+    public Text languageSectionText;
+    public Button englishLanguageButton;
+    public Button japaneseLanguageButton;
+    public Text splatSectionText;
     public Button splatScrollUpButton;
     public Button splatScrollDownButton;
     public Button[] splatButtons;
@@ -35,6 +53,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
 
     [SerializeField] float gaussianScaleStep = 0.1f;
     [SerializeField] float cameraQuantizationStep = 0.05f;
+    [SerializeField] int selectedLanguage = LanguageEnglish;
 
     Color _selectedSplatColor = new Color(0.55f, 0.39f, 0.12f, 1.0f);
     Color _defaultSplatColor = new Color(0.2f, 0.2f, 0.24f, 1.0f);
@@ -141,6 +160,136 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
     {
         float roundedValue = Mathf.Round(value * 100.0f) * 0.01f;
         return roundedValue.ToString();
+    }
+
+    string Localize(string english, string japanese)
+    {
+        return selectedLanguage == LanguageJapanese ? japanese : english;
+    }
+
+    string GetCurrentSplatPrefix()
+    {
+        return Localize("Current Splat: ", "現在のスプラット: ");
+    }
+
+    string GetCurrentSplatNoneLabel()
+    {
+        return Localize("Current Splat: None", "現在のスプラット: なし");
+    }
+
+    string GetToggleOnLabel()
+    {
+        return Localize("On", "オン");
+    }
+
+    string GetToggleOffLabel()
+    {
+        return Localize("Off", "オフ");
+    }
+
+    string GetScrollUpLabel()
+    {
+        return Localize("Up", "上へ");
+    }
+
+    string GetScrollDownLabel()
+    {
+        return Localize("Down", "下へ");
+    }
+
+    string GetRenderingSuffix()
+    {
+        return Localize(" (Rendering)", " (表示中)");
+    }
+
+    string GetEnabledSuffix()
+    {
+        return Localize(" (On)", " (有効)");
+    }
+
+    void RefreshLocalizedLabels()
+    {
+        if (sortingSectionText != null)
+        {
+            sortingSectionText.text = Localize("Sorting Settings", "ソート設定");
+        }
+
+        if (cameraQuantizationLabelText != null)
+        {
+            cameraQuantizationLabelText.text = Localize("Camera move amount to trigger resort", "再ソートするカメラ移動量");
+        }
+
+        if (sortingStepsLabelText != null)
+        {
+            sortingStepsLabelText.text = Localize("Pipeline sort over N frames", "ソートを N フレームに分散");
+        }
+
+        if (alwaysUpdateLabelText != null)
+        {
+            alwaysUpdateLabelText.text = Localize("Sort every frame", "毎フレームソート");
+        }
+
+        if (materialSectionText != null)
+        {
+            materialSectionText.text = Localize("Material Settings", "マテリアル設定");
+        }
+
+        if (shBandLabelText != null)
+        {
+            shBandLabelText.text = Localize("SH Band (global)", "SH バンド (全体)");
+        }
+
+        if (vrcLightVolumesLabelText != null)
+        {
+            vrcLightVolumesLabelText.text = Localize("VRC Light Volumes (global)", "VRC Light Volumes (全体)");
+        }
+
+        if (lightVolumeIntensityLabelText != null)
+        {
+            lightVolumeIntensityLabelText.text = Localize("Light Volume Intensity", "Light Volume Intensity");
+        }
+
+        if (antiAliasingLabelText != null)
+        {
+            antiAliasingLabelText.text = Localize("Antialiasing", "アンチエイリアス");
+        }
+
+        if (gaussianScaleLabelText != null)
+        {
+            gaussianScaleLabelText.text = Localize("Gaussian Scale (global)", "Gaussian Scale (全体)");
+        }
+
+        if (alphaCutoffLabelText != null)
+        {
+            alphaCutoffLabelText.text = Localize("Alpha Cutoff\n(lower = better quality)", "アルファカットオフ\n(低いほど高品質)");
+        }
+
+        if (languageSectionText != null)
+        {
+            languageSectionText.text = Localize("Language", "言語");
+        }
+
+        if (splatSectionText != null)
+        {
+            splatSectionText.text = Localize("Splat Objects", "スプラットオブジェクト");
+        }
+
+        RefreshLanguageButtons();
+    }
+
+    void RefreshLanguageButtons()
+    {
+        if (englishLanguageButton != null)
+        {
+            englishLanguageButton.interactable = true;
+            ApplyButtonVisual(englishLanguageButton, "English", selectedLanguage == LanguageEnglish ? _selectedSplatColor : _defaultSplatColor);
+        }
+
+        if (japaneseLanguageButton != null)
+        {
+            japaneseLanguageButton.interactable = true;
+            ApplyButtonVisual(japaneseLanguageButton, "日本語", selectedLanguage == LanguageJapanese ? _selectedSplatColor : _defaultSplatColor);
+        }
     }
 
     void FindRenderer()
@@ -274,8 +423,8 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
                 }
             }
 
-            SetButtonEnabled(splatScrollUpButton, false, "Up", _scrollEnabledColor, _scrollDisabledColor);
-            SetButtonEnabled(splatScrollDownButton, false, "Down", _scrollEnabledColor, _scrollDisabledColor);
+            SetButtonEnabled(splatScrollUpButton, false, GetScrollUpLabel(), _scrollEnabledColor, _scrollDisabledColor);
+            SetButtonEnabled(splatScrollDownButton, false, GetScrollDownLabel(), _scrollEnabledColor, _scrollDisabledColor);
             return;
         }
 
@@ -310,18 +459,18 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
             string label = splatObject.gameObject.name;
             if (isRendered)
             {
-                label += " (Rendering)";
+                label += GetRenderingSuffix();
             }
             else if (isActive)
             {
-                label += " (On)";
+                label += GetEnabledSuffix();
             }
 
             SetButtonEnabled(slotButton, true, label, isRendered ? _selectedSplatColor : _defaultSplatColor, _scrollDisabledColor);
         }
 
-        SetButtonEnabled(splatScrollUpButton, _splatListStartIndex > 0, "Up", _scrollEnabledColor, _scrollDisabledColor);
-        SetButtonEnabled(splatScrollDownButton, _splatListStartIndex < maxStartIndex, "Down", _scrollEnabledColor, _scrollDisabledColor);
+        SetButtonEnabled(splatScrollUpButton, _splatListStartIndex > 0, GetScrollUpLabel(), _scrollEnabledColor, _scrollDisabledColor);
+        SetButtonEnabled(splatScrollDownButton, _splatListStartIndex < maxStartIndex, GetScrollDownLabel(), _scrollEnabledColor, _scrollDisabledColor);
     }
 
     void RefreshSortingControls()
@@ -339,7 +488,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         if (alwaysUpdateButton != null)
         {
             bool alwaysUpdate = gaussianSplatRenderer.GetAlwaysUpdate();
-            ApplyButtonVisual(alwaysUpdateButton, alwaysUpdate ? "On" : "Off", alwaysUpdate ? _toggleEnabledColor : _toggleDisabledColor);
+            ApplyButtonVisual(alwaysUpdateButton, alwaysUpdate ? GetToggleOnLabel() : GetToggleOffLabel(), alwaysUpdate ? _toggleEnabledColor : _toggleDisabledColor);
         }
     }
 
@@ -348,7 +497,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         if (vrcLightVolumesButton != null)
         {
             bool enabled = gaussianSplatRenderer.GetUseVrcLightVolumes();
-            ApplyButtonVisual(vrcLightVolumesButton, enabled ? "On" : "Off", enabled ? _toggleEnabledColor : _toggleDisabledColor);
+            ApplyButtonVisual(vrcLightVolumesButton, enabled ? GetToggleOnLabel() : GetToggleOffLabel(), enabled ? _toggleEnabledColor : _toggleDisabledColor);
         }
 
         SyncShBandSlider();
@@ -561,12 +710,13 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
     {
         FindRenderer();
         RefreshSceneSplatObjects();
+        RefreshLocalizedLabels();
 
         if (gaussianSplatRenderer == null)
         {
             if (currentSplatText != null)
             {
-                currentSplatText.text = "Current Splat: None";
+                currentSplatText.text = GetCurrentSplatNoneLabel();
             }
 
             RefreshSplatButtons();
@@ -575,7 +725,10 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
 
         if (currentSplatText != null)
         {
-            currentSplatText.text = "Current Splat: " + gaussianSplatRenderer.GetCurrentSplatName();
+            GameObject currentSplatObject = gaussianSplatRenderer.GetCurrentSplatObject();
+            currentSplatText.text = currentSplatObject == null
+                ? GetCurrentSplatNoneLabel()
+                : GetCurrentSplatPrefix() + currentSplatObject.name;
         }
 
         if (gaussianScaleText != null)
@@ -696,6 +849,22 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
 
         gaussianSplatRenderer.SetGaussianScale(gaussianSplatRenderer.gaussianScale - gaussianScaleStep);
         RefreshUI();
+    }
+
+    void SetLanguage(int language)
+    {
+        selectedLanguage = Mathf.Clamp(language, LanguageEnglish, LanguageJapanese);
+        RefreshUI();
+    }
+
+    public void SetLanguageEnglish()
+    {
+        SetLanguage(LanguageEnglish);
+    }
+
+    public void SetLanguageJapanese()
+    {
+        SetLanguage(LanguageJapanese);
     }
 
 }
