@@ -275,7 +275,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
 
         if (splatSectionText != null)
         {
-            splatSectionText.text = Localize("Splat Objects", "スプラットオブジェクト");
+            splatSectionText.text = Localize("Splat Object (global)*", "スプラットオブジェクト (全体)*");
         }
 
         RefreshLanguageButtons();
