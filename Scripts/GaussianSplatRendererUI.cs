@@ -211,8 +211,27 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         return Localize(" (On)", " (有効)");
     }
 
+    Text ResolveSubtitleText()
+    {
+        Transform subtitleTransform = transform.Find("Panel/Body Row/Settings Column/Subtitle");
+        if (subtitleTransform == null)
+        {
+            return null;
+        }
+
+        return (Text)subtitleTransform.GetComponent(typeof(Text));
+    }
+
     void RefreshLocalizedLabels()
     {
+        Text subtitleText = ResolveSubtitleText();
+        if (subtitleText != null)
+        {
+            subtitleText.text = Localize(
+                "Github: https://github.com/MichaelMoroz/VRChatGaussianSplatting\nDeveloped by misha_m",
+                "Github: https://github.com/MichaelMoroz/VRChatGaussianSplatting\n開発: misha_m");
+        }
+
         if (sortingSectionText != null)
         {
             sortingSectionText.text = Localize("Sorting Settings", "ソート設定");
@@ -240,12 +259,12 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
 
         if (shBandLabelText != null)
         {
-            shBandLabelText.text = Localize("SH Band (global)", "SH バンド (全体)");
+            shBandLabelText.text = Localize("SH Band (global)", "SH バンド (共有)");
         }
 
         if (vrcLightVolumesLabelText != null)
         {
-            vrcLightVolumesLabelText.text = Localize("VRC Light Volumes (global)", "VRC Light Volumes (全体)");
+            vrcLightVolumesLabelText.text = Localize("VRC Light Volumes (global)", "VRC Light Volumes (共有)");
         }
 
         if (lightVolumeIntensityLabelText != null)
@@ -260,7 +279,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
 
         if (gaussianScaleLabelText != null)
         {
-            gaussianScaleLabelText.text = Localize("Gaussian Scale (global)", "Gaussian Scale (全体)");
+            gaussianScaleLabelText.text = Localize("Gaussian Scale (global)", "Gaussian Scale (共有)");
         }
 
         if (alphaCutoffLabelText != null)
@@ -275,7 +294,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
 
         if (splatSectionText != null)
         {
-            splatSectionText.text = Localize("Splat Object (global)", "スプラットオブジェクト (全体)");
+            splatSectionText.text = Localize("Splat Object (global)", "スプラットオブジェクト (共有)");
         }
 
         RefreshLanguageButtons();
