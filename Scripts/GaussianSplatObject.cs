@@ -27,9 +27,7 @@ namespace GaussianSplatting
 
         void EnsureSceneRenderer()
         {
-            string scenePath = gameObject.scene.path;
-            if (EditorUtility.IsPersistent(this)
-                || (!string.IsNullOrEmpty(scenePath) && scenePath.EndsWith(".prefab", System.StringComparison.OrdinalIgnoreCase)))
+            if (EditorUtility.IsPersistent(this))
             {
                 return;
             }

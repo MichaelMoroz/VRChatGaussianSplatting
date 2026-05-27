@@ -299,18 +299,6 @@ namespace GaussianSplatting
             GaussianSplatObject splatObject = go.GetComponent<GaussianSplatObject>();
             if (splatObject == null)
                 splatObject = go.AddUdonSharpComponent<GaussianSplatObject>();
-            PrepareSplatObjectForPrefabSerialization(splatObject, meshRenderer, maxSHBand);
-        }
-
-        static void PrepareSplatObjectForPrefabSerialization(GaussianSplatObject splatObject, MeshRenderer meshRenderer, int maxSHBand)
-        {
-            if (splatObject == null)
-            {
-                return;
-            }
-
-            splatObject.gaussianSplatRenderer = null;
-            splatObject.sortedObject = null;
             splatObject.sortedRenderer = meshRenderer;
             splatObject.SetMaxSHBand(Mathf.Clamp(maxSHBand, 0, 3));
             UdonSharpEditorUtility.CopyProxyToUdon(splatObject);
@@ -325,10 +313,6 @@ namespace GaussianSplatting
                 try
                 {
                     ConfigurePrefabRoot(prefabContents, materials, mesh, name, maxSHBand, addGaussianSplatObject);
-                    if (addGaussianSplatObject)
-                    {
-                        PrepareSplatObjectForPrefabSerialization(prefabContents.GetComponent<GaussianSplatObject>(), prefabContents.GetComponent<MeshRenderer>(), maxSHBand);
-                    }
                     PrefabUtility.SaveAsPrefabAsset(prefabContents, assetPath);
                 }
                 finally
@@ -341,10 +325,6 @@ namespace GaussianSplatting
 
             var go = new GameObject(name);
             ConfigurePrefabRoot(go, materials, mesh, name, maxSHBand, addGaussianSplatObject);
-            if (addGaussianSplatObject)
-            {
-                PrepareSplatObjectForPrefabSerialization(go.GetComponent<GaussianSplatObject>(), go.GetComponent<MeshRenderer>(), maxSHBand);
-            }
             var prefab = PrefabUtility.SaveAsPrefabAsset(go, assetPath);
             GameObject.DestroyImmediate(go); // clean up the temporary GameObject
             return prefab;
