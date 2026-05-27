@@ -235,6 +235,7 @@ namespace GaussianSplatting.Editor
             readonly MaterialPropertyBlock _propertyBlock = new MaterialPropertyBlock();
 
             GaussianSplatObject _splatObject;
+            GaussianSplatRenderer _sceneRenderer;
             MeshRenderer _renderer;
             Material _sourceMaterial;
             Material _computeKeyValues;
@@ -248,6 +249,8 @@ namespace GaussianSplatting.Editor
             int _elementCount;
             int _imageSizeX;
             int _imageSizeY;
+            Material[] _originalSharedMaterials;
+            Material[] _previewSharedMaterials;
             MaterialPropertyBlock[] _originalPropertyBlocks;
 
             public bool Bind(GaussianSplatObject splatObject)
@@ -262,12 +265,16 @@ namespace GaussianSplatting.Editor
                 if (_renderer != resolvedRenderer)
                 {
                     RestorePropertyOverrides();
+                    RestoreSharedMaterials();
+                    DestroyPreviewMaterials();
                     _renderer = resolvedRenderer;
                     CaptureOriginalPropertyBlocks();
+                    CaptureOriginalSharedMaterials();
                     _previousLocalCameraPosition = Vector3.positiveInfinity;
                 }
 
-                _sourceMaterial = ResolveSourceMaterial(_renderer.sharedMaterials);
+                _sceneRenderer = ResolveSceneRenderer(splatObject);
+                _sourceMaterial = ResolveSourceMaterial(_originalSharedMaterials);
                 if (_sourceMaterial == null)
                 {
                     return false;
@@ -292,6 +299,7 @@ namespace GaussianSplatting.Editor
 
                 EnsureMaterials();
                 EnsureTextures();
+                ApplySceneRendererPreviewMaterials();
                 ApplySharedMaterialOverrides();
                 return _computeKeyValues != null && _radixSort != null && _copyRenderOrder != null && _keyValues0 != null && _keyValues1 != null && _prefixSums != null && _renderOrder != null;
             }
@@ -340,6 +348,8 @@ namespace GaussianSplatting.Editor
             public void Dispose()
             {
                 RestorePropertyOverrides();
+                RestoreSharedMaterials();
+                DestroyPreviewMaterials();
                 SafeDestroy(_computeKeyValues);
                 SafeDestroy(_radixSort);
                 SafeDestroy(_copyRenderOrder);
@@ -355,10 +365,23 @@ namespace GaussianSplatting.Editor
                 _prefixSums = null;
                 _renderOrder = null;
                 _renderer = null;
+                _sceneRenderer = null;
                 _sourceMaterial = null;
                 _splatObject = null;
+                _originalSharedMaterials = null;
                 _originalPropertyBlocks = null;
                 _previousLocalCameraPosition = Vector3.positiveInfinity;
+            }
+
+            static GaussianSplatRenderer ResolveSceneRenderer(GaussianSplatObject splatObject)
+            {
+                GaussianSplatRenderer sceneRenderer = splatObject != null ? splatObject.gaussianSplatRenderer : null;
+                if (sceneRenderer != null && !EditorUtility.IsPersistent(sceneRenderer))
+                {
+                    return sceneRenderer;
+                }
+
+                return GaussianSplatRenderer.FindExistingSceneRenderer();
             }
 
             static Material ResolveSourceMaterial(Material[] materials)
@@ -526,6 +549,77 @@ namespace GaussianSplatting.Editor
                 _computeKeyValues.SetInt(GSPositionsCoordShiftId, _sourceMaterial.GetInt(GSPositionsCoordShiftId));
             }
 
+            void ApplySceneRendererPreviewMaterials()
+            {
+                if (_renderer == null || _originalSharedMaterials == null || _originalSharedMaterials.Length == 0)
+                {
+                    return;
+                }
+
+                if (_sceneRenderer == null)
+                {
+                    RestoreSharedMaterials();
+                    DestroyPreviewMaterials();
+                    return;
+                }
+
+                if (_previewSharedMaterials == null || _previewSharedMaterials.Length != _originalSharedMaterials.Length)
+                {
+                    DestroyPreviewMaterials();
+                    _previewSharedMaterials = new Material[_originalSharedMaterials.Length];
+                }
+
+                for (int materialIndex = 0; materialIndex < _originalSharedMaterials.Length; materialIndex++)
+                {
+                    Material originalMaterial = _originalSharedMaterials[materialIndex];
+                    if (originalMaterial == null)
+                    {
+                        SafeDestroy(_previewSharedMaterials[materialIndex]);
+                        _previewSharedMaterials[materialIndex] = null;
+                        continue;
+                    }
+
+                    Material previewMaterial = _previewSharedMaterials[materialIndex];
+                    if (previewMaterial == null || previewMaterial.shader != originalMaterial.shader)
+                    {
+                        SafeDestroy(previewMaterial);
+                        previewMaterial = new Material(originalMaterial);
+                        previewMaterial.name = originalMaterial.name + " (Editor Preview)";
+                        previewMaterial.hideFlags = HideFlags.HideAndDontSave;
+                        _previewSharedMaterials[materialIndex] = previewMaterial;
+                    }
+                    else
+                    {
+                        previewMaterial.CopyPropertiesFromMaterial(originalMaterial);
+                    }
+
+                    _sceneRenderer.ApplyConfiguredMaterialSettingsForEditor(previewMaterial);
+                }
+
+                if (!MaterialsMatch(_renderer.sharedMaterials, _previewSharedMaterials))
+                {
+                    _renderer.sharedMaterials = _previewSharedMaterials;
+                }
+            }
+
+            static bool MaterialsMatch(Material[] currentMaterials, Material[] expectedMaterials)
+            {
+                if (currentMaterials == null || expectedMaterials == null || currentMaterials.Length != expectedMaterials.Length)
+                {
+                    return false;
+                }
+
+                for (int materialIndex = 0; materialIndex < currentMaterials.Length; materialIndex++)
+                {
+                    if (currentMaterials[materialIndex] != expectedMaterials[materialIndex])
+                    {
+                        return false;
+                    }
+                }
+
+                return true;
+            }
+
             void CopySortedOrder()
             {
                 if (_copyRenderOrder == null || _keyValues0 == null || _renderOrder == null)
@@ -558,9 +652,6 @@ namespace GaussianSplatting.Editor
                     return;
                 }
 
-                float gaussianMul = _sourceMaterial.HasProperty(GaussianMulId) ? _sourceMaterial.GetFloat(GaussianMulId) : 1.0f;
-                float alphaCutoff = _sourceMaterial.HasProperty(AlphaCutoffId) ? _sourceMaterial.GetFloat(AlphaCutoffId) : 0.03f;
-
                 for (int materialIndex = 0; materialIndex < sharedMaterials.Length; materialIndex++)
                 {
                     Material sharedMaterial = sharedMaterials[materialIndex];
@@ -573,15 +664,26 @@ namespace GaussianSplatting.Editor
                     _propertyBlock.SetTexture(GSRenderOrderId, _renderOrder);
                     if (sharedMaterial.HasProperty(GaussianMulId))
                     {
-                        _propertyBlock.SetFloat(GaussianMulId, gaussianMul);
+                        _propertyBlock.SetFloat(GaussianMulId, sharedMaterial.GetFloat(GaussianMulId));
                     }
                     if (sharedMaterial.HasProperty(AlphaCutoffId))
                     {
-                        _propertyBlock.SetFloat(AlphaCutoffId, alphaCutoff);
+                        _propertyBlock.SetFloat(AlphaCutoffId, sharedMaterial.GetFloat(AlphaCutoffId));
                     }
                     _renderer.SetPropertyBlock(_propertyBlock, materialIndex);
                     _propertyBlock.Clear();
                 }
+            }
+
+            void CaptureOriginalSharedMaterials()
+            {
+                if (_renderer == null)
+                {
+                    _originalSharedMaterials = null;
+                    return;
+                }
+
+                _originalSharedMaterials = _renderer.sharedMaterials;
             }
 
             void CaptureOriginalPropertyBlocks()
@@ -632,6 +734,34 @@ namespace GaussianSplatting.Editor
                 {
                     _renderer.SetPropertyBlock(_originalPropertyBlocks[materialIndex], materialIndex);
                 }
+            }
+
+            void RestoreSharedMaterials()
+            {
+                if (_renderer == null || _originalSharedMaterials == null)
+                {
+                    return;
+                }
+
+                if (!MaterialsMatch(_renderer.sharedMaterials, _originalSharedMaterials))
+                {
+                    _renderer.sharedMaterials = _originalSharedMaterials;
+                }
+            }
+
+            void DestroyPreviewMaterials()
+            {
+                if (_previewSharedMaterials == null)
+                {
+                    return;
+                }
+
+                for (int materialIndex = 0; materialIndex < _previewSharedMaterials.Length; materialIndex++)
+                {
+                    SafeDestroy(_previewSharedMaterials[materialIndex]);
+                }
+
+                _previewSharedMaterials = null;
             }
         }
     }

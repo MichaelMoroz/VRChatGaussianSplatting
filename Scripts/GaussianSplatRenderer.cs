@@ -484,6 +484,13 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         SetMaterialFloatIfPresent(material, "_Gamma", Mathf.Max(0.001f, gamma));
     }
 
+#if UNITY_EDITOR && !COMPILER_UDONSHARP
+    public void ApplyConfiguredMaterialSettingsForEditor(Material material)
+    {
+        ApplyConfiguredMaterialSettings(material, GetCurrentSHBand());
+    }
+#endif
+
     int GetSplatObjectMaxSHBand(GameObject rootObject)
     {
         if (rootObject == null)
@@ -1164,6 +1171,11 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         {
             Selection.activeGameObject = renderer.gameObject;
         }
+    }
+
+    public static GaussianSplatRenderer FindExistingSceneRenderer()
+    {
+        return GetPrimarySceneRenderer();
     }
 
     public static GaussianSplatRenderer EnsureSceneRendererExists()

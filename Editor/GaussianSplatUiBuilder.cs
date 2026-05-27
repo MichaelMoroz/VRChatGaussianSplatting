@@ -17,6 +17,7 @@ namespace GaussianSplatting.Editor
     static class GaussianSplatUiBuilder
     {
         const float DefaultAlphaCutoff = 0.03f;
+        const string UiFontAssetPath = "Assets/VRChatGaussianSplatting/Resources/Fonts/NotoSansJP-VF.ttf";
         const string UiMaterialFolderPath = "Assets/VRChatGaussianSplatting/Resources/Materials";
         const string SupersampledUiMaterialAssetPath = UiMaterialFolderPath + "/GaussianSplatUISupersampled.mat";
         const string VrChatSupersampledUiShaderName = "VRChat/Mobile/Worlds/Supersampled UI";
@@ -340,8 +341,14 @@ namespace GaussianSplatting.Editor
             }
         }
 
-        static Font GetBuiltinUiFont()
+        static Font GetUiFont()
         {
+            Font uiFont = AssetDatabase.LoadAssetAtPath<Font>(UiFontAssetPath);
+            if (uiFont != null)
+            {
+                return uiFont;
+            }
+
             return Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
         }
 
@@ -549,9 +556,10 @@ namespace GaussianSplatting.Editor
             float preferredHeight = (lineCount * (fontSize + 6.0f)) + 12.0f;
             RectTransform rectTransform = CreateRectTransform(objectName, parent, new Vector2(0.0f, preferredHeight));
             Text text = rectTransform.gameObject.AddComponent<Text>();
-            text.font = GetBuiltinUiFont();
+            text.font = GetUiFont();
             ApplySupersampledUiMaterial(text);
             text.fontSize = fontSize;
+            text.fontStyle = FontStyle.Bold;
             text.alignment = alignment;
             text.color = textColor;
             text.text = textValue;

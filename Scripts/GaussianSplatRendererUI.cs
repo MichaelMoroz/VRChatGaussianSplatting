@@ -618,16 +618,22 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
 
     void RefreshMaterialControls()
     {
+    #if UNITY_EDITOR && !COMPILER_UDONSHARP
+        bool allowWriteBack = EditorApplication.isPlaying;
+    #else
+        bool allowWriteBack = true;
+    #endif
+
         if (vrcLightVolumesButton != null)
         {
             bool enabled = gaussianSplatRenderer.GetUseVrcLightVolumes();
             ApplyButtonVisual(vrcLightVolumesButton, enabled ? GetToggleOnLabel() : GetToggleOffLabel(), enabled ? _toggleEnabledColor : _toggleDisabledColor);
         }
 
-        SyncShBandSlider();
-        SyncAntiAliasingSlider();
-        SyncLightVolumeIntensitySlider();
-        SyncAlphaCutoffSlider();
+        SyncShBandSlider(allowWriteBack);
+        SyncAntiAliasingSlider(allowWriteBack);
+        SyncLightVolumeIntensitySlider(allowWriteBack);
+        SyncAlphaCutoffSlider(allowWriteBack);
     }
 
     bool SliderValueChanged(float currentValue, float previousValue)
@@ -635,7 +641,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         return Mathf.Abs(currentValue - previousValue) > 0.0001f;
     }
 
-    void SyncShBandSlider()
+    void SyncShBandSlider(bool allowWriteBack)
     {
         if (shBandSlider == null)
         {
@@ -651,19 +657,19 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         int currentBand = gaussianSplatRenderer.GetCurrentSHBand();
         if (!_sliderValuesInitialized)
         {
-            shBandSlider.value = currentBand;
+            shBandSlider.SetValueWithoutNotify(currentBand);
             _lastShBandSliderValue = currentBand;
         }
-        else if (SliderValueChanged(currentBand, _lastShBandSliderValue))
+        else if (!allowWriteBack || SliderValueChanged(currentBand, _lastShBandSliderValue))
         {
-            shBandSlider.value = currentBand;
+            shBandSlider.SetValueWithoutNotify(currentBand);
             _lastShBandSliderValue = currentBand;
         }
         else if (SliderValueChanged(shBandSlider.value, _lastShBandSliderValue))
         {
             gaussianSplatRenderer.SetSHBand(Mathf.RoundToInt(shBandSlider.value));
             currentBand = gaussianSplatRenderer.GetCurrentSHBand();
-            shBandSlider.value = currentBand;
+            shBandSlider.SetValueWithoutNotify(currentBand);
             _lastShBandSliderValue = currentBand;
         }
 
@@ -673,7 +679,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         }
     }
 
-    void SyncAntiAliasingSlider()
+    void SyncAntiAliasingSlider(bool allowWriteBack)
     {
         if (antiAliasingSlider == null)
         {
@@ -683,19 +689,19 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         float currentValue = gaussianSplatRenderer.GetAntiAliasing();
         if (!_sliderValuesInitialized)
         {
-            antiAliasingSlider.value = currentValue;
+            antiAliasingSlider.SetValueWithoutNotify(currentValue);
+            _lastAntiAliasingSliderValue = currentValue;
+        }
+        else if (!allowWriteBack || SliderValueChanged(currentValue, _lastAntiAliasingSliderValue))
+        {
+            antiAliasingSlider.SetValueWithoutNotify(currentValue);
             _lastAntiAliasingSliderValue = currentValue;
         }
         else if (SliderValueChanged(antiAliasingSlider.value, _lastAntiAliasingSliderValue))
         {
             gaussianSplatRenderer.SetAntiAliasing(antiAliasingSlider.value);
             currentValue = gaussianSplatRenderer.GetAntiAliasing();
-            antiAliasingSlider.value = currentValue;
-            _lastAntiAliasingSliderValue = currentValue;
-        }
-        else if (SliderValueChanged(currentValue, _lastAntiAliasingSliderValue))
-        {
-            antiAliasingSlider.value = currentValue;
+            antiAliasingSlider.SetValueWithoutNotify(currentValue);
             _lastAntiAliasingSliderValue = currentValue;
         }
 
@@ -705,7 +711,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         }
     }
 
-    void SyncLightVolumeIntensitySlider()
+    void SyncLightVolumeIntensitySlider(bool allowWriteBack)
     {
         if (lightVolumeIntensitySlider == null)
         {
@@ -715,19 +721,19 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         float currentValue = gaussianSplatRenderer.GetLightVolumeIntensity();
         if (!_sliderValuesInitialized)
         {
-            lightVolumeIntensitySlider.value = currentValue;
+            lightVolumeIntensitySlider.SetValueWithoutNotify(currentValue);
+            _lastLightVolumeIntensitySliderValue = currentValue;
+        }
+        else if (!allowWriteBack || SliderValueChanged(currentValue, _lastLightVolumeIntensitySliderValue))
+        {
+            lightVolumeIntensitySlider.SetValueWithoutNotify(currentValue);
             _lastLightVolumeIntensitySliderValue = currentValue;
         }
         else if (SliderValueChanged(lightVolumeIntensitySlider.value, _lastLightVolumeIntensitySliderValue))
         {
             gaussianSplatRenderer.SetLightVolumeIntensity(lightVolumeIntensitySlider.value);
             currentValue = gaussianSplatRenderer.GetLightVolumeIntensity();
-            lightVolumeIntensitySlider.value = currentValue;
-            _lastLightVolumeIntensitySliderValue = currentValue;
-        }
-        else if (SliderValueChanged(currentValue, _lastLightVolumeIntensitySliderValue))
-        {
-            lightVolumeIntensitySlider.value = currentValue;
+            lightVolumeIntensitySlider.SetValueWithoutNotify(currentValue);
             _lastLightVolumeIntensitySliderValue = currentValue;
         }
 
@@ -737,7 +743,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         }
     }
 
-    void SyncAlphaCutoffSlider()
+    void SyncAlphaCutoffSlider(bool allowWriteBack)
     {
         if (alphaCutoffSlider == null)
         {
@@ -747,19 +753,19 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         float currentValue = gaussianSplatRenderer.alphaCutoff;
         if (!_sliderValuesInitialized)
         {
-            alphaCutoffSlider.value = currentValue;
+            alphaCutoffSlider.SetValueWithoutNotify(currentValue);
+            _lastAlphaCutoffSliderValue = currentValue;
+        }
+        else if (!allowWriteBack || SliderValueChanged(currentValue, _lastAlphaCutoffSliderValue))
+        {
+            alphaCutoffSlider.SetValueWithoutNotify(currentValue);
             _lastAlphaCutoffSliderValue = currentValue;
         }
         else if (SliderValueChanged(alphaCutoffSlider.value, _lastAlphaCutoffSliderValue))
         {
             gaussianSplatRenderer.SetAlphaCutoff(alphaCutoffSlider.value);
             currentValue = gaussianSplatRenderer.alphaCutoff;
-            alphaCutoffSlider.value = currentValue;
-            _lastAlphaCutoffSliderValue = currentValue;
-        }
-        else if (SliderValueChanged(currentValue, _lastAlphaCutoffSliderValue))
-        {
-            alphaCutoffSlider.value = currentValue;
+            alphaCutoffSlider.SetValueWithoutNotify(currentValue);
             _lastAlphaCutoffSliderValue = currentValue;
         }
 
