@@ -57,7 +57,7 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
     [UdonSynced, Range(0.0f, 2.0f)] [SerializeField] public float gaussianScale = 1.0f;
     [Range(0.0f, 1.0f)] [SerializeField] float thinThreshold = 0.005f;
     [Range(0.0f, 3.0f)] [SerializeField] float antiAliasing = 1.0f;
-    [Range(-20.0f, 10.0f)] [SerializeField] float log2MinScale = -12.0f;
+    [Range(-20.0f, 10.0f)] [SerializeField] float log2MinScale = -15.0f;
     [Range(0.005f, 0.1f)] [SerializeField] public float alphaCutoff = DEFAULT_ALPHA_CUTOFF;
     [Range(0.0f, 100.0f)] [SerializeField] float scaleCutoff = 100.0f;
     [Range(0.0f, 5.0f)] [SerializeField] float exposure = 1.0f;
@@ -1974,7 +1974,7 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         generatedUi.languageSectionText = CreateTextElement("Language Section", settingsColumn.transform, "Language", 18, TextAnchor.MiddleLeft, Color.white);
         GameObject languageRow = CreateHorizontalGroup("Language Row", settingsColumn.transform, 8.0f, false);
         Button englishLanguageButton = CreateButtonElement("English Button", languageRow.transform, "English", new Color(0.2f, 0.2f, 0.24f, 1.0f), 0.0f, 1.0f);
-        Button japaneseLanguageButton = CreateButtonElement("Japanese Button", languageRow.transform, "日本語", new Color(0.2f, 0.2f, 0.24f, 1.0f), 0.0f, 1.0f);
+        Button japaneseLanguageButton = CreateButtonElement("Japanese Button", languageRow.transform, "µùÑµ£¼Φ¬₧", new Color(0.2f, 0.2f, 0.24f, 1.0f), 0.0f, 1.0f);
         generatedUi.englishLanguageButton = englishLanguageButton;
         generatedUi.japaneseLanguageButton = japaneseLanguageButton;
         AddUdonSharpButtonEvent(englishLanguageButton, generatedUi, nameof(GaussianSplatRendererUI.SetLanguageEnglish));

@@ -122,7 +122,7 @@ Material:
     - _Gamma: 1
     - _GaussianMul: 1
     - _LightVolumeIntensity: 1
-    - _Log2MinScale: -12
+    - _Log2MinScale: -15
     - _Opacity: 1
     - _SHBand: 0
     - _ScaleCutoff: 100

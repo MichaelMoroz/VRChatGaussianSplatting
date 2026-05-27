@@ -64,7 +64,7 @@ Shader "VRChatGaussianSplatting/GaussianSplattingSimpleBackToFront"
         [Enum(SH0,0,SH1,1,SH2,2,SH3,3)] _SHBand ("SH Band", Float) = 3
         _ThinThreshold ("Thinness Threshold", Range(0, 1)) = 0.005
         _AntiAliasing ("Antialiasing", Range(0, 5.0)) = 1.0
-        _Log2MinScale ("Log2 of Minimum Scale", Range(-20, 10)) = -12.0
+        _Log2MinScale ("Log2 of Minimum Scale", Range(-20, 10)) = -15.0
         _AlphaCutoff ("Alpha Cutoff", Range(0, 1)) = 0.03
         _ScaleCutoff ("Scale Cutoff", Range(0, 100)) = 100.0
         _Exposure ("Exposure", Range(0, 5)) = 1.0
