@@ -1986,7 +1986,7 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         const float splatScrollButtonHeight = 38.0f;
         const float splatSlotButtonHeight = 42.0f;
 
-        generatedUi.splatSectionText = CreateTextElement("Splat Section", splatColumn.transform, "Splat Object (global)*", 18, TextAnchor.MiddleLeft, Color.white);
+        generatedUi.splatSectionText = CreateTextElement("Splat Section", splatColumn.transform, "Splat Object (global)", 18, TextAnchor.MiddleLeft, Color.white);
         GameObject splatListPanel = CreateVerticalGroup("Splat List Panel", splatColumn.transform, new RectOffset(8, 8, 8, 8), 8.0f, TextAnchor.UpperLeft);
         Image splatListPanelImage = splatListPanel.AddComponent<Image>();
         splatListPanelImage.color = new Color(0.09f, 0.09f, 0.11f, 1.0f);
