@@ -518,19 +518,25 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
                 continue;
             }
 
-            if (material.HasProperty("_GS_SH9") && material.GetTexture("_GS_SH9") != null)
+            if (!material.HasProperty("_GS_SH") || material.GetTexture("_GS_SH") == null || !material.HasProperty("_GS_SH_CoeffCount"))
+            {
+                continue;
+            }
+
+            int coeffCount = material.GetInt("_GS_SH_CoeffCount");
+            if (coeffCount >= 15)
             {
                 inferredMax = Mathf.Max(inferredMax, 3);
                 continue;
             }
 
-            if (material.HasProperty("_GS_SH4") && material.GetTexture("_GS_SH4") != null)
+            if (coeffCount >= 8)
             {
                 inferredMax = Mathf.Max(inferredMax, 2);
                 continue;
             }
 
-            if (material.HasProperty("_GS_SH1") && material.GetTexture("_GS_SH1") != null)
+            if (coeffCount >= 3)
             {
                 inferredMax = Mathf.Max(inferredMax, 1);
             }
@@ -837,9 +843,29 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         int actualSplatCount = positionsMaterial != null && positionsMaterial.HasProperty("_ActualSplatCount")
             ? positionsMaterial.GetInt("_ActualSplatCount")
             : 0;
+
+        if (_radixSort == null)
+        {
+            _radixSort = (RadixSort)GetComponent<RadixSort>();
+        }
+
+        if (_radixSort == null)
+        {
+            Debug.LogError("RadixSort component not found on the GaussianSplatRenderer GameObject.");
+            return false;
+        }
+
         _radixSort.elementCount = actualSplatCount > 0 && actualSplatCount <= textureElementCount ? actualSplatCount : textureElementCount;
         keyValueMat = _radixSort.computeKeyValues;
+        if (keyValueMat == null)
+        {
+            Debug.LogError("ComputeKeyValues material is not assigned on the RadixSort component.");
+            return false;
+        }
+
         keyValueMat.SetTexture("_GS_Positions", positions);
+        keyValueMat.SetInt("_GS_Positions_CoordMask", positionsMaterial.GetInt("_GS_Positions_CoordMask"));
+        keyValueMat.SetInt("_GS_Positions_CoordShift", positionsMaterial.GetInt("_GS_Positions_CoordShift"));
         return true;
     }
 
@@ -1845,7 +1871,7 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         canvasObject.transform.SetParent(transform, false);
         canvasObject.transform.localPosition = new Vector3(0.0f, 1.2f, 1.5f);
         canvasObject.transform.localRotation = Quaternion.identity;
-        canvasObject.transform.localScale = Vector3.one * 0.0025f;
+        canvasObject.transform.localScale = Vector3.one * 0.0015f;
 
         Canvas canvas = canvasObject.GetComponent<Canvas>();
         canvas.renderMode = RenderMode.WorldSpace;
@@ -1974,7 +2000,7 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         generatedUi.languageSectionText = CreateTextElement("Language Section", settingsColumn.transform, "Language", 18, TextAnchor.MiddleLeft, Color.white);
         GameObject languageRow = CreateHorizontalGroup("Language Row", settingsColumn.transform, 8.0f, false);
         Button englishLanguageButton = CreateButtonElement("English Button", languageRow.transform, "English", new Color(0.2f, 0.2f, 0.24f, 1.0f), 0.0f, 1.0f);
-        Button japaneseLanguageButton = CreateButtonElement("Japanese Button", languageRow.transform, "µùÑµ£¼Φ¬₧", new Color(0.2f, 0.2f, 0.24f, 1.0f), 0.0f, 1.0f);
+        Button japaneseLanguageButton = CreateButtonElement("Japanese Button", languageRow.transform, "日本語", new Color(0.2f, 0.2f, 0.24f, 1.0f), 0.0f, 1.0f);
         generatedUi.englishLanguageButton = englishLanguageButton;
         generatedUi.japaneseLanguageButton = japaneseLanguageButton;
         AddUdonSharpButtonEvent(englishLanguageButton, generatedUi, nameof(GaussianSplatRendererUI.SetLanguageEnglish));

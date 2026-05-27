@@ -20,6 +20,8 @@ namespace GaussianSplatting.Editor
         static readonly List<int> RemovalBuffer = new List<int>();
 
         static readonly int GSPositionsId = Shader.PropertyToID("_GS_Positions");
+        static readonly int GSPositionsCoordMaskId = Shader.PropertyToID("_GS_Positions_CoordMask");
+        static readonly int GSPositionsCoordShiftId = Shader.PropertyToID("_GS_Positions_CoordShift");
         static readonly int GSRenderOrderId = Shader.PropertyToID("_GS_RenderOrder");
         static readonly int ActualSplatCountId = Shader.PropertyToID("_ActualSplatCount");
         static readonly int GaussianMulId = Shader.PropertyToID("_GaussianMul");
@@ -520,6 +522,8 @@ namespace GaussianSplatting.Editor
                 }
 
                 _computeKeyValues.SetTexture(GSPositionsId, positions);
+                _computeKeyValues.SetInt(GSPositionsCoordMaskId, _sourceMaterial.GetInt(GSPositionsCoordMaskId));
+                _computeKeyValues.SetInt(GSPositionsCoordShiftId, _sourceMaterial.GetInt(GSPositionsCoordShiftId));
             }
 
             void CopySortedOrder()

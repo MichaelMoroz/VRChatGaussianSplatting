@@ -1,19 +1,13 @@
 #include "../RadixSort/Utils.cginc"
 
-Texture2D _GS_Positions, _GS_Scales, _GS_Rotations, _GS_Colors;
-Texture2D _GS_SH1, _GS_SH2, _GS_SH3;
-float4 _GS_SH1_Min, _GS_SH2_Min, _GS_SH3_Min;
-float4 _GS_SH1_Range, _GS_SH2_Range, _GS_SH3_Range;
-Texture2D _GS_SH4, _GS_SH5, _GS_SH6, _GS_SH7, _GS_SH8;
-float4 _GS_SH4_Min, _GS_SH5_Min, _GS_SH6_Min, _GS_SH7_Min, _GS_SH8_Min;
-float4 _GS_SH4_Range, _GS_SH5_Range, _GS_SH6_Range, _GS_SH7_Range, _GS_SH8_Range;
-Texture2D _GS_SH9, _GS_SHA, _GS_SHB, _GS_SHC, _GS_SHD, _GS_SHE, _GS_SHF;
-float4 _GS_SH9_Min, _GS_SHA_Min, _GS_SHB_Min, _GS_SHC_Min, _GS_SHD_Min, _GS_SHE_Min, _GS_SHF_Min;
-float4 _GS_SH9_Range, _GS_SHA_Range, _GS_SHB_Range, _GS_SHC_Range, _GS_SHD_Range, _GS_SHE_Range, _GS_SHF_Range;
+Texture2D _GS_Positions, _GS_Scales, _GS_Rotations, _GS_Colors, _GS_SH;
+float4 _GS_SH_Min;
+float4 _GS_SH_Range;
 Texture2DArray<float> _GS_RenderOrder;
 Texture2DArray<float> _GS_RenderOrderPrecomputed;
 Texture2D<float> _GS_RenderOrderMirror;
 float4 _GS_Positions_TexelSize;
+float4 _GS_SH_TexelSize;
 float4 _GS_RenderOrder_TexelSize;
 float4 _GS_RenderOrderPrecomputed_TexelSize;
 float _VRChatCameraMode;
@@ -32,6 +26,14 @@ float _ScaleCutoff;
 int _SplatCount;
 int _ActualSplatCount;
 int _SplatOffset;
+int _GS_Positions_CoordMask;
+int _GS_Positions_CoordShift;
+int _GS_SH_CoeffCount;
+int _GS_SH_CoeffStride;
+int _GS_SH_CoordMask;
+int _GS_SH_CoordShift;
+int _GS_RenderOrderPrecomputed_CoordMask;
+int _GS_RenderOrderPrecomputed_CoordShift;
 
 float3 _OKLCHShift;
 
@@ -125,9 +127,14 @@ struct SplatData {
     bool valid;
 };
 
+uint2 GetLinearCoord(uint index, uint mask, uint shift)
+{
+    return uint2(index & mask, index >> shift);
+}
+
 uint2 GetSplatCoord(uint id)
 {
-    return uint2(id % uint(_GS_Positions_TexelSize.z), id / uint(_GS_Positions_TexelSize.z));
+    return GetLinearCoord(id, uint(_GS_Positions_CoordMask), uint(_GS_Positions_CoordShift));
 }
 
 SplatData LoadSplatData(uint id) {
@@ -144,15 +151,21 @@ SplatData LoadSplatData(uint id) {
     return o;
 }
 
-float3 DecodeSH(Texture2D tex, float4 shMin, float4 shRange, uint2 coord)
+float3 DecodeSH(uint id, int coeffIndex)
 {
-    return shMin.xyz + tex[coord].rgb * shRange.xyz;
+    if (coeffIndex < 0 || coeffIndex >= _GS_SH_CoeffCount)
+    {
+        return 0.0;
+    }
+
+    uint linearIndex = uint(coeffIndex) * uint(_GS_SH_CoeffStride) + id;
+    uint2 coord = GetLinearCoord(linearIndex, uint(_GS_SH_CoordMask), uint(_GS_SH_CoordShift));
+    return _GS_SH_Min.xyz + _GS_SH[coord].rgb * _GS_SH_Range.xyz;
 }
 
 float3 EvaluateSplatSHColor(uint id, float3 sh0Color, float3 positionObject, float3 cameraPosObject)
 {
     float3 color = sh0Color;
-    uint2 coord = GetSplatCoord(id);
     float3 viewDir = positionObject - cameraPosObject;
     float invLen = rsqrt(max(dot(viewDir, viewDir), 1e-8));
     float3 dir = viewDir * invLen;
@@ -163,9 +176,9 @@ float3 EvaluateSplatSHColor(uint id, float3 sh0Color, float3 positionObject, flo
 
     if (shBand >= 1)
     {
-        float3 sh1 = DecodeSH(_GS_SH1, _GS_SH1_Min, _GS_SH1_Range, coord);
-        float3 sh2 = DecodeSH(_GS_SH2, _GS_SH2_Min, _GS_SH2_Range, coord);
-        float3 sh3 = DecodeSH(_GS_SH3, _GS_SH3_Min, _GS_SH3_Range, coord);
+        float3 sh1 = DecodeSH(id, 0);
+        float3 sh2 = DecodeSH(id, 1);
+        float3 sh3 = DecodeSH(id, 2);
         color += -SH_C1 * y * sh1
             + SH_C1 * z * sh2
             - SH_C1 * x * sh3;
@@ -180,11 +193,11 @@ float3 EvaluateSplatSHColor(uint id, float3 sh0Color, float3 positionObject, flo
 
     if (shBand >= 2)
     {
-        float3 sh4 = DecodeSH(_GS_SH4, _GS_SH4_Min, _GS_SH4_Range, coord);
-        float3 sh5 = DecodeSH(_GS_SH5, _GS_SH5_Min, _GS_SH5_Range, coord);
-        float3 sh6 = DecodeSH(_GS_SH6, _GS_SH6_Min, _GS_SH6_Range, coord);
-        float3 sh7 = DecodeSH(_GS_SH7, _GS_SH7_Min, _GS_SH7_Range, coord);
-        float3 sh8 = DecodeSH(_GS_SH8, _GS_SH8_Min, _GS_SH8_Range, coord);
+        float3 sh4 = DecodeSH(id, 3);
+        float3 sh5 = DecodeSH(id, 4);
+        float3 sh6 = DecodeSH(id, 5);
+        float3 sh7 = DecodeSH(id, 6);
+        float3 sh8 = DecodeSH(id, 7);
         color += SH_C2_0 * xy * sh4
             + SH_C2_1 * yz * sh5
             + SH_C2_2 * (2.0 * zz - xx - yy) * sh6
@@ -194,13 +207,13 @@ float3 EvaluateSplatSHColor(uint id, float3 sh0Color, float3 positionObject, flo
 
     if (shBand >= 3)
     {
-        float3 sh9 = DecodeSH(_GS_SH9, _GS_SH9_Min, _GS_SH9_Range, coord);
-        float3 shA = DecodeSH(_GS_SHA, _GS_SHA_Min, _GS_SHA_Range, coord);
-        float3 shB = DecodeSH(_GS_SHB, _GS_SHB_Min, _GS_SHB_Range, coord);
-        float3 shC = DecodeSH(_GS_SHC, _GS_SHC_Min, _GS_SHC_Range, coord);
-        float3 shD = DecodeSH(_GS_SHD, _GS_SHD_Min, _GS_SHD_Range, coord);
-        float3 shE = DecodeSH(_GS_SHE, _GS_SHE_Min, _GS_SHE_Range, coord);
-        float3 shF = DecodeSH(_GS_SHF, _GS_SHF_Min, _GS_SHF_Range, coord);
+        float3 sh9 = DecodeSH(id, 8);
+        float3 shA = DecodeSH(id, 9);
+        float3 shB = DecodeSH(id, 10);
+        float3 shC = DecodeSH(id, 11);
+        float3 shD = DecodeSH(id, 12);
+        float3 shE = DecodeSH(id, 13);
+        float3 shF = DecodeSH(id, 14);
         color += SH_C3_0 * y * (3.0 * x * x - y * y) * sh9
             + SH_C3_1 * x * y * z * shA
             + SH_C3_2 * y * (4.0 * z * z - x * x - y * y) * shB
@@ -233,7 +246,7 @@ int GetPrecomputedRenderOrderIndex(uint id, float3 cam_dir) {
     if(best_dot > 0.0) {
         id = _ActualSplatCount - id - 1; // flip the order for positive directions
     }
-    uint2 coord = uint2(id % uint(_GS_RenderOrderPrecomputed_TexelSize.z), id / uint(_GS_RenderOrderPrecomputed_TexelSize.z));
+    uint2 coord = GetLinearCoord(id, uint(_GS_RenderOrderPrecomputed_CoordMask), uint(_GS_RenderOrderPrecomputed_CoordShift));
     return _GS_RenderOrderPrecomputed[int3(coord, best_index)];
 }
 

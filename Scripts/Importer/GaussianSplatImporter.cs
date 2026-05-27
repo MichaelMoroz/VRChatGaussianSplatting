@@ -68,6 +68,20 @@ namespace GaussianSplatting
         const float SHNonZeroEpsilon = 1e-8f;
         const int MaxImportSplatCount = 4096 * 4096;
 
+        readonly struct TextureLayout
+        {
+            public readonly int Width;
+            public readonly int Height;
+
+            public TextureLayout(int width, int height)
+            {
+                Width = width;
+                Height = height;
+            }
+
+            public int Capacity => Width * Height;
+        }
+
         static uint Morton3D(float nx, float ny, float nz)
         {
             // Clamp & convert to 10-bit ints (0-1023)
@@ -85,6 +99,79 @@ namespace GaussianSplatting
             }
 
             return Part1By2(x) | (Part1By2(y) << 1) | (Part1By2(z) << 2);
+        }
+
+        static TextureLayout EvaluateTextureLayout(int width, int texelCount, bool alignHeightToBlocks)
+        {
+            int height = Mathf.CeilToInt((float)texelCount / width);
+            if (alignHeightToBlocks)
+            {
+                height = Mathf.Max(4, ((height + 3) / 4) * 4);
+            }
+
+            return new TextureLayout(width, height);
+        }
+
+        static bool IsBetterTextureLayout(TextureLayout candidate, TextureLayout best, int texelCount)
+        {
+            int candidateWaste = candidate.Capacity - texelCount;
+            int bestWaste = best.Capacity - texelCount;
+            if (candidateWaste != bestWaste)
+            {
+                return candidateWaste < bestWaste;
+            }
+
+            int candidateSquareDelta = Mathf.Abs(candidate.Width - candidate.Height);
+            int bestSquareDelta = Mathf.Abs(best.Width - best.Height);
+            if (candidateSquareDelta != bestSquareDelta)
+            {
+                return candidateSquareDelta < bestSquareDelta;
+            }
+
+            return candidate.Width > best.Width;
+        }
+
+        static TextureLayout ChoosePotTextureLayout(int texelCount, bool alignHeightToBlocks)
+        {
+            int minWidth = alignHeightToBlocks ? 4 : 1;
+            if (texelCount <= 0)
+            {
+                return new TextureLayout(minWidth, minWidth);
+            }
+
+            int sqrtTexelCount = Mathf.Max(1, Mathf.CeilToInt(Mathf.Sqrt(texelCount)));
+            int upperWidth = Mathf.Max(minWidth, Mathf.NextPowerOfTwo(sqrtTexelCount));
+            int lowerWidth = upperWidth;
+            if (lowerWidth > sqrtTexelCount)
+            {
+                lowerWidth >>= 1;
+            }
+            lowerWidth = Mathf.Max(minWidth, lowerWidth);
+
+            TextureLayout best = EvaluateTextureLayout(lowerWidth, texelCount, alignHeightToBlocks);
+            if (upperWidth != lowerWidth)
+            {
+                TextureLayout candidate = EvaluateTextureLayout(upperWidth, texelCount, alignHeightToBlocks);
+                if (IsBetterTextureLayout(candidate, best, texelCount))
+                {
+                    best = candidate;
+                }
+            }
+
+            return best;
+        }
+
+        static void ApplyTexture(Texture2D texture, bool compressToBC7)
+        {
+            if (!compressToBC7)
+            {
+                texture.Apply(false, true);
+                return;
+            }
+
+            texture.Apply(false, false);
+            EditorUtility.CompressTexture(texture, TextureFormat.BC7, TextureCompressionQuality.Best);
+            texture.Apply(false, true);
         }
 
         static string GetSHPropertyName(int index)
@@ -129,6 +216,27 @@ namespace GaussianSplatting
             };
         }
 
+        static int ComputeTextureCoordShift(int width)
+        {
+            int shift = 0;
+            width = Mathf.Max(1, width);
+
+            while (width > 1)
+            {
+                width >>= 1;
+                shift++;
+            }
+
+            return shift;
+        }
+
+        static void SetLinearCoordParams(Material material, string maskPropertyName, string shiftPropertyName, int width)
+        {
+            int clampedWidth = Mathf.Max(1, width);
+            material.SetInt(maskPropertyName, clampedWidth - 1);
+            material.SetInt(shiftPropertyName, ComputeTextureCoordShift(clampedWidth));
+        }
+
         static MeshRenderer CreateRendererChild(Transform parent, string name, Mesh mesh, List<Material> materials)
         {
             GameObject child = new GameObject(name);
@@ -140,54 +248,89 @@ namespace GaussianSplatting
             return meshRenderer;
         }
 
-        static void ConfigureSplatMaterialTextures(Material splatMat, Texture2D xyzTex, Texture2D colDcTex, Texture2D rotTex, Texture2D scaleTex, Texture2D[] shTex, int importedSHCoeffCount, Vector3[] shMin, Vector3[] shRange, float shRangeEpsilon, int actualSplatCount, SHBand defaultSHBand)
+        static void ConfigureSplatMaterialTextures(Material splatMat, Texture2D xyzTex, Texture2D colDcTex, Texture2D rotTex, Texture2D scaleTex, Texture2D shTex, int importedSHCoeffCount, Vector3 shMin, Vector3 shRange, float shRangeEpsilon, int actualSplatCount, SHBand defaultSHBand)
         {
             splatMat.SetTexture("_GS_Positions", xyzTex);
+            SetLinearCoordParams(splatMat, "_GS_Positions_CoordMask", "_GS_Positions_CoordShift", xyzTex != null ? xyzTex.width : 1);
             splatMat.SetTexture("_GS_Colors", colDcTex);
             splatMat.SetTexture("_GS_Rotations", rotTex);
             splatMat.SetTexture("_GS_Scales", scaleTex);
-            if (importedSHCoeffCount > 0)
-            {
-                for (int coeff = 0; coeff < importedSHCoeffCount; ++coeff)
-                {
-                    string prop = GetSHPropertyName(coeff);
-                    Vector3 range = shRange[coeff];
-                    splatMat.SetTexture(prop, shTex[coeff]);
-                    splatMat.SetVector(prop + "_Min", new Vector4(shMin[coeff].x, shMin[coeff].y, shMin[coeff].z, 0f));
-                    splatMat.SetVector(prop + "_Range", new Vector4(
-                        Mathf.Max(range.x, shRangeEpsilon),
-                        Mathf.Max(range.y, shRangeEpsilon),
-                        Mathf.Max(range.z, shRangeEpsilon),
-                        0f
-                    ));
-                }
-            }
+            splatMat.SetTexture("_GS_SH", shTex);
+            SetLinearCoordParams(splatMat, "_GS_SH_CoordMask", "_GS_SH_CoordShift", shTex != null ? shTex.width : 1);
+            splatMat.SetInt("_GS_SH_CoeffCount", importedSHCoeffCount);
+            splatMat.SetInt("_GS_SH_CoeffStride", actualSplatCount);
+            splatMat.SetVector("_GS_SH_Min", new Vector4(shMin.x, shMin.y, shMin.z, 0f));
+            splatMat.SetVector("_GS_SH_Range", new Vector4(
+                Mathf.Max(shRange.x, shRangeEpsilon),
+                Mathf.Max(shRange.y, shRangeEpsilon),
+                Mathf.Max(shRange.z, shRangeEpsilon),
+                0f
+            ));
             splatMat.SetInt("_ActualSplatCount", actualSplatCount);
             SetMaterialSHBand(splatMat, defaultSHBand);
         }
 
-        public static GameObject CreatePrefab(List<Material> materials, Mesh mesh, string assetPath, string name, int maxSHBand = -1, bool addGaussianSplatObject = true)
+        static void ConfigurePrefabRoot(GameObject go, List<Material> materials, Mesh mesh, string name, int maxSHBand, bool addGaussianSplatObject)
         {
-            var go = new GameObject(name);
-            go.transform.SetPositionAndRotation(Vector3.zero, Quaternion.identity);
+            go.name = name;
+            go.transform.localPosition = Vector3.zero;
+            go.transform.localRotation = Quaternion.identity;
             go.transform.localScale = new Vector3(1, -1, 1); // flip Y to match unity's coordinate system
-            go.AddComponent<MeshFilter>().sharedMesh = mesh;
-            MeshRenderer meshRenderer = go.AddComponent<MeshRenderer>();
+
+            MeshFilter meshFilter = go.GetComponent<MeshFilter>();
+            if (meshFilter == null)
+                meshFilter = go.AddComponent<MeshFilter>();
+            meshFilter.sharedMesh = mesh;
+
+            MeshRenderer meshRenderer = go.GetComponent<MeshRenderer>();
+            if (meshRenderer == null)
+                meshRenderer = go.AddComponent<MeshRenderer>();
             meshRenderer.sharedMaterials = materials.ToArray();
             meshRenderer.allowOcclusionWhenDynamic = false;
-            if (addGaussianSplatObject)
+
+            if (!addGaussianSplatObject)
             {
-                GaussianSplatObject splatObject = go.AddUdonSharpComponent<GaussianSplatObject>();
-                splatObject.sortedRenderer = meshRenderer;
-                splatObject.SetMaxSHBand(Mathf.Clamp(maxSHBand, 0, 3));
-                UdonSharpEditorUtility.CopyProxyToUdon(splatObject);
+                GaussianSplatObject existingSplatObject = go.GetComponent<GaussianSplatObject>();
+                if (existingSplatObject != null)
+                    UnityEngine.Object.DestroyImmediate(existingSplatObject);
+                return;
             }
-            var prefab = PrefabUtility.SaveAsPrefabAssetAndConnect(go, assetPath, InteractionMode.AutomatedAction);
+
+            GaussianSplatObject splatObject = go.GetComponent<GaussianSplatObject>();
+            if (splatObject == null)
+                splatObject = go.AddUdonSharpComponent<GaussianSplatObject>();
+            splatObject.sortedRenderer = meshRenderer;
+            splatObject.SetMaxSHBand(Mathf.Clamp(maxSHBand, 0, 3));
+            UdonSharpEditorUtility.CopyProxyToUdon(splatObject);
+        }
+
+        public static GameObject CreatePrefab(List<Material> materials, Mesh mesh, string assetPath, string name, int maxSHBand = -1, bool addGaussianSplatObject = true)
+        {
+            GameObject existingPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(assetPath);
+            if (existingPrefab != null)
+            {
+                GameObject prefabContents = PrefabUtility.LoadPrefabContents(assetPath);
+                try
+                {
+                    ConfigurePrefabRoot(prefabContents, materials, mesh, name, maxSHBand, addGaussianSplatObject);
+                    PrefabUtility.SaveAsPrefabAsset(prefabContents, assetPath);
+                }
+                finally
+                {
+                    PrefabUtility.UnloadPrefabContents(prefabContents);
+                }
+
+                return AssetDatabase.LoadAssetAtPath<GameObject>(assetPath);
+            }
+
+            var go = new GameObject(name);
+            ConfigurePrefabRoot(go, materials, mesh, name, maxSHBand, addGaussianSplatObject);
+            var prefab = PrefabUtility.SaveAsPrefabAsset(go, assetPath);
             GameObject.DestroyImmediate(go); // clean up the temporary GameObject
             return prefab;
         }
 
-        public static void Import(string plyFile, string prefabOutputPath, bool computeBoundingBox, int splatsPerPass, bool precomputeSorting = false, int maxAlphaMaskCount = 1, bool useSRGB = true, bool importSphericalHarmonics = true, SHBand defaultSHBand = SHBand.SH1)
+        public static void Import(string plyFile, string prefabOutputPath, bool computeBoundingBox, int splatsPerPass, bool precomputeSorting = false, int maxAlphaMaskCount = 1, bool useSRGB = true, bool importSphericalHarmonics = true, SHBand defaultSHBand = SHBand.SH1, bool compressColorAlphaToBC7 = false, bool compressSHToBC7 = true)
         {
             if (!File.Exists(plyFile))
                 throw new FileNotFoundException(plyFile);
@@ -200,11 +343,15 @@ namespace GaussianSplatting
                 throw new InvalidOperationException($"Import aborted: '{Path.GetFileName(plyFile)}' contains {count:N0} splats, exceeding the importer limit of {MaxImportSplatCount:N0}.");
 
             int requestedSHCoeffCount = importSphericalHarmonics ? SHCoeffCountForBand(defaultSHBand) : 0;
+            bool willAttemptBC7Compression = compressColorAlphaToBC7 || (compressSHToBC7 && requestedSHCoeffCount > 0);
+            if (willAttemptBC7Compression && !SystemInfo.SupportsTextureFormat(TextureFormat.BC7))
+                throw new InvalidOperationException("BC7 compression is not supported by the current editor graphics device. Disable BC7 compression or import on a system with BC7 support.");
+
             GaussianFileReader.ReadFile(plyFile, requestedSHCoeffCount, out NativeArray<ImportSplatData> splats, out NativeArray<Vector3> shCoeffs);
             try
             {
-                var shMin = requestedSHCoeffCount > 0 ? new Vector3[requestedSHCoeffCount] : Array.Empty<Vector3>();
-                var shRange = requestedSHCoeffCount > 0 ? new Vector3[requestedSHCoeffCount] : Array.Empty<Vector3>();
+                var shMinPerCoeff = requestedSHCoeffCount > 0 ? new Vector3[requestedSHCoeffCount] : Array.Empty<Vector3>();
+                var shRangePerCoeff = requestedSHCoeffCount > 0 ? new Vector3[requestedSHCoeffCount] : Array.Empty<Vector3>();
                 const float shRangeEpsilon = 1e-8f;
                 bool[] hasNonZeroBand = new bool[4];
                 if (requestedSHCoeffCount > 0)
@@ -226,25 +373,42 @@ namespace GaussianSplatting
                             maxCoeff = Vector3.zero;
                         }
 
-                        shMin[coeff] = minCoeff;
-                        shRange[coeff] = maxCoeff - minCoeff;
+                        shMinPerCoeff[coeff] = minCoeff;
+                        shRangePerCoeff[coeff] = maxCoeff - minCoeff;
 
                         int band = coeff < 3 ? 1 : (coeff < 8 ? 2 : 3);
                         if (!hasNonZeroBand[band])
                         {
-                            Vector3 range = shRange[coeff];
+                            Vector3 range = shRangePerCoeff[coeff];
                             hasNonZeroBand[band] = range.x > SHNonZeroEpsilon || range.y > SHNonZeroEpsilon || range.z > SHNonZeroEpsilon;
                         }
                     }
                 }
                 SHBand effectiveDefaultSHBand = importSphericalHarmonics ? ClampDefaultSHBand(defaultSHBand, hasNonZeroBand) : SHBand.SH0;
                 int importedSHCoeffCount = importSphericalHarmonics ? SHCoeffCountForBand(effectiveDefaultSHBand) : 0;
+                Vector3 sharedShMin = Vector3.zero;
+                Vector3 sharedShMax = Vector3.zero;
+                if (importedSHCoeffCount > 0)
+                {
+                    sharedShMin = new Vector3(float.PositiveInfinity, float.PositiveInfinity, float.PositiveInfinity);
+                    sharedShMax = new Vector3(float.NegativeInfinity, float.NegativeInfinity, float.NegativeInfinity);
+                    for (int coeff = 0; coeff < importedSHCoeffCount; ++coeff)
+                    {
+                        Vector3 coeffMin = shMinPerCoeff[coeff];
+                        Vector3 coeffMax = coeffMin + shRangePerCoeff[coeff];
+                        sharedShMin = Vector3.Min(sharedShMin, coeffMin);
+                        sharedShMax = Vector3.Max(sharedShMax, coeffMax);
+                    }
+                }
+                Vector3 sharedShRange = sharedShMax - sharedShMin;
 
-                int side = Mathf.CeilToInt(Mathf.Sqrt(count));
-                int effectiveCount = side * side; // round up to nearest square
-
-                Debug.Log($"Importing {count} splats into {side}x{side} textures");
                 int n = splats.Length;
+                TextureLayout splatLayout = ChoosePotTextureLayout(n, compressColorAlphaToBC7);
+                TextureLayout shLayout = importedSHCoeffCount > 0
+                    ? ChoosePotTextureLayout(n * importedSHCoeffCount, compressSHToBC7)
+                    : new TextureLayout(1, 1);
+
+                Debug.Log($"Importing {count} splats into {splatLayout.Width}x{splatLayout.Height} textures");
 
                 // Compute BBOX
                 Vector3 min = new(float.MaxValue, float.MaxValue, float.MaxValue);
@@ -301,6 +465,12 @@ namespace GaussianSplatting
                 }
                 Array.Sort(keys, sortedOrder);
 
+                int[] textureIndexBySourceIndex = new int[n];
+                for (int i = 0; i < n; ++i)
+                {
+                    textureIndexBySourceIndex[sortedOrder[i]] = i;
+                }
+
                 Bounds bbox = new Bounds();
                 if (computeBoundingBox)
                 {
@@ -349,26 +519,26 @@ namespace GaussianSplatting
                         Array.Sort(sortedIndices[i], (a, b) => Vector3.Dot(splats[a].pos, dir).CompareTo(Vector3.Dot(splats[b].pos, dir)));
                     }
                     
-                    sortedTex = NewTextureArray(side, octahedral_dirs.Length, TextureFormat.RFloat, "SortedOctahedralDirections");
+                    sortedTex = NewTextureArray(splatLayout.Width, splatLayout.Height, octahedral_dirs.Length, TextureFormat.RFloat, "SortedOctahedralDirections");
                     for (int i = 0; i < octahedral_dirs.Length; ++i)
                     {
-                        Color[] sortedPixels = new Color[side * side];
+                        Color[] sortedPixels = new Color[splatLayout.Capacity];
                         for (int j = 0; j < n; ++j)
                         {
-                            sortedPixels[j] = new Color(sortedIndices[i][j], 0f, 0f, 0f); // Store only the index in the red channel
+                            sortedPixels[j] = new Color(textureIndexBySourceIndex[sortedIndices[i][j]], 0f, 0f, 0f); // Store only the texture index in the red channel
                         }
                         sortedTex.SetPixels(sortedPixels, i);
                     }
                     sortedTex.Apply(false, true);
-                    SaveTextureAsset(sortedTex, outputDataFolder, materialName + "_sorted_oct_dirs");
+                    sortedTex = SaveTextureAsset(sortedTex, outputDataFolder, materialName + "_sorted_oct_dirs");
                 }
 
 
-                Texture2D xyzTex     = NewTexture(side, TextureFormat.RGBAFloat, "XYZ");
-                Texture2D colDcTex   = NewTexture(side, TextureFormat.RGBA32, "ColorDC");
-                Texture2D rotTex     = NewTexture(side, TextureFormat.RGBA32, "Rotation");
-                Texture2D scaleTex   = NewTexture(side, TextureFormat.RGB9e5Float, "Scale");
-                Texture2D[] shTex    = importedSHCoeffCount > 0 ? new Texture2D[importedSHCoeffCount] : null;
+                Texture2D xyzTex     = NewTexture(splatLayout.Width, splatLayout.Height, TextureFormat.RGBAFloat, "XYZ");
+                Texture2D colDcTex   = NewTexture(splatLayout.Width, splatLayout.Height, TextureFormat.RGBA32, "ColorDC");
+                Texture2D rotTex     = NewTexture(splatLayout.Width, splatLayout.Height, TextureFormat.RGBA32, "Rotation");
+                Texture2D scaleTex   = NewTexture(splatLayout.Width, splatLayout.Height, TextureFormat.RGB9e5Float, "Scale");
+                Texture2D shTex      = importedSHCoeffCount > 0 ? NewTexture(shLayout.Width, shLayout.Height, TextureFormat.RGB565, "SH") : null;
 
                 Shader shader = null;
                 if(useSRGB) {
@@ -377,20 +547,11 @@ namespace GaussianSplatting
                     shader = Shader.Find("VRChatGaussianSplatting/GaussianSplattingSimpleBackToFront");
                 }
 
-                var xyzPixels   = new Color[side * side];
-                var colPixels   = new Color[side * side];
-                var rotPixels   = new Color[side * side];
-                var scalePixels = new Color[side * side];
-                var shPixels = importedSHCoeffCount > 0 ? new Color[importedSHCoeffCount][] : null;
-
-                if (importedSHCoeffCount > 0)
-                {
-                    for (int coeff = 0; coeff < importedSHCoeffCount; ++coeff)
-                    {
-                        shPixels[coeff] = new Color[side * side];
-                        shTex[coeff] = NewTexture(side, TextureFormat.RGB565, $"SH{coeff + 1:X}");
-                    }
-                }
+                var xyzPixels   = new Color[splatLayout.Capacity];
+                var colPixels   = new Color[splatLayout.Capacity];
+                var rotPixels   = new Color[splatLayout.Capacity];
+                var scalePixels = new Color[splatLayout.Capacity];
+                var shPixels    = importedSHCoeffCount > 0 ? new Color[shLayout.Capacity] : null;
 
                 for (int i = 0; i < n; ++i) {
                     int sourceIndex = sortedOrder[i];
@@ -398,9 +559,9 @@ namespace GaussianSplatting
                     xyzPixels[i]   = new Color(s.pos.x,   s.pos.y,   s.pos.z,   0f);
                     colPixels[i]   = new Color(s.dc0.x,   s.dc0.y,   s.dc0.z,   s.opacity);
                     rotPixels[i]   = new Color(0.5f + 0.5f * s.rot.x, 
-                                                0.5f + 0.5f * s.rot.y, 
-                                                0.5f + 0.5f * s.rot.z, 
-                                                0.5f + 0.5f * s.rot.w);
+                                               0.5f + 0.5f * s.rot.y, 
+                                               0.5f + 0.5f * s.rot.z, 
+                                               0.5f + 0.5f * s.rot.w);
                     scalePixels[i] = new Color(s.scale.x, s.scale.y, s.scale.z, 0f);
 
                     if (importedSHCoeffCount > 0)
@@ -408,11 +569,10 @@ namespace GaussianSplatting
                         for (int coeff = 0; coeff < importedSHCoeffCount; ++coeff)
                         {
                             Vector3 sh = GetSHCoefficient(shCoeffs, requestedSHCoeffCount, sourceIndex, coeff);
-                            Vector3 range = shRange[coeff];
-                            shPixels[coeff][i] = new Color(
-                                range.x > shRangeEpsilon ? (sh.x - shMin[coeff].x) / range.x : 0f,
-                                range.y > shRangeEpsilon ? (sh.y - shMin[coeff].y) / range.y : 0f,
-                                range.z > shRangeEpsilon ? (sh.z - shMin[coeff].z) / range.z : 0f,
+                            shPixels[coeff * n + i] = new Color(
+                                sharedShRange.x > shRangeEpsilon ? (sh.x - sharedShMin.x) / sharedShRange.x : 0f,
+                                sharedShRange.y > shRangeEpsilon ? (sh.y - sharedShMin.y) / sharedShRange.y : 0f,
+                                sharedShRange.z > shRangeEpsilon ? (sh.z - sharedShMin.z) / sharedShRange.z : 0f,
                                 0f
                             );
                         }
@@ -425,36 +585,25 @@ namespace GaussianSplatting
                 scaleTex.SetPixels(scalePixels);
                 if (importedSHCoeffCount > 0)
                 {
-                    for (int coeff = 0; coeff < importedSHCoeffCount; ++coeff)
-                    {
-                        shTex[coeff].SetPixels(shPixels[coeff]);
-                    }
+                    shTex.SetPixels(shPixels);
                 }
 
                 xyzTex.Apply(false, true);
-                colDcTex.Apply(false, true);
+                ApplyTexture(colDcTex, compressColorAlphaToBC7);
                 rotTex.Apply(false, true);
                 scaleTex.Apply(false, true);
                 if (importedSHCoeffCount > 0)
                 {
-                    for (int coeff = 0; coeff < importedSHCoeffCount; ++coeff)
-                    {
-                        shTex[coeff].Apply(false, true);
-                    }
+                    ApplyTexture(shTex, compressSHToBC7);
                 }
 
-
-
-                SaveTextureAsset(xyzTex, outputDataFolder, materialName + "_xyz");
-                SaveTextureAsset(colDcTex, outputDataFolder, materialName + "_color_dc");
-                SaveTextureAsset(rotTex, outputDataFolder, materialName + "_rotation");
-                SaveTextureAsset(scaleTex, outputDataFolder, materialName + "_scale");
+                xyzTex = SaveTextureAsset(xyzTex, outputDataFolder, materialName + "_xyz");
+                colDcTex = SaveTextureAsset(colDcTex, outputDataFolder, materialName + "_color_dc");
+                rotTex = SaveTextureAsset(rotTex, outputDataFolder, materialName + "_rotation");
+                scaleTex = SaveTextureAsset(scaleTex, outputDataFolder, materialName + "_scale");
                 if (importedSHCoeffCount > 0)
                 {
-                    for (int coeff = 0; coeff < importedSHCoeffCount; ++coeff)
-                    {
-                        SaveTextureAsset(shTex[coeff], outputDataFolder, materialName + $"_sh_{coeff + 1:X}");
-                    }
+                    shTex = SaveTextureAsset(shTex, outputDataFolder, materialName + "_sh");
                 }
                 
                 if(splatsPerPass == 0) splatsPerPass = n;
@@ -490,19 +639,28 @@ namespace GaussianSplatting
                     if(pass == 0) {
                         splatMat = new Material(shader);
                         splatMat.name = splatMatName;
-                        ConfigureSplatMaterialTextures(splatMat, xyzTex, colDcTex, rotTex, scaleTex, shTex, importedSHCoeffCount, shMin, shRange, shRangeEpsilon, n, effectiveDefaultSHBand);
                         mainMat = splatMat;
-                        if(precomputeSorting)
-                        {
-                            splatMat.SetTexture("_GS_RenderOrderPrecomputed", sortedTex);
-                            splatMat.SetInteger("_PRECOMPUTED_SORTING", 1);
-                            splatMat.EnableKeyword("_PRECOMPUTED_SORTING");
-                            splatMat.EnableKeyword("_PRECOMPUTED_SORTING_ON");
-                        }
                     } else {
-                        splatMat = new Material(mainMat); // make a material variant
-                        splatMat.parent = mainMat;
+                        splatMat = new Material(mainMat); // copy the base pass settings without relying on parent inheritance
                     }
+
+                    ConfigureSplatMaterialTextures(splatMat, xyzTex, colDcTex, rotTex, scaleTex, shTex, importedSHCoeffCount, sharedShMin, sharedShRange, shRangeEpsilon, n, effectiveDefaultSHBand);
+                    if(precomputeSorting)
+                    {
+                        splatMat.SetTexture("_GS_RenderOrderPrecomputed", sortedTex);
+                        SetLinearCoordParams(splatMat, "_GS_RenderOrderPrecomputed_CoordMask", "_GS_RenderOrderPrecomputed_CoordShift", sortedTex != null ? sortedTex.width : 1);
+                        splatMat.SetInteger("_PRECOMPUTED_SORTING", 1);
+                        splatMat.EnableKeyword("_PRECOMPUTED_SORTING");
+                        splatMat.EnableKeyword("_PRECOMPUTED_SORTING_ON");
+                    }
+                    else
+                    {
+                        splatMat.SetTexture("_GS_RenderOrderPrecomputed", null);
+                        splatMat.SetInteger("_PRECOMPUTED_SORTING", 0);
+                        splatMat.DisableKeyword("_PRECOMPUTED_SORTING");
+                        splatMat.DisableKeyword("_PRECOMPUTED_SORTING_ON");
+                    }
+
                     if(pass > 0 && pass <= alphaMaskCount) {
                         // Create alpha depth mask pass
                         indexCounts.Add(3);
@@ -533,11 +691,11 @@ namespace GaussianSplatting
                     Material splatMat = materials[i];
                     splatMat.renderQueue = 3500 + i;
                     string matPath = Path.Combine(outputDataFolder + "/materials", splatMat.name + ".mat");
-                    AssetDatabase.CreateAsset(splatMat, matPath);
+                    materials[i] = CreateOrReplaceAsset(splatMat, matPath);
                 }
 
                 Mesh pointMesh = PointsMesh.GetMultiPassMesh(indexCounts, topologies, bbox);
-                AssetDatabase.CreateAsset(pointMesh, Path.Combine(outputDataFolder, materialName + "_mesh.asset"));
+                pointMesh = CreateOrReplaceAsset(pointMesh, Path.Combine(outputDataFolder, materialName + "_mesh.asset"));
                 // Create prefab with the splat material and mesh
                 CreatePrefab(materials, pointMesh, prefabOutputPath, materialName, (int)effectiveDefaultSHBand);
                 AssetDatabase.SaveAssets();
@@ -552,9 +710,9 @@ namespace GaussianSplatting
         }
 
         // ---------------------------------------------------------------------
-        static Texture2D NewTexture(int size, TextureFormat format, string name)
+        static Texture2D NewTexture(int width, int height, TextureFormat format, string name)
         {
-            var tex = new Texture2D(size, size, format, mipChain: false, linear: true)
+            var tex = new Texture2D(width, height, format, mipChain: false, linear: true)
             {
                 name       = name,
                 wrapMode   = TextureWrapMode.Clamp,
@@ -563,9 +721,9 @@ namespace GaussianSplatting
             return tex;
         }
 
-        static Texture2DArray NewTextureArray(int size, int count, TextureFormat format, string name)
+        static Texture2DArray NewTextureArray(int width, int height, int count, TextureFormat format, string name)
         {
-            var tex = new Texture2DArray(size, size, count, format, mipChain: false, linear: true)
+            var tex = new Texture2DArray(width, height, count, format, mipChain: false, linear: true)
             {
                 name       = name,
                 wrapMode   = TextureWrapMode.Clamp,
@@ -574,18 +732,55 @@ namespace GaussianSplatting
             return tex;
         }
 
-        static void SaveTextureAsset(Texture2D tex, string folder, string name)
+        static T CreateOrReplaceAsset<T>(T asset, string path) where T : UnityEngine.Object
         {
-            string path = Path.Combine(folder, $"{name}.asset");
-            path = AssetDatabase.GenerateUniqueAssetPath(path);
-            AssetDatabase.CreateAsset(tex, path);
+            string assetName = Path.GetFileNameWithoutExtension(path);
+            asset.name = assetName;
+
+            T savedAsset = null;
+
+            T existing = AssetDatabase.LoadAssetAtPath<T>(path);
+            if (existing != null)
+            {
+                EditorUtility.CopySerialized(asset, existing);
+                savedAsset = existing;
+                UnityEngine.Object.DestroyImmediate(asset);
+            }
+            else
+            {
+                UnityEngine.Object existingMainAsset = AssetDatabase.LoadMainAssetAtPath(path);
+                if (existingMainAsset != null)
+                {
+                    AssetDatabase.DeleteAsset(path);
+                }
+
+                AssetDatabase.CreateAsset(asset, path);
+                savedAsset = AssetDatabase.LoadAssetAtPath<T>(path) ?? asset;
+            }
+
+            if (savedAsset != null && savedAsset.name != assetName)
+            {
+                savedAsset.name = assetName;
+            }
+
+            if (savedAsset != null)
+            {
+                EditorUtility.SetDirty(savedAsset);
+            }
+
+            return savedAsset;
         }
 
-        static void SaveTextureAsset(Texture2DArray tex, string folder, string name)
+        static Texture2D SaveTextureAsset(Texture2D tex, string folder, string name)
         {
             string path = Path.Combine(folder, $"{name}.asset");
-            path = AssetDatabase.GenerateUniqueAssetPath(path);
-            AssetDatabase.CreateAsset(tex, path);
+            return CreateOrReplaceAsset(tex, path);
+        }
+
+        static Texture2DArray SaveTextureAsset(Texture2DArray tex, string folder, string name)
+        {
+            string path = Path.Combine(folder, $"{name}.asset");
+            return CreateOrReplaceAsset(tex, path);
         }
     }
 }
@@ -603,7 +798,9 @@ namespace GaussianSplatting.Editor.Importers
         int _maxAlphaMaskCount = 1; // max number of alpha mask passes
         bool _useSRGB = true; // use sRGB color correction
         bool _importSphericalHarmonics = true;
-        SHBand _defaultSHBand = SHBand.SH1;
+        SHBand _defaultSHBand = SHBand.SH3;
+        bool _compressColorAlphaToBC7 = false;
+        bool _compressSHToBC7 = true;
         Vector2 scrollPosition = Vector2.zero;
         [MenuItem("Gaussian Splatting/Import PLY Splats…")]
         static void Init()
@@ -660,9 +857,21 @@ namespace GaussianSplatting.Editor.Importers
             _computeBoundingBox   = EditorGUILayout.Toggle("Compute Bounding Box", _computeBoundingBox);
             _useSRGB = EditorGUILayout.Toggle("sRGB Color Correction", _useSRGB);
             _importSphericalHarmonics = EditorGUILayout.Toggle("Import Spherical Harmonics", _importSphericalHarmonics);
+            EditorGUILayout.Space(5f);
+            EditorGUILayout.LabelField("BC7 Compression", EditorStyles.boldLabel);
+            _compressColorAlphaToBC7 = EditorGUILayout.Toggle("ColorAlpha", _compressColorAlphaToBC7);
+            _compressSHToBC7 = EditorGUILayout.Toggle("SH1+", _compressSHToBC7);
+            if (_compressColorAlphaToBC7 || _compressSHToBC7)
+            {
+                EditorGUILayout.HelpBox("BC7 compression applies only to the selected generated textures. Position, scale, and sorting textures stay uncompressed, and the importer pads texture resolution to 4x4 blocks when needed.", MessageType.Info);
+                if (!_importSphericalHarmonics && _compressSHToBC7)
+                {
+                    EditorGUILayout.HelpBox("SH1+ compression has no effect while Import Spherical Harmonics is disabled.", MessageType.Info);
+                }
+            }
             if (_importSphericalHarmonics)
             {
-                _defaultSHBand = (SHBand)EditorGUILayout.EnumPopup("Default SH Band", _defaultSHBand);
+                _defaultSHBand = (SHBand)EditorGUILayout.EnumPopup("Max imported SH Band", _defaultSHBand);
                 EditorGUILayout.HelpBox("Imports higher-order SH coefficient textures only up to the selected max band and sets the imported material to that band. If the selected band has no non-zero coefficients in the file, the importer falls back to the highest lower non-zero band.", MessageType.Info);
             }
             else
@@ -707,7 +916,7 @@ namespace GaussianSplatting.Editor.Importers
                     string relFolder  = FileUtil.GetProjectRelativePath(_outputFolder);
                     if (string.IsNullOrEmpty(relFolder))
                         relFolder = "Assets";
-                    string prefabPath = AssetDatabase.GenerateUniqueAssetPath(Path.Combine(relFolder, prefabName));
+                    string prefabPath = Path.Combine(relFolder, prefabName).Replace('\\', '/');
                     ImportSingle(ply, prefabPath);
                 }
                 AssetDatabase.SaveAssets();
@@ -722,7 +931,7 @@ namespace GaussianSplatting.Editor.Importers
             {
                 EditorUtility.DisplayProgressBar("PLY Import",
                     $"Importing {Path.GetFileName(plyPath)}", 0f);
-                PlySplatImporter.Import(plyPath, prefabPath, _computeBoundingBox, _splatsPerPass, _precomputeSorting, _maxAlphaMaskCount, _useSRGB, _importSphericalHarmonics, _defaultSHBand);
+                PlySplatImporter.Import(plyPath, prefabPath, _computeBoundingBox, _splatsPerPass, _precomputeSorting, _maxAlphaMaskCount, _useSRGB, _importSphericalHarmonics, _defaultSHBand, _compressColorAlphaToBC7, _compressSHToBC7);
             }
             catch (Exception e)
             {

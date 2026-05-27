@@ -1,6 +1,8 @@
 Shader "VRChatGaussianSplatting/ComputeKeyValue" {
     Properties {
         [HideInInspector] _GS_Positions ("Means", 2D) = "" {}
+        [HideInInspector] _GS_Positions_CoordMask ("Positions Coord Mask", Int) = 0
+        [HideInInspector] _GS_Positions_CoordShift ("Positions Coord Shift", Int) = 0
         [HideInInspector] _CameraPos ("Camera Position", Vector) = (0, 0, 0, 0)
         [HideInInspector] _ElementCount ("Element Count", Int) = 0
         _CameraPosQuantization ("Camera Position Quantization", Range(0, 0.1)) = 0.01
