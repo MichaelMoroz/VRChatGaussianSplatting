@@ -17,8 +17,12 @@ namespace GaussianSplatting.Editor
     static class GaussianSplatUiBuilder
     {
         const float DefaultAlphaCutoff = 0.03f;
+        const string UiMaterialFolderPath = "Assets/VRChatGaussianSplatting/Resources/Materials";
+        const string SupersampledUiMaterialAssetPath = UiMaterialFolderPath + "/GaussianSplatUISupersampled.mat";
+        const string VrChatSupersampledUiShaderName = "VRChat/Mobile/Worlds/Supersampled UI";
 
         static Type _cachedVrChatUiShapeType;
+        static Material _cachedSupersampledUiMaterial;
 
         [MenuItem("GameObject/Gaussian Splatting/Gaussian Splat UI", false, 11)]
         static void CreateGaussianSplatUI(MenuCommand menuCommand)
@@ -198,6 +202,7 @@ namespace GaussianSplatting.Editor
             GameObject splatListPanel = CreateVerticalGroup("Splat List Panel", splatColumn.transform, new RectOffset(8, 8, 8, 8), 8.0f, TextAnchor.UpperLeft);
             Image splatListPanelImage = splatListPanel.AddComponent<Image>();
             splatListPanelImage.color = new Color(0.09f, 0.09f, 0.11f, 1.0f);
+            ApplySupersampledUiMaterial(splatListPanelImage);
             SetPreferredHeight(splatListPanel, splatListPanelHeight, 0.0f);
 
             GameObject splatScrollRow = CreateHorizontalGroup("Splat Scroll Controls", splatListPanel.transform, 8.0f, false);
@@ -338,6 +343,54 @@ namespace GaussianSplatting.Editor
         static Font GetBuiltinUiFont()
         {
             return Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        }
+
+        static Material GetSupersampledUiMaterial()
+        {
+            if (_cachedSupersampledUiMaterial != null)
+            {
+                return _cachedSupersampledUiMaterial;
+            }
+
+            EnsureFolderExists(UiMaterialFolderPath);
+
+            Material supersampledUiMaterial = AssetDatabase.LoadAssetAtPath<Material>(SupersampledUiMaterialAssetPath);
+            Shader supersampledUiShader = Shader.Find(VrChatSupersampledUiShaderName);
+            if (supersampledUiShader == null)
+            {
+                return null;
+            }
+
+            if (supersampledUiMaterial == null)
+            {
+                supersampledUiMaterial = new Material(supersampledUiShader);
+                supersampledUiMaterial.name = "GaussianSplatUISupersampled";
+                AssetDatabase.CreateAsset(supersampledUiMaterial, SupersampledUiMaterialAssetPath);
+            }
+            else if (supersampledUiMaterial.shader != supersampledUiShader)
+            {
+                supersampledUiMaterial.shader = supersampledUiShader;
+                EditorUtility.SetDirty(supersampledUiMaterial);
+            }
+
+            _cachedSupersampledUiMaterial = supersampledUiMaterial;
+            return _cachedSupersampledUiMaterial;
+        }
+
+        static void ApplySupersampledUiMaterial(Graphic graphic)
+        {
+            if (graphic == null)
+            {
+                return;
+            }
+
+            Material supersampledUiMaterial = GetSupersampledUiMaterial();
+            if (supersampledUiMaterial == null)
+            {
+                return;
+            }
+
+            graphic.material = supersampledUiMaterial;
         }
 
         static T AddGeneratedUdonSharpComponent<T>(GameObject targetObject, string undoLabel) where T : UdonSharpBehaviour
@@ -497,6 +550,7 @@ namespace GaussianSplatting.Editor
             RectTransform rectTransform = CreateRectTransform(objectName, parent, new Vector2(0.0f, preferredHeight));
             Text text = rectTransform.gameObject.AddComponent<Text>();
             text.font = GetBuiltinUiFont();
+            ApplySupersampledUiMaterial(text);
             text.fontSize = fontSize;
             text.alignment = alignment;
             text.color = textColor;
@@ -587,6 +641,7 @@ namespace GaussianSplatting.Editor
             RectTransform rectTransform = CreateRectTransform(objectName, parent, new Vector2(preferredWidth, 38.0f));
             Image image = rectTransform.gameObject.AddComponent<Image>();
             image.color = backgroundColor;
+            ApplySupersampledUiMaterial(image);
 
             Button button = rectTransform.gameObject.AddComponent<Button>();
             ColorBlock colors = button.colors;
@@ -623,6 +678,7 @@ namespace GaussianSplatting.Editor
             RectTransform rectTransform = CreateRectTransform(objectName, parent, new Vector2(0.0f, 34.0f));
             Image background = rectTransform.gameObject.AddComponent<Image>();
             background.color = new Color(0.16f, 0.16f, 0.18f, 1.0f);
+            ApplySupersampledUiMaterial(background);
 
             Slider slider = rectTransform.gameObject.AddComponent<Slider>();
             slider.direction = Slider.Direction.LeftToRight;
@@ -648,6 +704,7 @@ namespace GaussianSplatting.Editor
             fill.offsetMax = Vector2.zero;
             Image fillImage = fill.gameObject.AddComponent<Image>();
             fillImage.color = new Color(0.18f, 0.4f, 0.24f, 1.0f);
+            ApplySupersampledUiMaterial(fillImage);
 
             RectTransform handleSlideArea = CreateRectTransform("Handle Slide Area", rectTransform, Vector2.zero);
             handleSlideArea.anchorMin = Vector2.zero;
@@ -661,6 +718,7 @@ namespace GaussianSplatting.Editor
             handle.pivot = new Vector2(0.5f, 0.5f);
             Image handleImage = handle.gameObject.AddComponent<Image>();
             handleImage.color = new Color(0.86f, 0.86f, 0.9f, 1.0f);
+            ApplySupersampledUiMaterial(handleImage);
 
             slider.fillRect = fill;
             slider.handleRect = handle;
