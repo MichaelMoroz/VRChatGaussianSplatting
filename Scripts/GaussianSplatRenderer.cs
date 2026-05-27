@@ -27,6 +27,7 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
     const int SCREEN_CAMERA_ID = 0;
     const int PHOTO_CAMERA_ID = 1;
     const int NO_ACTIVE_SORT = -1;
+    const float DEFAULT_ALPHA_CUTOFF = 0.03f;
 
     private Vector3[] _completedCameraPos;
     private Vector3[] _pendingCameraPos;
@@ -57,7 +58,7 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
     [Range(0.0f, 1.0f)] [SerializeField] float thinThreshold = 0.005f;
     [Range(0.0f, 3.0f)] [SerializeField] float antiAliasing = 1.0f;
     [Range(-20.0f, 10.0f)] [SerializeField] float log2MinScale = -12.0f;
-    [Range(0.005f, 0.1f)] [SerializeField] public float alphaCutoff = 0.03f;
+    [Range(0.005f, 0.1f)] [SerializeField] public float alphaCutoff = DEFAULT_ALPHA_CUTOFF;
     [Range(0.0f, 100.0f)] [SerializeField] float scaleCutoff = 100.0f;
     [Range(0.0f, 5.0f)] [SerializeField] float exposure = 1.0f;
     [Range(0.0f, 5.0f)] [SerializeField] float opacity = 1.0f;
@@ -219,6 +220,45 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
 #endif
     }
 
+    bool SetCurrentSplatObject(GameObject activeGameObject, bool applyMaterialSettings)
+    {
+        if (activeGameObject == null)
+        {
+            splatObject = null;
+            _sortedRenderer = null;
+            return false;
+        }
+
+        if (GetSortedRenderer(activeGameObject) == null)
+        {
+            return false;
+        }
+
+        if (splatObject == activeGameObject)
+        {
+            SetSplatMeshRendererEnabled(splatObject, true);
+            EnforceSingleSplatMeshRenderer(splatObject);
+            if (applyMaterialSettings)
+            {
+                ApplyMaterialSettingsToSelectedObject();
+            }
+
+            return true;
+        }
+
+        SetSplatMeshRendererEnabled(splatObject, false);
+        splatObject = activeGameObject;
+        ShowSorted(splatObject);
+        EnforceSingleSplatMeshRenderer(splatObject);
+        ResetCameraPositions();
+        if (applyMaterialSettings)
+        {
+            ApplyMaterialSettingsToSelectedObject();
+        }
+
+        return true;
+    }
+
     GameObject FindFirstActiveSplatObject()
     {
         GaussianSplatObject[] sceneObjects = FindSceneSplatObjects(false);
@@ -259,24 +299,7 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
             return false;
         }
 
-        if (splatObject == activeSplatObject)
-        {
-            SetSplatMeshRendererEnabled(splatObject, true);
-            EnforceSingleSplatMeshRenderer(splatObject);
-            return true;
-        }
-
-        SetSplatMeshRendererEnabled(splatObject, false);
-        splatObject = activeSplatObject;
-        ShowSorted(splatObject);
-        EnforceSingleSplatMeshRenderer(splatObject);
-        ResetCameraPositions();
-        if (applyMaterialSettings)
-        {
-            ApplyMaterialSettingsToSelectedObject();
-        }
-
-        return true;
+        return SetCurrentSplatObject(activeSplatObject, applyMaterialSettings);
     }
 
     bool ApplyActiveSplatObject()
@@ -296,25 +319,7 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
             return;
         }
 
-        GameObject activeGameObject = activeSplatObject.gameObject;
-        if (GetSortedRenderer(activeGameObject) == null)
-        {
-            return;
-        }
-
-        if (splatObject == activeGameObject)
-        {
-            SetSplatMeshRendererEnabled(splatObject, true);
-            EnforceSingleSplatMeshRenderer(splatObject);
-            return;
-        }
-
-        SetSplatMeshRendererEnabled(splatObject, false);
-        splatObject = activeGameObject;
-        ShowSorted(splatObject);
-        EnforceSingleSplatMeshRenderer(splatObject);
-        ResetCameraPositions();
-        ApplyMaterialSettingsToSelectedObject();
+        SetCurrentSplatObject(activeSplatObject.gameObject, true);
     }
 
     MeshRenderer GetSortedRenderer(GameObject rootObject)
@@ -1962,6 +1967,7 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         generatedUi.alphaCutoffLabelText = alphaCutoffLabel;
         SetPreferredWidth(alphaCutoffLabel.gameObject, 210.0f, 0.0f);
         generatedUi.alphaCutoffSlider = CreateSliderElement("Alpha Cutoff Slider", alphaCutoffRow.transform, 0.005f, 0.1f, false);
+        generatedUi.alphaCutoffSlider.value = DEFAULT_ALPHA_CUTOFF;
         generatedUi.alphaCutoffText = CreateTextElement("Alpha Cutoff Value", alphaCutoffRow.transform, "0.03", 16, TextAnchor.MiddleCenter, new Color(0.95f, 0.95f, 0.95f, 1.0f));
         SetPreferredWidth(generatedUi.alphaCutoffText.gameObject, 72.0f, 0.0f);
 

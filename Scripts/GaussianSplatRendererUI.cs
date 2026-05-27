@@ -1,6 +1,7 @@
 using UdonSharp;
 using UnityEngine;
 using UnityEngine.UI;
+using VRC.SDKBase;
 
 #if UNITY_EDITOR && !COMPILER_UDONSHARP
 using System.Collections.Generic;
@@ -10,11 +11,12 @@ using UnityEditor;
 namespace GaussianSplatting
 {
 
-[UdonBehaviourSyncMode(BehaviourSyncMode.None)]
+[UdonBehaviourSyncMode(BehaviourSyncMode.Manual)]
 public class GaussianSplatRendererUI : UdonSharpBehaviour
 {
     const int LanguageEnglish = 0;
     const int LanguageJapanese = 1;
+    const float DefaultAlphaCutoff = 0.03f;
 
     public GaussianSplatRenderer gaussianSplatRenderer;
     public Text currentSplatText;
@@ -51,6 +53,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
     public Button[] splatButtons;
     [HideInInspector] public GaussianSplatObject[] cachedSceneSplatObjects;
 
+    [UdonSynced, SerializeField] int syncedSelectedSplatObjectIndex = -1;
     [SerializeField] float gaussianScaleStep = 0.1f;
     [SerializeField] float cameraQuantizationStep = 0.05f;
     [SerializeField] int selectedLanguage = LanguageEnglish;
@@ -72,6 +75,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
 
     void Start()
     {
+        ApplySyncedSplatObjectSelection();
         RefreshUI();
     }
 
@@ -361,6 +365,107 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         }
 
         return _sceneSplatObjects[index];
+    }
+
+    int FindSceneSplatObjectIndex(GaussianSplatObject targetSplatObject)
+    {
+        if (targetSplatObject == null)
+        {
+            return -1;
+        }
+
+        int totalSplatCount = GetSceneSplatCount();
+        for (int i = 0; i < totalSplatCount; i++)
+        {
+            if (GetSceneSplatObject(i) == targetSplatObject)
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
+    void EnsureLocalOwnership()
+    {
+        if (Networking.LocalPlayer != null)
+        {
+            Networking.SetOwner(Networking.LocalPlayer, gameObject);
+        }
+    }
+
+    void RequestSyncedSelectionUpdate()
+    {
+        if (Networking.LocalPlayer != null)
+        {
+            RequestSerialization();
+        }
+    }
+
+    void ApplySplatObjectSelection(GaussianSplatObject selectedSplatObject)
+    {
+        if (selectedSplatObject == null)
+        {
+            return;
+        }
+
+        int totalSplatCount = GetSceneSplatCount();
+        for (int i = 0; i < totalSplatCount; i++)
+        {
+            GaussianSplatObject sceneSplatObject = GetSceneSplatObject(i);
+            if (sceneSplatObject == null)
+            {
+                continue;
+            }
+
+            bool shouldBeActive = sceneSplatObject == selectedSplatObject;
+            if (sceneSplatObject.gameObject.activeSelf != shouldBeActive)
+            {
+                sceneSplatObject.gameObject.SetActive(shouldBeActive);
+            }
+        }
+
+        if (gaussianSplatRenderer != null)
+        {
+            gaussianSplatRenderer.NotifySplatObjectEnabled(selectedSplatObject);
+        }
+        else
+        {
+            selectedSplatObject.NotifyRendererEnabled();
+        }
+    }
+
+    bool ApplySyncedSplatObjectSelection()
+    {
+        RefreshSceneSplatObjects();
+        if (syncedSelectedSplatObjectIndex < 0 || syncedSelectedSplatObjectIndex >= GetSceneSplatCount())
+        {
+            return false;
+        }
+
+        GaussianSplatObject selectedSplatObject = GetSceneSplatObject(syncedSelectedSplatObjectIndex);
+        if (selectedSplatObject == null)
+        {
+            return false;
+        }
+
+        ApplySplatObjectSelection(selectedSplatObject);
+        return true;
+    }
+
+    void SelectSplatObject(GaussianSplatObject selectedSplatObject)
+    {
+        RefreshSceneSplatObjects();
+        int selectedIndex = FindSceneSplatObjectIndex(selectedSplatObject);
+        if (selectedIndex < 0)
+        {
+            return;
+        }
+
+        EnsureLocalOwnership();
+        syncedSelectedSplatObjectIndex = selectedIndex;
+        ApplySyncedSplatObjectSelection();
+        RequestSyncedSelectionUpdate();
     }
 
     void SetButtonEnabled(Button button, bool enabled, string label, Color enabledColor, Color disabledColor)
@@ -654,23 +759,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
             return;
         }
 
-        int totalSplatCount = GetSceneSplatCount();
-        for (int i = 0; i < totalSplatCount; i++)
-        {
-            GaussianSplatObject sceneSplatObject = GetSceneSplatObject(i);
-            if (sceneSplatObject != null)
-            {
-                sceneSplatObject.gameObject.SetActive(false);
-            }
-        }
-
-        selectedSplatObject.gameObject.SetActive(true);
-        selectedSplatObject.NotifyRendererEnabled();
-        if (gaussianSplatRenderer != null)
-        {
-            gaussianSplatRenderer.NotifySplatObjectEnabled(selectedSplatObject);
-        }
-
+        SelectSplatObject(selectedSplatObject);
         RefreshUI();
     }
 
@@ -706,6 +795,12 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         RefreshUI();
     }
 
+    public override void OnDeserialization()
+    {
+        ApplySyncedSplatObjectSelection();
+        RefreshUI();
+    }
+
     public void RefreshUI()
     {
         FindRenderer();
@@ -717,6 +812,16 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
             if (currentSplatText != null)
             {
                 currentSplatText.text = GetCurrentSplatNoneLabel();
+            }
+
+            if (alphaCutoffSlider != null)
+            {
+                alphaCutoffSlider.value = DefaultAlphaCutoff;
+            }
+
+            if (alphaCutoffText != null)
+            {
+                alphaCutoffText.text = FormatFloat(DefaultAlphaCutoff);
             }
 
             RefreshSplatButtons();
