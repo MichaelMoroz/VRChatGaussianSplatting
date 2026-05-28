@@ -385,7 +385,9 @@ namespace GaussianSplatting.Editor
                     return sceneRenderer;
                 }
 
-                return GaussianSplatRenderer.FindExistingSceneRenderer();
+                return splatObject != null
+                    ? GaussianSplatRenderer.FindExistingSceneRenderer(splatObject.gameObject.scene)
+                    : GaussianSplatRenderer.FindExistingSceneRenderer();
             }
 
             static Material ResolveSourceMaterial(Material[] materials)

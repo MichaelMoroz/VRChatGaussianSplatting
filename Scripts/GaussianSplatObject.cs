@@ -17,25 +17,46 @@ namespace GaussianSplatting
 #if UNITY_EDITOR && !COMPILER_UDONSHARP
         void Reset()
         {
-            EnsureSceneRenderer();
+            EnsureSceneRenderer(true);
         }
 
-        void OnValidate()
-        {
-            EnsureSceneRenderer();
-        }
-
-        void EnsureSceneRenderer()
+        void EnsureSceneRenderer(bool createIfMissing)
         {
             if (EditorUtility.IsPersistent(this))
             {
                 return;
             }
 
-            gaussianSplatRenderer = GaussianSplatRenderer.EnsureSceneRendererExists();
-            EditorUtility.SetDirty(this);
+            GaussianSplatRenderer sceneRenderer = createIfMissing
+                ? GaussianSplatRenderer.EnsureSceneRendererExists(gameObject.scene)
+                : GaussianSplatRenderer.FindExistingSceneRenderer(gameObject.scene);
+
+            if (sceneRenderer == null)
+            {
+                return;
+            }
+
+            if (createIfMissing && gaussianSplatRenderer != sceneRenderer)
+            {
+                gaussianSplatRenderer = sceneRenderer;
+                EditorUtility.SetDirty(this);
+            }
         }
 #endif
+
+        GaussianSplatRenderer ResolveSceneRendererReference()
+        {
+#if UNITY_EDITOR && !COMPILER_UDONSHARP
+            if (gaussianSplatRenderer != null && gaussianSplatRenderer.gameObject != null && gaussianSplatRenderer.gameObject.scene == gameObject.scene)
+            {
+                return gaussianSplatRenderer;
+            }
+
+            return GaussianSplatRenderer.FindExistingSceneRenderer(gameObject.scene);
+#else
+            return gaussianSplatRenderer;
+#endif
+        }
 
         void Start()
         {
@@ -49,9 +70,10 @@ namespace GaussianSplatting
 
         public void NotifyRendererEnabled()
         {
-            if (gaussianSplatRenderer != null && gameObject.activeInHierarchy)
+            GaussianSplatRenderer sceneRenderer = ResolveSceneRendererReference();
+            if (sceneRenderer != null && gameObject.activeInHierarchy)
             {
-                gaussianSplatRenderer.NotifySplatObjectEnabled(this);
+                sceneRenderer.NotifySplatObjectEnabled(this);
             }
         }
 

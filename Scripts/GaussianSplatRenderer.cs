@@ -197,7 +197,7 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         for (int i = 0; i < allObjects.Length; i++)
         {
             GaussianSplatObject currentObject = allObjects[i];
-            if (!IsSceneSplatObject(currentObject))
+            if (!IsSceneSplatObject(currentObject, gameObject.scene))
             {
                 continue;
             }
@@ -1083,7 +1083,7 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
     }
 
 #if UNITY_EDITOR && !COMPILER_UDONSHARP
-    static bool IsSceneSplatObject(GaussianSplatObject splatObject)
+    static bool IsSceneSplatObject(GaussianSplatObject splatObject, UnityEngine.SceneManagement.Scene scene)
     {
         if (splatObject == null)
         {
@@ -1101,6 +1101,11 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
             return false;
         }
 
+        if (scene.IsValid() && rootObject.scene != scene)
+        {
+            return false;
+        }
+
         return true;
     }
 
@@ -1113,21 +1118,10 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
 
     static void OnEditorHierarchyChanged()
     {
-        GaussianSplatObject[] allObjects = Resources.FindObjectsOfTypeAll<GaussianSplatObject>();
-        for (int i = 0; i < allObjects.Length; i++)
-        {
-            if (IsSceneSplatObject(allObjects[i]))
-            {
-                EnsureSceneRendererExists();
-                GaussianSplatRendererUI.RequestEditorRefresh();
-                return;
-            }
-        }
-
         GaussianSplatRendererUI.RequestEditorRefresh();
     }
 
-    static GaussianSplatRenderer[] FindSceneRenderers()
+    static GaussianSplatRenderer[] FindSceneRenderers(UnityEngine.SceneManagement.Scene scene)
     {
         List<GaussianSplatRenderer> sceneRenderers = new List<GaussianSplatRenderer>();
         GaussianSplatRenderer[] allRenderers = Resources.FindObjectsOfTypeAll<GaussianSplatRenderer>();
@@ -1150,15 +1144,25 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
                 continue;
             }
 
+            if (scene.IsValid() && rootObject.scene != scene)
+            {
+                continue;
+            }
+
             sceneRenderers.Add(renderer);
         }
 
         return sceneRenderers.ToArray();
     }
 
-    static GaussianSplatRenderer GetPrimarySceneRenderer()
+    static GaussianSplatRenderer[] FindSceneRenderers()
     {
-        GaussianSplatRenderer[] renderers = FindSceneRenderers();
+        return FindSceneRenderers(default(UnityEngine.SceneManagement.Scene));
+    }
+
+    static GaussianSplatRenderer GetPrimarySceneRenderer(UnityEngine.SceneManagement.Scene scene)
+    {
+        GaussianSplatRenderer[] renderers = FindSceneRenderers(scene);
         if (renderers.Length == 0)
         {
             return null;
@@ -1185,6 +1189,11 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         return primaryRenderer;
     }
 
+    static GaussianSplatRenderer GetPrimarySceneRenderer()
+    {
+        return GetPrimarySceneRenderer(default(UnityEngine.SceneManagement.Scene));
+    }
+
     static Material LoadPackageMaterial(string assetPath)
     {
         return AssetDatabase.LoadAssetAtPath<Material>(assetPath);
@@ -1202,16 +1211,31 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
 
     public static GaussianSplatRenderer FindExistingSceneRenderer()
     {
-        return GetPrimarySceneRenderer();
+        return FindExistingSceneRenderer(default(UnityEngine.SceneManagement.Scene));
+    }
+
+    public static GaussianSplatRenderer FindExistingSceneRenderer(UnityEngine.SceneManagement.Scene scene)
+    {
+        return GetPrimarySceneRenderer(scene);
     }
 
     public static GaussianSplatRenderer EnsureSceneRendererExists()
     {
-        GaussianSplatRenderer primaryRenderer = GetPrimarySceneRenderer();
+        return EnsureSceneRendererExists(default(UnityEngine.SceneManagement.Scene));
+    }
+
+    public static GaussianSplatRenderer EnsureSceneRendererExists(UnityEngine.SceneManagement.Scene scene)
+    {
+        GaussianSplatRenderer primaryRenderer = GetPrimarySceneRenderer(scene);
         if (primaryRenderer == null)
         {
             GameObject rendererObject = new GameObject("GaussianSplatRenderer");
             Undo.RegisterCreatedObjectUndo(rendererObject, "Create Gaussian Splat Renderer");
+
+            if (scene.IsValid())
+            {
+                UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(rendererObject, scene);
+            }
 
             primaryRenderer = AddGeneratedUdonSharpComponent<GaussianSplatRenderer>(rendererObject, "Add Gaussian Splat Renderer");
             RadixSort radixSort = AddGeneratedUdonSharpComponent<RadixSort>(rendererObject, "Add Radix Sort");
@@ -1222,7 +1246,7 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
             EditorUtility.SetDirty(radixSort);
         }
 
-        GaussianSplatRenderer[] renderers = FindSceneRenderers();
+        GaussianSplatRenderer[] renderers = FindSceneRenderers(scene);
         if (renderers.Length > 1)
         {
             Debug.LogError("Multiple GaussianSplatRenderer instances found. Keep one renderer in the scene; Gaussian splats now share a single renderer.");
@@ -1254,16 +1278,22 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
             return;
         }
 
-        GaussianSplatRenderer primaryRenderer = GetPrimarySceneRenderer();
+        GaussianSplatRenderer primaryRenderer = GetPrimarySceneRenderer(gameObject.scene);
         if (primaryRenderer != null && primaryRenderer != this)
         {
             Debug.LogError("Multiple GaussianSplatRenderer instances found. Only one GaussianSplatRenderer is supported per scene.");
-            enabled = false;
-            EditorUtility.SetDirty(this);
+            if (enabled)
+            {
+                enabled = false;
+                EditorUtility.SetDirty(this);
+            }
+
+            GaussianSplatRendererUI.RequestEditorRefresh();
             return;
         }
 
         UpdateSortingResourceTextures();
+        GaussianSplatRendererUI.RequestEditorRefresh();
     }
 
     static T AddGeneratedUdonSharpComponent<T>(GameObject targetObject, string undoLabel) where T : UdonSharpBehaviour
@@ -1543,11 +1573,10 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         resourcesChanged |= EnsureSortRenderTexture(ref radixSort.prefixSums, resourceFolderPath, assetPrefix + "_PrefixSums", requiredWidth, requiredHeight, RenderTextureFormat.RFloat, true, 1);
         resourcesChanged |= EnsureSortRenderTexture(ref splatRenderOrder, resourceFolderPath, assetPrefix + "_SplatRenderOrder", requiredWidth, requiredHeight, RenderTextureFormat.RFloat, false, 2);
 
-        EditorUtility.SetDirty(radixSort);
-        EditorUtility.SetDirty(this);
-
         if (resourcesChanged)
         {
+            EditorUtility.SetDirty(radixSort);
+            EditorUtility.SetDirty(this);
             Debug.Log($"Updated sorting textures to {requiredWidth}x{requiredHeight} for largest splat '{largestSplatName}' ({largestElementCount} splats).");
         }
     }

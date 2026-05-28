@@ -86,7 +86,6 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
 
 #if UNITY_EDITOR && !COMPILER_UDONSHARP
     static bool _editorRefreshRequested = true;
-    static double _nextEditorRefreshTime;
 
     [InitializeOnLoadMethod]
     static void RegisterEditorRefresh()
@@ -125,19 +124,12 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
 
     static void RefreshEditorUis()
     {
-        if (Application.isPlaying)
-        {
-            return;
-        }
-
-        double currentTime = EditorApplication.timeSinceStartup;
-        if (!_editorRefreshRequested && currentTime < _nextEditorRefreshTime)
+        if (Application.isPlaying || !_editorRefreshRequested)
         {
             return;
         }
 
         _editorRefreshRequested = false;
-        _nextEditorRefreshTime = currentTime + 0.25f;
 
         GaussianSplatRendererUI[] sceneUis = Resources.FindObjectsOfTypeAll<GaussianSplatRendererUI>();
         for (int i = 0; i < sceneUis.Length; i++)
@@ -148,15 +140,16 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
                 continue;
             }
 
-            ui.RefreshUI();
-            EditorUtility.SetDirty(ui);
+            if (ui.SyncEditorSerializedState())
+            {
+                EditorUtility.SetDirty(ui);
+            }
         }
     }
 
     void OnValidate()
     {
-        RefreshUI();
-        EditorUtility.SetDirty(this);
+        SyncEditorSerializedState();
     }
 #endif
 
@@ -323,8 +316,49 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         }
 
 #if !COMPILER_UDONSHARP
-        gaussianSplatRenderer = Object.FindObjectOfType<GaussianSplatRenderer>();
+        gaussianSplatRenderer = GaussianSplatRenderer.FindExistingSceneRenderer(gameObject.scene);
 #endif
+    }
+
+#if UNITY_EDITOR && !COMPILER_UDONSHARP
+    bool SyncEditorSerializedState()
+    {
+        if (EditorUtility.IsPersistent(this))
+        {
+            return false;
+        }
+
+        GaussianSplatRenderer previousRenderer = gaussianSplatRenderer;
+        GaussianSplatObject[] previousCachedSceneSplatObjects = cachedSceneSplatObjects;
+
+        FindRenderer();
+        RefreshSceneSplatObjects();
+
+        return gaussianSplatRenderer != previousRenderer || !SplatObjectArraysMatch(previousCachedSceneSplatObjects, cachedSceneSplatObjects);
+    }
+#endif
+
+    static bool SplatObjectArraysMatch(GaussianSplatObject[] left, GaussianSplatObject[] right)
+    {
+        if (ReferenceEquals(left, right))
+        {
+            return true;
+        }
+
+        if (left == null || right == null || left.Length != right.Length)
+        {
+            return false;
+        }
+
+        for (int i = 0; i < left.Length; i++)
+        {
+            if (left[i] != right[i])
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     void RefreshSceneSplatObjects()
@@ -351,11 +385,20 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
                 continue;
             }
 
+            if (currentObject.gameObject.scene != gameObject.scene)
+            {
+                continue;
+            }
+
             sceneObjects.Add(currentObject);
         }
 
-        _sceneSplatObjects = sceneObjects.ToArray();
-        cachedSceneSplatObjects = _sceneSplatObjects;
+        GaussianSplatObject[] resolvedSceneObjects = sceneObjects.ToArray();
+        _sceneSplatObjects = resolvedSceneObjects;
+        if (!SplatObjectArraysMatch(cachedSceneSplatObjects, resolvedSceneObjects))
+        {
+            cachedSceneSplatObjects = resolvedSceneObjects;
+        }
 #else
         if (cachedSceneSplatObjects != null && cachedSceneSplatObjects.Length > 0)
         {
