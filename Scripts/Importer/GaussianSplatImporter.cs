@@ -789,19 +789,70 @@ namespace GaussianSplatting.Editor.Importers
 {
     public class PlyImportWizard : EditorWindow
     {
+        internal const string DefaultOutputFolder = "Assets";
+        internal const bool DefaultComputeBoundingBox = true;
+        internal const bool DefaultMultiPassRendering = true;
+        internal const int DefaultSplatsPerPass = 3 * 256 * 1024;
+        internal const bool DefaultPrecomputeSorting = false;
+        internal const int DefaultMaxAlphaMaskCount = 1;
+        internal const bool DefaultUseSRGB = true;
+        internal const bool DefaultImportSphericalHarmonics = true;
+        internal static readonly SHBand DefaultImportedSHBand = SHBand.SH3;
+        internal const bool DefaultCompressColorAlphaToBC7 = false;
+        internal const bool DefaultCompressSHToBC7 = true;
+
         List<string> _plyPaths = new();  
-        string _outputFolder = "Assets";
-        bool _computeBoundingBox = true;   
-        bool _multiPassRendering = true;
-        int _splatsPerPass =  3 * 256 * 1024; // 1 million splats per pass
-        bool _precomputeSorting = false; // precompute sorting for octahedral directions
-        int _maxAlphaMaskCount = 1; // max number of alpha mask passes
-        bool _useSRGB = true; // use sRGB color correction
-        bool _importSphericalHarmonics = true;
-        SHBand _defaultSHBand = SHBand.SH3;
-        bool _compressColorAlphaToBC7 = false;
-        bool _compressSHToBC7 = true;
+        string _outputFolder = DefaultOutputFolder;
+        bool _computeBoundingBox = DefaultComputeBoundingBox;
+        bool _multiPassRendering = DefaultMultiPassRendering;
+        int _splatsPerPass = DefaultSplatsPerPass;
+        bool _precomputeSorting = DefaultPrecomputeSorting;
+        int _maxAlphaMaskCount = DefaultMaxAlphaMaskCount;
+        bool _useSRGB = DefaultUseSRGB;
+        bool _importSphericalHarmonics = DefaultImportSphericalHarmonics;
+        SHBand _defaultSHBand = DefaultImportedSHBand;
+        bool _compressColorAlphaToBC7 = DefaultCompressColorAlphaToBC7;
+        bool _compressSHToBC7 = DefaultCompressSHToBC7;
         Vector2 scrollPosition = Vector2.zero;
+
+        public static PlyImportWizard OpenWithPly(string plyPath)
+        {
+            PlyImportWizard window = GetWindow<PlyImportWizard>();
+            window.titleContent = new GUIContent("PLY Import");
+            window.Show();
+            window.Focus();
+
+            if (!string.IsNullOrEmpty(plyPath))
+            {
+                window._plyPaths.Clear();
+                window._plyPaths.Add(plyPath);
+
+                string outputFolder = Path.GetDirectoryName(plyPath);
+                if (!string.IsNullOrEmpty(outputFolder))
+                {
+                    window._outputFolder = outputFolder.Replace('\\', '/');
+                }
+            }
+
+            return window;
+        }
+
+        public static void ImportWithDefaults(string plyPath, string prefabPath)
+        {
+            PlySplatImporter.Import(
+                plyPath,
+                prefabPath,
+                DefaultComputeBoundingBox,
+                DefaultSplatsPerPass,
+                DefaultPrecomputeSorting,
+                DefaultMaxAlphaMaskCount,
+                DefaultUseSRGB,
+                DefaultImportSphericalHarmonics,
+                DefaultImportedSHBand,
+                DefaultCompressColorAlphaToBC7,
+                DefaultCompressSHToBC7);
+        }
+
         [MenuItem("Gaussian Splatting/Import PLY Splats…")]
         static void Init()
         {
