@@ -22,40 +22,6 @@ namespace GaussianSplatting
         SH3 = 3
     }
 
-    static public class PointsMesh
-    {
-        static public Mesh GetMesh(int splat_count, Bounds bbox)
-        {
-            int vertices = (splat_count + 31) / 32; // geometry shader will emit 32 quads per point, so we need at least 1 vertex per 32 splats
-            Mesh mesh = new Mesh();
-            mesh.vertices = new Vector3[1];
-            mesh.bounds = bbox;
-            mesh.SetIndices(new int[vertices], MeshTopology.Points, 0, false, 0);
-            return mesh;
-        }
-
-        public static Mesh GetMultiPassMesh(List<int> indexCounts, List<MeshTopology> topologies, Bounds bbox)
-        {
-            // Create mesh
-            var mesh = new Mesh();
-            mesh.vertices = new Vector3[3];
-            mesh.subMeshCount = indexCounts.Count;
-
-            // For each sub‑mesh, fill an index buffer with 0‑indices
-            for (int i = 0; i < indexCounts.Count; i++)
-            {
-                int[] indices = new int[indexCounts[i]];
-                if (indices.Length > 0) indices[0] = 0;
-                if (indices.Length > 1) indices[1] = 1;
-                if (indices.Length > 2) indices[2] = 2;
-                mesh.SetIndices(indices, topologies[i], i, false, 0);
-            }
-            
-            mesh.bounds = bbox;
-            return mesh;
-        }
-    }
-
     /// <summary>
     /// Parses a Gaussian‑splat *.ply (or .spz) file and packs the base attributes plus optional
     /// spherical harmonic coefficient textures ready for GPU upload. Only UnityEngine types are
@@ -68,7 +34,7 @@ namespace GaussianSplatting
         const float SHNonZeroEpsilon = 1e-8f;
         const int MaxImportSplatCount = 4096 * 4096;
 
-        readonly struct TextureLayout
+        internal readonly struct TextureLayout
         {
             public readonly int Width;
             public readonly int Height;
@@ -80,6 +46,22 @@ namespace GaussianSplatting
             }
 
             public int Capacity => Width * Height;
+        }
+
+        internal readonly struct PassInfo
+        {
+            public readonly int PassIndex;
+            public readonly int SplatOffset;
+            public readonly int SplatCount;
+            public readonly bool HasAlphaMask;
+
+            public PassInfo(int passIndex, int splatOffset, int splatCount, bool hasAlphaMask)
+            {
+                PassIndex = passIndex;
+                SplatOffset = splatOffset;
+                SplatCount = splatCount;
+                HasAlphaMask = hasAlphaMask;
+            }
         }
 
         static uint Morton3D(float nx, float ny, float nz)
@@ -105,7 +87,6 @@ namespace GaussianSplatting
         {
             int height = Mathf.CeilToInt((float)texelCount / width);
             height = Mathf.Max(4, ((height + 3) / 4) * 4);
-
             return new TextureLayout(width, height);
         }
 
@@ -128,9 +109,9 @@ namespace GaussianSplatting
             return candidate.Width > best.Width;
         }
 
-        static TextureLayout ChoosePotTextureLayout(int texelCount)
+        internal static TextureLayout ChoosePotTextureLayout(int texelCount)
         {
-            int minWidth = 4;
+            const int minWidth = 4;
             if (texelCount <= 0)
             {
                 return new TextureLayout(minWidth, minWidth);
@@ -143,6 +124,7 @@ namespace GaussianSplatting
             {
                 lowerWidth >>= 1;
             }
+
             lowerWidth = Mathf.Max(minWidth, lowerWidth);
 
             TextureLayout best = EvaluateTextureLayout(lowerWidth, texelCount);
@@ -186,9 +168,97 @@ namespace GaussianSplatting
             return shCoeffs[splatIndex * shCoeffCount + coeffIndex];
         }
 
-        static void SetMaterialSHBand(Material material, SHBand band)
+        internal static int ComputeTextureCoordShift(int width)
         {
-            material.SetFloat("_SHBand", (float)band);
+            int shift = 0;
+            width = Mathf.Max(1, width);
+            while (width > 1)
+            {
+                width >>= 1;
+                shift++;
+            }
+
+            return shift;
+        }
+
+        internal static PassInfo[] CreatePassLayout(int splatCount, int requestedSplatsPerPass, int maxAlphaMaskCount, bool useSRGB)
+        {
+            if (splatCount <= 0)
+            {
+                return new PassInfo[0];
+            }
+
+            if (requestedSplatsPerPass <= 0)
+            {
+                requestedSplatsPerPass = splatCount;
+            }
+
+            requestedSplatsPerPass = Mathf.Min(requestedSplatsPerPass, splatCount);
+            if (!useSRGB)
+            {
+                requestedSplatsPerPass = splatCount;
+            }
+
+            int totalPassCount = (splatCount + requestedSplatsPerPass - 1) / requestedSplatsPerPass;
+            int alphaMaskCount = Mathf.Min(maxAlphaMaskCount, totalPassCount - 1);
+            int balancedSplatsPerPass = (splatCount + totalPassCount - 1) / totalPassCount;
+
+            List<PassInfo> passes = new List<PassInfo>(totalPassCount);
+            for (int splatOffset = 0; splatOffset < splatCount; splatOffset += balancedSplatsPerPass)
+            {
+                int passIndex = splatOffset / balancedSplatsPerPass;
+                int passCount = Mathf.Min(balancedSplatsPerPass, splatCount - splatOffset);
+                passes.Add(new PassInfo(passIndex, splatOffset, passCount, passIndex > 0 && passIndex <= alphaMaskCount));
+            }
+
+            return passes.ToArray();
+        }
+
+        internal static void AppendMeshLayout(List<int> indexCounts, List<MeshTopology> topologies, PassInfo[] passInfos, bool useSRGB)
+        {
+            if (useSRGB)
+            {
+                indexCounts.Add(3);
+                topologies.Add(MeshTopology.Triangles);
+            }
+
+            for (int i = 0; i < passInfos.Length; i++)
+            {
+                PassInfo passInfo = passInfos[i];
+                if (passInfo.HasAlphaMask)
+                {
+                    indexCounts.Add(3);
+                    topologies.Add(MeshTopology.Triangles);
+                }
+
+                indexCounts.Add((passInfo.SplatCount + 31) / 32);
+                topologies.Add(MeshTopology.Points);
+            }
+
+            if (useSRGB)
+            {
+                indexCounts.Add(3);
+                topologies.Add(MeshTopology.Triangles);
+            }
+        }
+
+        internal static Mesh CreateMultiPassMesh(List<int> indexCounts, List<MeshTopology> topologies, Bounds bounds)
+        {
+            Mesh mesh = new Mesh();
+            mesh.vertices = new Vector3[3];
+            mesh.subMeshCount = indexCounts.Count;
+
+            for (int i = 0; i < indexCounts.Count; i++)
+            {
+                int[] indices = new int[indexCounts[i]];
+                if (indices.Length > 0) indices[0] = 0;
+                if (indices.Length > 1) indices[1] = 1;
+                if (indices.Length > 2) indices[2] = 2;
+                mesh.SetIndices(indices, topologies[i], i, false, 0);
+            }
+
+            mesh.bounds = bounds;
+            return mesh;
         }
 
         static SHBand ClampDefaultSHBand(SHBand requestedBand, bool[] hasNonZeroBand)
@@ -213,27 +283,6 @@ namespace GaussianSplatting
             };
         }
 
-        static int ComputeTextureCoordShift(int width)
-        {
-            int shift = 0;
-            width = Mathf.Max(1, width);
-
-            while (width > 1)
-            {
-                width >>= 1;
-                shift++;
-            }
-
-            return shift;
-        }
-
-        static void SetBlockCoordParams(Material material, string maskPropertyName, string shiftPropertyName, int width)
-        {
-            int blocksPerRow = Mathf.Max(1, width >> 2);
-            material.SetInt(maskPropertyName, blocksPerRow - 1);
-            material.SetInt(shiftPropertyName, ComputeTextureCoordShift(blocksPerRow));
-        }
-
         static int ComputePackedTextureIndex(int index, int width)
         {
             int blocksPerRow = Mathf.Max(1, width >> 2);
@@ -254,28 +303,6 @@ namespace GaussianSplatting
             meshRenderer.sharedMaterials = materials.ToArray();
             meshRenderer.allowOcclusionWhenDynamic = false;
             return meshRenderer;
-        }
-
-        static void ConfigureSplatMaterialTextures(Material splatMat, Texture2D xyzTex, Texture2D colDcTex, Texture2D rotTex, Texture2D scaleTex, Texture2D shTex, int importedSHCoeffCount, Vector3 shMin, Vector3 shRange, float shRangeEpsilon, int actualSplatCount, SHBand defaultSHBand)
-        {
-            splatMat.SetTexture("_GS_Positions", xyzTex);
-            SetBlockCoordParams(splatMat, "_GS_Positions_CoordMask", "_GS_Positions_CoordShift", xyzTex != null ? xyzTex.width : 1);
-            splatMat.SetTexture("_GS_Colors", colDcTex);
-            splatMat.SetTexture("_GS_Rotations", rotTex);
-            splatMat.SetTexture("_GS_Scales", scaleTex);
-            splatMat.SetTexture("_GS_SH", shTex);
-            SetBlockCoordParams(splatMat, "_GS_SH_CoordMask", "_GS_SH_CoordShift", shTex != null ? shTex.width : 1);
-            splatMat.SetInt("_GS_SH_CoeffCount", importedSHCoeffCount);
-            splatMat.SetInt("_GS_SH_CoeffStride", actualSplatCount);
-            splatMat.SetVector("_GS_SH_Min", new Vector4(shMin.x, shMin.y, shMin.z, 0f));
-            splatMat.SetVector("_GS_SH_Range", new Vector4(
-                Mathf.Max(shRange.x, shRangeEpsilon),
-                Mathf.Max(shRange.y, shRangeEpsilon),
-                Mathf.Max(shRange.z, shRangeEpsilon),
-                0f
-            ));
-            splatMat.SetInt("_ActualSplatCount", actualSplatCount);
-            SetMaterialSHBand(splatMat, defaultSHBand);
         }
 
         static void ConfigurePrefabRoot(GameObject go, List<Material> materials, Mesh mesh, string name, int maxSHBand, bool addGaussianSplatObject)
@@ -619,35 +646,26 @@ namespace GaussianSplatting
                 
                 if(splatsPerPass == 0) splatsPerPass = n;
                 splatsPerPass = Mathf.Min(splatsPerPass, n);
-     
+                
                 List<Material> materials = new List<Material>();
                 List<int> indexCounts = new List<int>();
                 List<MeshTopology> topologies = new List<MeshTopology>();
-
-                int totalPassCount = (n + splatsPerPass - 1) / splatsPerPass; // number of passes needed
-                int alphaMaskCount = Mathf.Min(maxAlphaMaskCount, totalPassCount - 1); // number of alpha mask passes needed
-                //update splats per pass to make equal chunks
-                splatsPerPass = (n + totalPassCount - 1) / totalPassCount;
+                PassInfo[] passInfos = CreatePassLayout(n, splatsPerPass, maxAlphaMaskCount, useSRGB);
+                AppendMeshLayout(indexCounts, topologies, passInfos, useSRGB);
 
                 if(useSRGB) {
-                    //Convert screen colors to sRGB
-                    indexCounts.Add(3);
-                    topologies.Add(MeshTopology.Triangles); // main mesh will be rendered as triangles
                     Material convertToSRGB = new Material(Shader.Find("VRChatGaussianSplatting/ToSRGB"));
                     convertToSRGB.name = "convert_to_srgb";
                     materials.Add(convertToSRGB);
-                } else {
-                    splatsPerPass = n;
                 }
               
                 Material mainMat = null;
-                for (int i = 0; i < n; i += splatsPerPass)
+                for (int passInfoIndex = 0; passInfoIndex < passInfos.Length; passInfoIndex++)
                 {
-                    int passCount = Mathf.Min(splatsPerPass, n - i);
-                    int pass = i / splatsPerPass;
+                    PassInfo passInfo = passInfos[passInfoIndex];
                     Material splatMat = null;
-                    string splatMatName = materialName + (pass > 0 ? $"_pass_{pass}" : "_main") + "_splat";
-                    if(pass == 0) {
+                    string splatMatName = materialName + (passInfo.PassIndex > 0 ? $"_pass_{passInfo.PassIndex}" : "_main") + "_splat";
+                    if(passInfo.PassIndex == 0) {
                         splatMat = new Material(shader);
                         splatMat.name = splatMatName;
                         mainMat = splatMat;
@@ -655,43 +673,61 @@ namespace GaussianSplatting
                         splatMat = new Material(mainMat); // copy the base pass settings without relying on parent inheritance
                     }
 
-                    ConfigureSplatMaterialTextures(splatMat, xyzTex, colDcTex, rotTex, scaleTex, shTex, importedSHCoeffCount, sharedShMin, sharedShRange, shRangeEpsilon, n, effectiveDefaultSHBand);
+                    splatMat.SetTexture("_GS_Positions", xyzTex);
+                    int positionBlocksPerRow = Mathf.Max(1, (xyzTex != null ? xyzTex.width : 1) >> 2);
+                    splatMat.SetInt("_GS_Positions_CoordMask", positionBlocksPerRow - 1);
+                    splatMat.SetInt("_GS_Positions_CoordShift", ComputeTextureCoordShift(positionBlocksPerRow));
+                    splatMat.SetTexture("_GS_Colors", colDcTex);
+                    splatMat.SetTexture("_GS_Rotations", rotTex);
+                    splatMat.SetTexture("_GS_Scales", scaleTex);
+                    splatMat.SetTexture("_GS_SH", shTex);
+                    int shBlocksPerRow = Mathf.Max(1, (shTex != null ? shTex.width : 1) >> 2);
+                    splatMat.SetInt("_GS_SH_CoordMask", shBlocksPerRow - 1);
+                    splatMat.SetInt("_GS_SH_CoordShift", ComputeTextureCoordShift(shBlocksPerRow));
+                    splatMat.SetInt("_GS_SH_CoeffCount", importedSHCoeffCount);
+                    splatMat.SetInt("_GS_SH_CoeffStride", n);
+                    splatMat.SetVector("_GS_SH_Min", new Vector4(sharedShMin.x, sharedShMin.y, sharedShMin.z, 0f));
+                    splatMat.SetVector("_GS_SH_Range", new Vector4(
+                        Mathf.Max(sharedShRange.x, shRangeEpsilon),
+                        Mathf.Max(sharedShRange.y, shRangeEpsilon),
+                        Mathf.Max(sharedShRange.z, shRangeEpsilon),
+                        0f));
+                    splatMat.SetInt("_ActualSplatCount", n);
+                    splatMat.SetFloat("_SHBand", (float)effectiveDefaultSHBand);
+                    splatMat.SetTexture("_GS_ColorsCamera", null);
+                    splatMat.SetFloat("_GS_CameraColorArray", 0.0f);
+                    splatMat.DisableKeyword("GS_CAMERA_COLOR_ARRAY");
                     if(precomputeSorting)
                     {
                         splatMat.SetTexture("_GS_RenderOrderPrecomputed", sortedTex);
-                        SetBlockCoordParams(splatMat, "_GS_RenderOrderPrecomputed_CoordMask", "_GS_RenderOrderPrecomputed_CoordShift", sortedTex != null ? sortedTex.width : 1);
+                        int renderOrderBlocksPerRow = Mathf.Max(1, (sortedTex != null ? sortedTex.width : 1) >> 2);
+                        splatMat.SetInt("_GS_RenderOrderPrecomputed_CoordMask", renderOrderBlocksPerRow - 1);
+                        splatMat.SetInt("_GS_RenderOrderPrecomputed_CoordShift", ComputeTextureCoordShift(renderOrderBlocksPerRow));
                         splatMat.SetInteger("_PRECOMPUTED_SORTING", 1);
-                        splatMat.EnableKeyword("_PRECOMPUTED_SORTING");
                         splatMat.EnableKeyword("_PRECOMPUTED_SORTING_ON");
                     }
                     else
                     {
                         splatMat.SetTexture("_GS_RenderOrderPrecomputed", null);
+                        splatMat.SetInt("_GS_RenderOrderPrecomputed_CoordMask", 0);
+                        splatMat.SetInt("_GS_RenderOrderPrecomputed_CoordShift", 0);
                         splatMat.SetInteger("_PRECOMPUTED_SORTING", 0);
-                        splatMat.DisableKeyword("_PRECOMPUTED_SORTING");
                         splatMat.DisableKeyword("_PRECOMPUTED_SORTING_ON");
                     }
 
-                    if(pass > 0 && pass <= alphaMaskCount) {
+                    if(passInfo.HasAlphaMask) {
                         // Create alpha depth mask pass
-                        indexCounts.Add(3);
-                        topologies.Add(MeshTopology.Triangles); // alpha depth mask will be rendered as triangles
                         Material alphaDepthMask = new Material(Shader.Find("VRChatGaussianSplatting/AlphaDepthMask"));
                         alphaDepthMask.name = splatMatName + "_alpha_depth_mask";
                         materials.Add(alphaDepthMask);
                     }
                     splatMat.name = splatMatName;
-                    splatMat.SetInt("_SplatCount", passCount);
-                    splatMat.SetInt("_SplatOffset", i);
-                    indexCounts.Add((passCount + 31) / 32); // geometry shader will emit 32 quads per point, so we need at least 1 vertex per 32 splats
-                    topologies.Add(MeshTopology.Points);
+                    splatMat.SetInt("_SplatCount", passInfo.SplatCount);
+                    splatMat.SetInt("_SplatOffset", passInfo.SplatOffset);
                     materials.Add(splatMat);
                 }
 
                 if(useSRGB) {
-                    // Convert screen colors back to linear
-                    indexCounts.Add(3);
-                    topologies.Add(MeshTopology.Triangles); // main mesh will be rendered as triangles
                     Material convertToLinear = new Material(Shader.Find("VRChatGaussianSplatting/ToLinear"));
                     convertToLinear.name = "convert_to_linear";
                     materials.Add(convertToLinear);
@@ -705,7 +741,7 @@ namespace GaussianSplatting
                     materials[i] = CreateOrReplaceAsset(splatMat, matPath);
                 }
 
-                Mesh pointMesh = PointsMesh.GetMultiPassMesh(indexCounts, topologies, bbox);
+                Mesh pointMesh = CreateMultiPassMesh(indexCounts, topologies, bbox);
                 pointMesh = CreateOrReplaceAsset(pointMesh, Path.Combine(outputDataFolder, materialName + "_mesh.asset"));
                 // Create prefab with the splat material and mesh
                 CreatePrefab(materials, pointMesh, prefabOutputPath, materialName, (int)effectiveDefaultSHBand);
@@ -743,7 +779,7 @@ namespace GaussianSplatting
             return tex;
         }
 
-        static T CreateOrReplaceAsset<T>(T asset, string path) where T : UnityEngine.Object
+        public static T CreateOrReplaceAsset<T>(T asset, string path) where T : UnityEngine.Object
         {
             string assetName = Path.GetFileNameWithoutExtension(path);
             asset.name = assetName;

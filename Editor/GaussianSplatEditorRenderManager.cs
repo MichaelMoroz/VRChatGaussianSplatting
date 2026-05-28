@@ -67,13 +67,46 @@ namespace GaussianSplatting.Editor
 
         static void RenderForSceneView(Camera camera)
         {
+            GaussianSplatRenderer[] sceneRenderers = Resources.FindObjectsOfTypeAll<GaussianSplatRenderer>();
             GaussianSplatObject[] objects = Resources.FindObjectsOfTypeAll<GaussianSplatObject>();
             HashSet<int> liveIds = new HashSet<int>();
+
+            for (int i = 0; i < sceneRenderers.Length; i++)
+            {
+                GaussianSplatRenderer sceneRenderer = sceneRenderers[i];
+                if (!ShouldProcessComponent(sceneRenderer, true) || !sceneRenderer.IsCombinedRenderingMode())
+                {
+                    continue;
+                }
+
+                int rendererKey = ~sceneRenderer.GetInstanceID();
+                liveIds.Add(rendererKey);
+
+                GaussianSplatEditorRenderState state = GetOrCreateState(rendererKey);
+                if (state == null)
+                {
+                    continue;
+                }
+
+                if (!state.BindCombined(sceneRenderer))
+                {
+                    ReleaseState(rendererKey);
+                    continue;
+                }
+
+                state.UpdateForCamera(camera);
+            }
 
             for (int i = 0; i < objects.Length; i++)
             {
                 GaussianSplatObject splatObject = objects[i];
-                if (!ShouldProcessObject(splatObject))
+                if (!ShouldProcessComponent(splatObject, false))
+                {
+                    continue;
+                }
+
+                GaussianSplatRenderer sceneRenderer = ResolveSceneRenderer(splatObject);
+                if (sceneRenderer != null && sceneRenderer.IsCombinedRenderingMode() && ShouldProcessComponent(sceneRenderer, true))
                 {
                     continue;
                 }
@@ -111,19 +144,20 @@ namespace GaussianSplatting.Editor
             }
         }
 
-        static bool ShouldProcessObject(GaussianSplatObject splatObject)
+        static bool ShouldProcessComponent(Component component, bool includeInactive)
         {
-            return ShouldProcessObject(splatObject, false);
-        }
-
-        static bool ShouldProcessObject(GaussianSplatObject splatObject, bool includeInactive)
-        {
-            if (splatObject == null)
+            if (component == null)
             {
                 return false;
             }
 
-            GameObject rootObject = splatObject.transform.root != null ? splatObject.transform.root.gameObject : splatObject.gameObject;
+            GaussianSplatRenderer renderer = component as GaussianSplatRenderer;
+            if (renderer != null && !renderer.enabled)
+            {
+                return false;
+            }
+
+            GameObject rootObject = component.transform.root != null ? component.transform.root.gameObject : component.gameObject;
             if (rootObject == null || EditorUtility.IsPersistent(rootObject))
             {
                 return false;
@@ -134,17 +168,30 @@ namespace GaussianSplatting.Editor
                 return false;
             }
 
-            if ((splatObject.hideFlags & (HideFlags.HideAndDontSave | HideFlags.NotEditable)) != 0)
+            if ((component.hideFlags & (HideFlags.HideAndDontSave | HideFlags.NotEditable)) != 0)
             {
                 return false;
             }
 
-            if (!includeInactive && !splatObject.gameObject.activeInHierarchy)
+            if (!includeInactive && !component.gameObject.activeInHierarchy)
             {
                 return false;
             }
 
             return true;
+        }
+
+        static GaussianSplatRenderer ResolveSceneRenderer(GaussianSplatObject splatObject)
+        {
+            GaussianSplatRenderer sceneRenderer = splatObject != null ? splatObject.gaussianSplatRenderer : null;
+            if (sceneRenderer != null && !EditorUtility.IsPersistent(sceneRenderer))
+            {
+                return sceneRenderer;
+            }
+
+            return splatObject != null
+                ? GaussianSplatRenderer.FindExistingSceneRenderer(splatObject.gameObject.scene)
+                : GaussianSplatRenderer.FindExistingSceneRenderer();
         }
 
         static GaussianSplatEditorRenderState GetOrCreateState(int instanceId)
@@ -280,7 +327,7 @@ namespace GaussianSplatting.Editor
                     _previousLocalCameraPosition = Vector3.positiveInfinity;
                 }
 
-                _sceneRenderer = ResolveSceneRenderer(splatObject);
+                _sceneRenderer = GaussianSplatEditorRenderManager.ResolveSceneRenderer(splatObject);
                 _sourceMaterial = ResolveSourceMaterial(_originalSharedMaterials);
                 if (_sourceMaterial == null)
                 {
@@ -293,16 +340,70 @@ namespace GaussianSplatting.Editor
                     return false;
                 }
 
-                Texture positions = _sourceMaterial.GetTexture(GSPositionsId);
-                if (positions == null || positions.width <= 0 || positions.height <= 0)
+                if (!RefreshElementCount())
                 {
                     return false;
                 }
 
-                int textureElementCount = positions.width * positions.height;
-                int actualSplatCount = _sourceMaterial.HasProperty(ActualSplatCountId) ? _sourceMaterial.GetInt(ActualSplatCountId) : 0;
-                _elementCount = actualSplatCount > 0 && actualSplatCount <= textureElementCount ? actualSplatCount : textureElementCount;
-                ComputeImageSize(_elementCount, out _imageSizeX, out _imageSizeY);
+                EnsureMaterials();
+                EnsureTextures();
+                ApplySharedMaterialOverrides();
+                return _computeKeyValues != null && _radixSort != null && _copyRenderOrder != null && _keyValues0 != null && _keyValues1 != null && _prefixSums != null && _renderOrder != null;
+            }
+
+            public bool BindCombined(GaussianSplatRenderer sceneRenderer)
+            {
+                if (sceneRenderer == null || !sceneRenderer.IsCombinedRenderingMode())
+                {
+                    return false;
+                }
+
+                GaussianSplatCombinedHierarchyBuilder.EnsureChunkHierarchy(sceneRenderer);
+
+                _splatObject = null;
+                GameObject combinedObject = sceneRenderer.GetCurrentSplatObject();
+                MeshRenderer resolvedRenderer = null;
+                if (combinedObject != null)
+                {
+                    Transform combinedTransform = combinedObject.transform;
+                    for (int i = 0; i < combinedTransform.childCount; i++)
+                    {
+                        MeshRenderer chunkRenderer = combinedTransform.GetChild(i).GetComponent<MeshRenderer>();
+                        if (chunkRenderer == null || ResolveSourceMaterial(chunkRenderer.sharedMaterials) == null)
+                        {
+                            continue;
+                        }
+
+                        resolvedRenderer = chunkRenderer;
+                        break;
+                    }
+                }
+
+                if (resolvedRenderer == null)
+                {
+                    return false;
+                }
+
+                if (_renderer != resolvedRenderer)
+                {
+                    RestorePropertyOverrides();
+                    _renderer = resolvedRenderer;
+                    CaptureOriginalPropertyBlocks();
+                    CaptureOriginalSharedMaterials();
+                    _previousLocalCameraPosition = Vector3.positiveInfinity;
+                }
+
+                _sceneRenderer = sceneRenderer;
+                _sourceMaterial = ResolveSourceMaterial(_originalSharedMaterials);
+                if (_sourceMaterial == null)
+                {
+                    return false;
+                }
+
+                if (!RefreshElementCount())
+                {
+                    return false;
+                }
 
                 EnsureMaterials();
                 EnsureTextures();
@@ -317,18 +418,36 @@ namespace GaussianSplatting.Editor
                     return;
                 }
 
-                Vector3 localCameraPosition = _renderer.transform.InverseTransformPoint(camera.transform.position);
-                Vector3 quantizedLocalCameraPosition = QuantizePosition(localCameraPosition);
-                if (quantizedLocalCameraPosition == _previousLocalCameraPosition)
+                if (_splatObject == null)
+                {
+                    if (_sceneRenderer == null || _sceneRenderer.UpdateCombinedDataTexturesForEditor(camera.transform.position) <= 0)
+                    {
+                        RestorePropertyOverrides();
+                        return;
+                    }
+
+                    if (!RefreshElementCount())
+                    {
+                        RestorePropertyOverrides();
+                        return;
+                    }
+
+                    EnsureTextures();
+                    ApplySharedMaterialOverrides();
+                }
+
+                Vector3 sortCameraPosition = _renderer.transform.InverseTransformPoint(camera.transform.position);
+                Vector3 quantizedSortCameraPosition = QuantizePosition(sortCameraPosition);
+                if (_splatObject != null && quantizedSortCameraPosition == _previousLocalCameraPosition)
                 {
                     ApplyPropertyBlock();
                     return;
                 }
 
-                _previousLocalCameraPosition = quantizedLocalCameraPosition;
+                _previousLocalCameraPosition = quantizedSortCameraPosition;
 
                 ConfigureStaticUniforms();
-                _computeKeyValues.SetVector(CameraPosId, localCameraPosition);
+                _computeKeyValues.SetVector(CameraPosId, sortCameraPosition);
 
                 Graphics.Blit(null, _keyValues0, _computeKeyValues);
 
@@ -377,17 +496,31 @@ namespace GaussianSplatting.Editor
                 _previousLocalCameraPosition = Vector3.positiveInfinity;
             }
 
-            static GaussianSplatRenderer ResolveSceneRenderer(GaussianSplatObject splatObject)
+            bool RefreshElementCount()
             {
-                GaussianSplatRenderer sceneRenderer = splatObject != null ? splatObject.gaussianSplatRenderer : null;
-                if (sceneRenderer != null && !EditorUtility.IsPersistent(sceneRenderer))
+                if (_sourceMaterial == null)
                 {
-                    return sceneRenderer;
+                    return false;
                 }
 
-                return splatObject != null
-                    ? GaussianSplatRenderer.FindExistingSceneRenderer(splatObject.gameObject.scene)
-                    : GaussianSplatRenderer.FindExistingSceneRenderer();
+                Texture positions = _sourceMaterial.GetTexture(GSPositionsId);
+                if (positions == null || positions.width <= 0 || positions.height <= 0)
+                {
+                    return false;
+                }
+
+                int textureElementCount = positions.width * positions.height;
+                int actualSplatCount = _splatObject == null && _sceneRenderer != null
+                    ? _sceneRenderer.GetCombinedActualSplatCountForEditor()
+                    : (_sourceMaterial.HasProperty(ActualSplatCountId) ? _sourceMaterial.GetInt(ActualSplatCountId) : 0);
+                _elementCount = actualSplatCount > 0 && actualSplatCount <= textureElementCount ? actualSplatCount : textureElementCount;
+                if (_elementCount <= 0)
+                {
+                    return false;
+                }
+
+                ComputeImageSize(_elementCount, out _imageSizeX, out _imageSizeY);
+                return true;
             }
 
             static Material ResolveSourceMaterial(Material[] materials)
@@ -581,6 +714,73 @@ namespace GaussianSplatting.Editor
                     return;
                 }
 
+                if (_splatObject == null && _sceneRenderer != null)
+                {
+                    GameObject combinedObject = _sceneRenderer.GetCurrentSplatObject();
+                    if (combinedObject == null)
+                    {
+                        return;
+                    }
+
+                    Transform combinedTransform = combinedObject.transform;
+                    for (int childIndex = 0; childIndex < combinedTransform.childCount; childIndex++)
+                    {
+                        MeshRenderer childRenderer = combinedTransform.GetChild(childIndex).GetComponent<MeshRenderer>();
+                        if (childRenderer == null)
+                        {
+                            continue;
+                        }
+
+                        Material[] childMaterials = childRenderer.sharedMaterials;
+                        if (childMaterials == null)
+                        {
+                            continue;
+                        }
+
+                        Material positionsMaterial = ResolveSourceMaterial(childMaterials);
+                        int splatOffset = positionsMaterial != null && positionsMaterial.HasProperty("_SplatOffset")
+                            ? positionsMaterial.GetInt("_SplatOffset")
+                            : 0;
+                        bool shouldRender = positionsMaterial != null && _elementCount > splatOffset;
+                        if (shouldRender && !childRenderer.gameObject.activeSelf)
+                        {
+                            childRenderer.gameObject.SetActive(true);
+                        }
+
+                        childRenderer.enabled = shouldRender;
+                        if (!shouldRender)
+                        {
+                            for (int materialIndex = 0; materialIndex < childMaterials.Length; materialIndex++)
+                            {
+                                childRenderer.SetPropertyBlock(null, materialIndex);
+                            }
+
+                            continue;
+                        }
+
+                        for (int materialIndex = 0; materialIndex < childMaterials.Length; materialIndex++)
+                        {
+                            Material sharedMaterial = childMaterials[materialIndex];
+                            if (sharedMaterial == null || !sharedMaterial.HasProperty(GSRenderOrderId))
+                            {
+                                continue;
+                            }
+
+                            childRenderer.GetPropertyBlock(_propertyBlock, materialIndex);
+                            _propertyBlock.SetTexture(GSRenderOrderId, _renderOrder);
+                            if (sharedMaterial.HasProperty(ActualSplatCountId))
+                            {
+                                _propertyBlock.SetInt(ActualSplatCountId, _elementCount);
+                            }
+                            _sceneRenderer.ApplyConfiguredPropertyBlockForEditor(_propertyBlock);
+                            childRenderer.SetPropertyBlock(_propertyBlock, materialIndex);
+                            _propertyBlock.Clear();
+                        }
+                    }
+
+                    return;
+                }
+
                 Material[] sharedMaterials = _renderer.sharedMaterials;
                 if (sharedMaterials == null)
                 {
@@ -597,6 +797,10 @@ namespace GaussianSplatting.Editor
 
                     _renderer.GetPropertyBlock(_propertyBlock, materialIndex);
                     _propertyBlock.SetTexture(GSRenderOrderId, _renderOrder);
+                    if (sharedMaterial.HasProperty(ActualSplatCountId))
+                    {
+                        _propertyBlock.SetInt(ActualSplatCountId, _elementCount);
+                    }
                     if (_sceneRenderer != null)
                     {
                         _sceneRenderer.ApplyConfiguredPropertyBlockForEditor(_propertyBlock);
@@ -644,6 +848,34 @@ namespace GaussianSplatting.Editor
                 if (_renderer == null)
                 {
                     return;
+                }
+
+                if (_splatObject == null && _sceneRenderer != null)
+                {
+                    GameObject combinedObject = _sceneRenderer.GetCurrentSplatObject();
+                    if (combinedObject != null)
+                    {
+                        Transform combinedTransform = combinedObject.transform;
+                        for (int childIndex = 0; childIndex < combinedTransform.childCount; childIndex++)
+                        {
+                            MeshRenderer childRenderer = combinedTransform.GetChild(childIndex).GetComponent<MeshRenderer>();
+                            if (childRenderer == null)
+                            {
+                                continue;
+                            }
+
+                            Material[] childMaterials = childRenderer.sharedMaterials;
+                            if (childMaterials == null)
+                            {
+                                continue;
+                            }
+
+                            for (int materialIndex = 0; materialIndex < childMaterials.Length; materialIndex++)
+                            {
+                                childRenderer.SetPropertyBlock(null, materialIndex);
+                            }
+                        }
+                    }
                 }
 
                 Material[] sharedMaterials = _renderer.sharedMaterials;

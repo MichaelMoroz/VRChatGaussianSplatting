@@ -2,6 +2,7 @@
 #pragma target 5.0
 #pragma exclude_renderers gles
 #pragma shader_feature_local _PRECOMPUTED_SORTING_ON
+#pragma shader_feature_local __ GS_CAMERA_COLOR_ARRAY
 #pragma multi_compile_local __ _VRC_LIGHT_VOLUMES_ON
 #pragma vertex vert
 #pragma fragment frag

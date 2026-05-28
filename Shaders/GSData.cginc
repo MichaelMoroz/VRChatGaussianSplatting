@@ -1,6 +1,7 @@
 #include "../RadixSort/Utils.cginc"
 
 Texture2D _GS_Positions, _GS_Scales, _GS_Rotations, _GS_Colors, _GS_SH;
+Texture2DArray<float4> _GS_ColorsCamera;
 float4 _GS_SH_Min;
 float4 _GS_SH_Range;
 Texture2DArray<float> _GS_RenderOrder;
@@ -140,6 +141,16 @@ uint2 GetSplatCoord(uint id)
     return GetBlockCoord(id, uint(_GS_Positions_CoordMask), uint(_GS_Positions_CoordShift));
 }
 
+float4 LoadSplatColor(uint2 coord)
+{
+#if defined(GS_CAMERA_COLOR_ARRAY)
+    uint slice = (_VRChatCameraMode > 0);
+    return _GS_ColorsCamera[uint3(coord, slice)];
+#else
+    return _GS_Colors[coord];
+#endif
+}
+
 SplatData LoadSplatData(uint id) {
     uint2 coord = GetSplatCoord(id);
 
@@ -149,7 +160,7 @@ SplatData LoadSplatData(uint id) {
     // Only necessary if splats are trained without mip-splatting.
     o.scale = max(exp2(_Log2MinScale), _GS_Scales[coord].xyz);
     o.quat = normalize(lerp(-1.0, 1.0, _GS_Rotations[coord]));
-    o.color = _GS_Colors[coord];
+    o.color = LoadSplatColor(coord);
     o.color.a *= _Opacity;
     return o;
 }

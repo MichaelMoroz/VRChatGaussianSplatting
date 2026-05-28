@@ -14,6 +14,7 @@ namespace GaussianSplatting.Editor
         SerializedProperty _alwaysUpdate;
         SerializedProperty _sortPipelineFrames;
         SerializedProperty _splatRenderOrder;
+        SerializedProperty _renderingMode;
 
         SerializedProperty _overrideMaterialProperties;
         SerializedProperty _requestedSHBand;
@@ -36,6 +37,7 @@ namespace GaussianSplatting.Editor
             _alwaysUpdate = serializedObject.FindProperty("alwaysUpdate");
             _sortPipelineFrames = serializedObject.FindProperty("sortPipelineFrames");
             _splatRenderOrder = serializedObject.FindProperty("splatRenderOrder");
+            _renderingMode = serializedObject.FindProperty("renderingMode");
 
             _overrideMaterialProperties = serializedObject.FindProperty("overrideMaterialProperties");
             _requestedSHBand = serializedObject.FindProperty("requestedSHBand");
@@ -65,12 +67,18 @@ namespace GaussianSplatting.Editor
 
             serializedObject.ApplyModifiedProperties();
 
+            if (!serializedObject.isEditingMultipleObjects && target is GaussianSplatRenderer sceneRenderer)
+            {
+                GaussianSplatCombinedHierarchyBuilder.EnsureChunkHierarchy(sceneRenderer);
+            }
+
             EditorGUILayout.Space();
             DrawUdonSharpUtilities();
         }
 
         void DrawSortingSettings()
         {
+            EditorGUILayout.PropertyField(_renderingMode, new GUIContent("Rendering Mode"));
             EditorGUILayout.PropertyField(_cameraPositionQuantization, new GUIContent("Camera Position Quantization"));
             EditorGUILayout.PropertyField(_alwaysUpdate, new GUIContent("Always Update"));
             EditorGUILayout.IntSlider(_sortPipelineFrames, 1, 8, new GUIContent("Sort Pipeline Frames"));

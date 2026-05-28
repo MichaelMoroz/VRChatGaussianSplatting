@@ -480,10 +480,9 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
                 continue;
             }
 
-            bool shouldBeActive = sceneSplatObject == selectedSplatObject;
-            if (sceneSplatObject.gameObject.activeSelf != shouldBeActive)
+            if (!sceneSplatObject.gameObject.activeSelf)
             {
-                sceneSplatObject.gameObject.SetActive(shouldBeActive);
+                sceneSplatObject.gameObject.SetActive(true);
             }
         }
 
@@ -570,6 +569,38 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         }
     }
 
+    void SetSplatListVisible(bool visible)
+    {
+        if (splatSectionText != null)
+        {
+            splatSectionText.gameObject.SetActive(visible);
+        }
+
+        if (splatScrollUpButton != null)
+        {
+            splatScrollUpButton.gameObject.SetActive(visible);
+        }
+
+        if (splatScrollDownButton != null)
+        {
+            splatScrollDownButton.gameObject.SetActive(visible);
+        }
+
+        if (splatButtons == null)
+        {
+            return;
+        }
+
+        for (int i = 0; i < splatButtons.Length; i++)
+        {
+            Button slotButton = splatButtons[i];
+            if (slotButton != null)
+            {
+                slotButton.gameObject.SetActive(visible);
+            }
+        }
+    }
+
     void RefreshSplatButtons()
     {
         if (splatButtons == null)
@@ -579,6 +610,13 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
 
         int visibleButtonCount = splatButtons.Length;
         int totalSplatCount = GetSceneSplatCount();
+        bool combinedMode = gaussianSplatRenderer != null && gaussianSplatRenderer.IsCombinedRenderingMode();
+
+        SetSplatListVisible(!combinedMode);
+        if (combinedMode)
+        {
+            return;
+        }
 
         if (totalSplatCount == 0)
         {
@@ -820,6 +858,11 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
 
     void SelectSplatSlot(int slotIndex)
     {
+        if (gaussianSplatRenderer != null && gaussianSplatRenderer.IsCombinedRenderingMode())
+        {
+            return;
+        }
+
         int splatDataIndex = _splatListStartIndex + slotIndex;
         GaussianSplatObject selectedSplatObject = GetSceneSplatObject(splatDataIndex);
         if (selectedSplatObject == null)
@@ -865,7 +908,10 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
 
     public override void OnDeserialization()
     {
-        ApplySyncedSplatObjectSelection();
+        if (gaussianSplatRenderer == null || !gaussianSplatRenderer.IsCombinedRenderingMode())
+        {
+            ApplySyncedSplatObjectSelection();
+        }
         RefreshUI();
     }
 
@@ -898,10 +944,10 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
 
         if (currentSplatText != null)
         {
-            GameObject currentSplatObject = gaussianSplatRenderer.GetCurrentSplatObject();
-            currentSplatText.text = currentSplatObject == null
+            string currentSplatName = gaussianSplatRenderer.GetCurrentSplatName();
+            currentSplatText.text = currentSplatName == "None"
                 ? GetCurrentSplatNoneLabel()
-                : GetCurrentSplatPrefix() + currentSplatObject.name;
+                : GetCurrentSplatPrefix() + currentSplatName;
         }
 
         if (gaussianScaleText != null)

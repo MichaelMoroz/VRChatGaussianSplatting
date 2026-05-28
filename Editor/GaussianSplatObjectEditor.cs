@@ -302,7 +302,7 @@ namespace GaussianSplatting.Editor
                 return true;
             }
 
-            return material.IsKeywordEnabled("_PRECOMPUTED_SORTING_ON") || material.IsKeywordEnabled("_PRECOMPUTED_SORTING");
+            return material.IsKeywordEnabled("_PRECOMPUTED_SORTING_ON");
         }
 
         static void CollectTextures(Material material, Dictionary<int, TextureStats> texturesById, ref long totalGpuBytes, ref long totalRuntimeBytes, ref long totalAssetBytes)
