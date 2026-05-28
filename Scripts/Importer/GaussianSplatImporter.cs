@@ -101,13 +101,10 @@ namespace GaussianSplatting
             return Part1By2(x) | (Part1By2(y) << 1) | (Part1By2(z) << 2);
         }
 
-        static TextureLayout EvaluateTextureLayout(int width, int texelCount, bool alignHeightToBlocks)
+        static TextureLayout EvaluateTextureLayout(int width, int texelCount)
         {
             int height = Mathf.CeilToInt((float)texelCount / width);
-            if (alignHeightToBlocks)
-            {
-                height = Mathf.Max(4, ((height + 3) / 4) * 4);
-            }
+            height = Mathf.Max(4, ((height + 3) / 4) * 4);
 
             return new TextureLayout(width, height);
         }
@@ -131,9 +128,9 @@ namespace GaussianSplatting
             return candidate.Width > best.Width;
         }
 
-        static TextureLayout ChoosePotTextureLayout(int texelCount, bool alignHeightToBlocks)
+        static TextureLayout ChoosePotTextureLayout(int texelCount)
         {
-            int minWidth = alignHeightToBlocks ? 4 : 1;
+            int minWidth = 4;
             if (texelCount <= 0)
             {
                 return new TextureLayout(minWidth, minWidth);
@@ -148,10 +145,10 @@ namespace GaussianSplatting
             }
             lowerWidth = Mathf.Max(minWidth, lowerWidth);
 
-            TextureLayout best = EvaluateTextureLayout(lowerWidth, texelCount, alignHeightToBlocks);
+            TextureLayout best = EvaluateTextureLayout(lowerWidth, texelCount);
             if (upperWidth != lowerWidth)
             {
-                TextureLayout candidate = EvaluateTextureLayout(upperWidth, texelCount, alignHeightToBlocks);
+                TextureLayout candidate = EvaluateTextureLayout(upperWidth, texelCount);
                 if (IsBetterTextureLayout(candidate, best, texelCount))
                 {
                     best = candidate;
@@ -230,11 +227,22 @@ namespace GaussianSplatting
             return shift;
         }
 
-        static void SetLinearCoordParams(Material material, string maskPropertyName, string shiftPropertyName, int width)
+        static void SetBlockCoordParams(Material material, string maskPropertyName, string shiftPropertyName, int width)
         {
-            int clampedWidth = Mathf.Max(1, width);
-            material.SetInt(maskPropertyName, clampedWidth - 1);
-            material.SetInt(shiftPropertyName, ComputeTextureCoordShift(clampedWidth));
+            int blocksPerRow = Mathf.Max(1, width >> 2);
+            material.SetInt(maskPropertyName, blocksPerRow - 1);
+            material.SetInt(shiftPropertyName, ComputeTextureCoordShift(blocksPerRow));
+        }
+
+        static int ComputePackedTextureIndex(int index, int width)
+        {
+            int blocksPerRow = Mathf.Max(1, width >> 2);
+            int blockIndex = index >> 4;
+            int blockX = blockIndex & (blocksPerRow - 1);
+            int blockY = blockIndex >> ComputeTextureCoordShift(blocksPerRow);
+            int x = (blockX << 2) | (index & 3);
+            int y = (blockY << 2) | ((index >> 2) & 3);
+            return y * width + x;
         }
 
         static MeshRenderer CreateRendererChild(Transform parent, string name, Mesh mesh, List<Material> materials)
@@ -251,12 +259,12 @@ namespace GaussianSplatting
         static void ConfigureSplatMaterialTextures(Material splatMat, Texture2D xyzTex, Texture2D colDcTex, Texture2D rotTex, Texture2D scaleTex, Texture2D shTex, int importedSHCoeffCount, Vector3 shMin, Vector3 shRange, float shRangeEpsilon, int actualSplatCount, SHBand defaultSHBand)
         {
             splatMat.SetTexture("_GS_Positions", xyzTex);
-            SetLinearCoordParams(splatMat, "_GS_Positions_CoordMask", "_GS_Positions_CoordShift", xyzTex != null ? xyzTex.width : 1);
+            SetBlockCoordParams(splatMat, "_GS_Positions_CoordMask", "_GS_Positions_CoordShift", xyzTex != null ? xyzTex.width : 1);
             splatMat.SetTexture("_GS_Colors", colDcTex);
             splatMat.SetTexture("_GS_Rotations", rotTex);
             splatMat.SetTexture("_GS_Scales", scaleTex);
             splatMat.SetTexture("_GS_SH", shTex);
-            SetLinearCoordParams(splatMat, "_GS_SH_CoordMask", "_GS_SH_CoordShift", shTex != null ? shTex.width : 1);
+            SetBlockCoordParams(splatMat, "_GS_SH_CoordMask", "_GS_SH_CoordShift", shTex != null ? shTex.width : 1);
             splatMat.SetInt("_GS_SH_CoeffCount", importedSHCoeffCount);
             splatMat.SetInt("_GS_SH_CoeffStride", actualSplatCount);
             splatMat.SetVector("_GS_SH_Min", new Vector4(shMin.x, shMin.y, shMin.z, 0f));
@@ -403,10 +411,10 @@ namespace GaussianSplatting
                 Vector3 sharedShRange = sharedShMax - sharedShMin;
 
                 int n = splats.Length;
-                TextureLayout splatLayout = ChoosePotTextureLayout(n, compressColorAlphaToBC7);
+                TextureLayout splatLayout = ChoosePotTextureLayout(n);
                 TextureLayout shLayout = importedSHCoeffCount > 0
-                    ? ChoosePotTextureLayout(n * importedSHCoeffCount, compressSHToBC7)
-                    : new TextureLayout(1, 1);
+                    ? ChoosePotTextureLayout(n * importedSHCoeffCount)
+                    : new TextureLayout(4, 4);
 
                 Debug.Log($"Importing {count} splats into {splatLayout.Width}x{splatLayout.Height} textures");
 
@@ -525,7 +533,8 @@ namespace GaussianSplatting
                         Color[] sortedPixels = new Color[splatLayout.Capacity];
                         for (int j = 0; j < n; ++j)
                         {
-                            sortedPixels[j] = new Color(textureIndexBySourceIndex[sortedIndices[i][j]], 0f, 0f, 0f); // Store only the texture index in the red channel
+                            int packedIndex = ComputePackedTextureIndex(j, splatLayout.Width);
+                            sortedPixels[packedIndex] = new Color(textureIndexBySourceIndex[sortedIndices[i][j]], 0f, 0f, 0f); // Store only the texture index in the red channel
                         }
                         sortedTex.SetPixels(sortedPixels, i);
                     }
@@ -555,21 +564,23 @@ namespace GaussianSplatting
 
                 for (int i = 0; i < n; ++i) {
                     int sourceIndex = sortedOrder[i];
+                    int packedIndex = ComputePackedTextureIndex(i, splatLayout.Width);
                     var s = splats[sourceIndex];
-                    xyzPixels[i]   = new Color(s.pos.x,   s.pos.y,   s.pos.z,   0f);
-                    colPixels[i]   = new Color(s.dc0.x,   s.dc0.y,   s.dc0.z,   s.opacity);
-                    rotPixels[i]   = new Color(0.5f + 0.5f * s.rot.x, 
-                                               0.5f + 0.5f * s.rot.y, 
-                                               0.5f + 0.5f * s.rot.z, 
-                                               0.5f + 0.5f * s.rot.w);
-                    scalePixels[i] = new Color(s.scale.x, s.scale.y, s.scale.z, 0f);
+                    xyzPixels[packedIndex]   = new Color(s.pos.x,   s.pos.y,   s.pos.z,   0f);
+                    colPixels[packedIndex]   = new Color(s.dc0.x,   s.dc0.y,   s.dc0.z,   s.opacity);
+                    rotPixels[packedIndex]   = new Color(0.5f + 0.5f * s.rot.x, 
+                                                         0.5f + 0.5f * s.rot.y, 
+                                                         0.5f + 0.5f * s.rot.z, 
+                                                         0.5f + 0.5f * s.rot.w);
+                    scalePixels[packedIndex] = new Color(s.scale.x, s.scale.y, s.scale.z, 0f);
 
                     if (importedSHCoeffCount > 0)
                     {
                         for (int coeff = 0; coeff < importedSHCoeffCount; ++coeff)
                         {
                             Vector3 sh = GetSHCoefficient(shCoeffs, requestedSHCoeffCount, sourceIndex, coeff);
-                            shPixels[coeff * n + i] = new Color(
+                            int shPackedIndex = ComputePackedTextureIndex(coeff * n + i, shLayout.Width);
+                            shPixels[shPackedIndex] = new Color(
                                 sharedShRange.x > shRangeEpsilon ? (sh.x - sharedShMin.x) / sharedShRange.x : 0f,
                                 sharedShRange.y > shRangeEpsilon ? (sh.y - sharedShMin.y) / sharedShRange.y : 0f,
                                 sharedShRange.z > shRangeEpsilon ? (sh.z - sharedShMin.z) / sharedShRange.z : 0f,
@@ -648,7 +659,7 @@ namespace GaussianSplatting
                     if(precomputeSorting)
                     {
                         splatMat.SetTexture("_GS_RenderOrderPrecomputed", sortedTex);
-                        SetLinearCoordParams(splatMat, "_GS_RenderOrderPrecomputed_CoordMask", "_GS_RenderOrderPrecomputed_CoordShift", sortedTex != null ? sortedTex.width : 1);
+                        SetBlockCoordParams(splatMat, "_GS_RenderOrderPrecomputed_CoordMask", "_GS_RenderOrderPrecomputed_CoordShift", sortedTex != null ? sortedTex.width : 1);
                         splatMat.SetInteger("_PRECOMPUTED_SORTING", 1);
                         splatMat.EnableKeyword("_PRECOMPUTED_SORTING");
                         splatMat.EnableKeyword("_PRECOMPUTED_SORTING_ON");
@@ -914,7 +925,7 @@ namespace GaussianSplatting.Editor.Importers
             _compressSHToBC7 = EditorGUILayout.Toggle("SH1+", _compressSHToBC7);
             if (_compressColorAlphaToBC7 || _compressSHToBC7)
             {
-                EditorGUILayout.HelpBox("BC7 compression applies only to the selected generated textures. Position, scale, and sorting textures stay uncompressed, and the importer pads texture resolution to 4x4 blocks when needed.", MessageType.Info);
+                EditorGUILayout.HelpBox("The importer always packs generated splat textures into 4x4-aligned blocks. BC7 compression applies only to the selected generated textures; position, scale, and sorting textures stay uncompressed.", MessageType.Info);
                 if (!_importSphericalHarmonics && _compressSHToBC7)
                 {
                     EditorGUILayout.HelpBox("SH1+ compression has no effect while Import Spherical Harmonics is disabled.", MessageType.Info);

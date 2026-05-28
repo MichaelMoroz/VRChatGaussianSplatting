@@ -35,14 +35,18 @@ Shader "Misha/RadixSort"
                 uint groupsLog2 = elementsLog2 - _GroupSize;
                 uint digitIndex = morton >> groupsLog2;
                 uint keyIndex = (morton - (digitIndex << groupsLog2)) << _GroupSize;
+                uint elementCount = uint(_ElementCount);
 
-                if(keyIndex >= _ElementCount) return 0.0;
+                if(keyIndex >= elementCount) return 0.0;
 
                 uint count = 0;
-                uint groupElements = 1 << _GroupSize;
+                uint groupElements = 1u << _GroupSize;
+                uint groupElementCount = min(groupElements, elementCount - keyIndex);
                 uint mask = ((1u << _BitsPerStep) - 1u);
-                for(int i = 0; i < groupElements; i++) {
-                    uint2 groupPixel = IndexToUV(keyIndex + i);
+                [unroll(16)]
+                for(uint i = 0u; i < groupElementCount; ++i) {
+                    uint groupIndex = keyIndex + i;
+                    uint2 groupPixel = IndexToUV(groupIndex);
                     uint key = asuint(_KeyValues[groupPixel].y);
                     uint digit = (key >> _CurrentBit) & mask;
                     count += uint(digit == digitIndex);
@@ -71,7 +75,8 @@ Shader "Misha/RadixSort"
             float2 frag (v2f i) : SV_Target {
                 uint2 pixel = floor(i.pos.xy);
                 uint index = UVToIndex(pixel);
-                if(index >= _ElementCount) return float2(1e10, 1e10); // Return a large value if index is out of bounds
+                uint elementCount = uint(_ElementCount);
+                if(index >= elementCount) return float2(1e10, 1e10); // Return a large value if index is out of bounds
 
                 // Do binary search for the key value in the prefix sum by summing/going over the mips 
                 uint _ImageSize = _KeyValues_TexelSize.z;
@@ -85,11 +90,14 @@ Shader "Misha/RadixSort"
                 uint keyIndex = (activeIndex - (digitIndex << groupsLog2)) << _GroupSize;
 
                 // Find the final key value in the group
-                float2 keyValue;
-                uint groupElements = 1 << _GroupSize;
+                float2 keyValue = float2(1e10, 1e10);
+                uint groupElements = 1u << _GroupSize;
+                uint groupElementCount = min(groupElements, elementCount - keyIndex);
                 uint mask = ((1u << _BitsPerStep) - 1u);
-                for(int i = 0; i < groupElements; i++) {
-                    uint2 groupPixel = IndexToUV(keyIndex + i);
+                [unroll(16)]
+                for(uint i = 0u; i < groupElementCount; ++i) {
+                    uint groupIndex = keyIndex + i;
+                    uint2 groupPixel = IndexToUV(groupIndex);
                     keyValue = _KeyValues[groupPixel];
                     uint key = asuint(keyValue.y);
                     uint digit = (key >> _CurrentBit) & mask;

@@ -127,14 +127,17 @@ struct SplatData {
     bool valid;
 };
 
-uint2 GetLinearCoord(uint index, uint mask, uint shift)
+uint2 GetBlockCoord(uint index, uint mask, uint shift)
 {
-    return uint2(index & mask, index >> shift);
+    uint blockIndex = index >> 4;
+    uint blockX = blockIndex & mask;
+    uint blockY = blockIndex >> shift;
+    return uint2((blockX << 2) | (index & 3u), (blockY << 2) | ((index >> 2) & 3u));
 }
 
 uint2 GetSplatCoord(uint id)
 {
-    return GetLinearCoord(id, uint(_GS_Positions_CoordMask), uint(_GS_Positions_CoordShift));
+    return GetBlockCoord(id, uint(_GS_Positions_CoordMask), uint(_GS_Positions_CoordShift));
 }
 
 SplatData LoadSplatData(uint id) {
@@ -159,7 +162,7 @@ float3 DecodeSH(uint id, int coeffIndex)
     }
 
     uint linearIndex = uint(coeffIndex) * uint(_GS_SH_CoeffStride) + id;
-    uint2 coord = GetLinearCoord(linearIndex, uint(_GS_SH_CoordMask), uint(_GS_SH_CoordShift));
+    uint2 coord = GetBlockCoord(linearIndex, uint(_GS_SH_CoordMask), uint(_GS_SH_CoordShift));
     return _GS_SH_Min.xyz + _GS_SH[coord].rgb * _GS_SH_Range.xyz;
 }
 
@@ -246,7 +249,7 @@ int GetPrecomputedRenderOrderIndex(uint id, float3 cam_dir) {
     if(best_dot > 0.0) {
         id = _ActualSplatCount - id - 1; // flip the order for positive directions
     }
-    uint2 coord = GetLinearCoord(id, uint(_GS_RenderOrderPrecomputed_CoordMask), uint(_GS_RenderOrderPrecomputed_CoordShift));
+    uint2 coord = GetBlockCoord(id, uint(_GS_RenderOrderPrecomputed_CoordMask), uint(_GS_RenderOrderPrecomputed_CoordShift));
     return _GS_RenderOrderPrecomputed[int3(coord, best_index)];
 }
 
