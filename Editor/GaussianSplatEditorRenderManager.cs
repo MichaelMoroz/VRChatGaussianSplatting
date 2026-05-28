@@ -113,6 +113,11 @@ namespace GaussianSplatting.Editor
 
         static bool ShouldProcessObject(GaussianSplatObject splatObject)
         {
+            return ShouldProcessObject(splatObject, false);
+        }
+
+        static bool ShouldProcessObject(GaussianSplatObject splatObject, bool includeInactive)
+        {
             if (splatObject == null)
             {
                 return false;
@@ -124,12 +129,17 @@ namespace GaussianSplatting.Editor
                 return false;
             }
 
+            if (UnityEditor.SceneManagement.EditorSceneManager.IsPreviewScene(rootObject.scene))
+            {
+                return false;
+            }
+
             if ((splatObject.hideFlags & (HideFlags.HideAndDontSave | HideFlags.NotEditable)) != 0)
             {
                 return false;
             }
 
-            if (!splatObject.gameObject.activeInHierarchy)
+            if (!includeInactive && !splatObject.gameObject.activeInHierarchy)
             {
                 return false;
             }
@@ -250,7 +260,6 @@ namespace GaussianSplatting.Editor
             int _imageSizeX;
             int _imageSizeY;
             Material[] _originalSharedMaterials;
-            Material[] _previewSharedMaterials;
             MaterialPropertyBlock[] _originalPropertyBlocks;
 
             public bool Bind(GaussianSplatObject splatObject)
@@ -265,8 +274,6 @@ namespace GaussianSplatting.Editor
                 if (_renderer != resolvedRenderer)
                 {
                     RestorePropertyOverrides();
-                    RestoreSharedMaterials();
-                    DestroyPreviewMaterials();
                     _renderer = resolvedRenderer;
                     CaptureOriginalPropertyBlocks();
                     CaptureOriginalSharedMaterials();
@@ -299,7 +306,6 @@ namespace GaussianSplatting.Editor
 
                 EnsureMaterials();
                 EnsureTextures();
-                ApplySceneRendererPreviewMaterials();
                 ApplySharedMaterialOverrides();
                 return _computeKeyValues != null && _radixSort != null && _copyRenderOrder != null && _keyValues0 != null && _keyValues1 != null && _prefixSums != null && _renderOrder != null;
             }
@@ -348,8 +354,6 @@ namespace GaussianSplatting.Editor
             public void Dispose()
             {
                 RestorePropertyOverrides();
-                RestoreSharedMaterials();
-                DestroyPreviewMaterials();
                 SafeDestroy(_computeKeyValues);
                 SafeDestroy(_radixSort);
                 SafeDestroy(_copyRenderOrder);
@@ -549,77 +553,6 @@ namespace GaussianSplatting.Editor
                 _computeKeyValues.SetInt(GSPositionsCoordShiftId, _sourceMaterial.GetInt(GSPositionsCoordShiftId));
             }
 
-            void ApplySceneRendererPreviewMaterials()
-            {
-                if (_renderer == null || _originalSharedMaterials == null || _originalSharedMaterials.Length == 0)
-                {
-                    return;
-                }
-
-                if (_sceneRenderer == null)
-                {
-                    RestoreSharedMaterials();
-                    DestroyPreviewMaterials();
-                    return;
-                }
-
-                if (_previewSharedMaterials == null || _previewSharedMaterials.Length != _originalSharedMaterials.Length)
-                {
-                    DestroyPreviewMaterials();
-                    _previewSharedMaterials = new Material[_originalSharedMaterials.Length];
-                }
-
-                for (int materialIndex = 0; materialIndex < _originalSharedMaterials.Length; materialIndex++)
-                {
-                    Material originalMaterial = _originalSharedMaterials[materialIndex];
-                    if (originalMaterial == null)
-                    {
-                        SafeDestroy(_previewSharedMaterials[materialIndex]);
-                        _previewSharedMaterials[materialIndex] = null;
-                        continue;
-                    }
-
-                    Material previewMaterial = _previewSharedMaterials[materialIndex];
-                    if (previewMaterial == null || previewMaterial.shader != originalMaterial.shader)
-                    {
-                        SafeDestroy(previewMaterial);
-                        previewMaterial = new Material(originalMaterial);
-                        previewMaterial.name = originalMaterial.name + " (Editor Preview)";
-                        previewMaterial.hideFlags = HideFlags.HideAndDontSave;
-                        _previewSharedMaterials[materialIndex] = previewMaterial;
-                    }
-                    else
-                    {
-                        previewMaterial.CopyPropertiesFromMaterial(originalMaterial);
-                    }
-
-                    _sceneRenderer.ApplyConfiguredMaterialSettingsForEditor(previewMaterial);
-                }
-
-                if (!MaterialsMatch(_renderer.sharedMaterials, _previewSharedMaterials))
-                {
-                    _renderer.sharedMaterials = _previewSharedMaterials;
-                }
-            }
-
-            static bool MaterialsMatch(Material[] currentMaterials, Material[] expectedMaterials)
-            {
-                if (currentMaterials == null || expectedMaterials == null || currentMaterials.Length != expectedMaterials.Length)
-                {
-                    return false;
-                }
-
-                for (int materialIndex = 0; materialIndex < currentMaterials.Length; materialIndex++)
-                {
-                    if (currentMaterials[materialIndex] != expectedMaterials[materialIndex])
-                    {
-                        return false;
-                    }
-                }
-
-                return true;
-            }
-
             void CopySortedOrder()
             {
                 if (_copyRenderOrder == null || _keyValues0 == null || _renderOrder == null)
@@ -662,13 +595,9 @@ namespace GaussianSplatting.Editor
 
                     _renderer.GetPropertyBlock(_propertyBlock, materialIndex);
                     _propertyBlock.SetTexture(GSRenderOrderId, _renderOrder);
-                    if (sharedMaterial.HasProperty(GaussianMulId))
+                    if (_sceneRenderer != null)
                     {
-                        _propertyBlock.SetFloat(GaussianMulId, sharedMaterial.GetFloat(GaussianMulId));
-                    }
-                    if (sharedMaterial.HasProperty(AlphaCutoffId))
-                    {
-                        _propertyBlock.SetFloat(AlphaCutoffId, sharedMaterial.GetFloat(AlphaCutoffId));
+                        _sceneRenderer.ApplyConfiguredPropertyBlockForEditor(_propertyBlock);
                     }
                     _renderer.SetPropertyBlock(_propertyBlock, materialIndex);
                     _propertyBlock.Clear();
@@ -736,33 +665,6 @@ namespace GaussianSplatting.Editor
                 }
             }
 
-            void RestoreSharedMaterials()
-            {
-                if (_renderer == null || _originalSharedMaterials == null)
-                {
-                    return;
-                }
-
-                if (!MaterialsMatch(_renderer.sharedMaterials, _originalSharedMaterials))
-                {
-                    _renderer.sharedMaterials = _originalSharedMaterials;
-                }
-            }
-
-            void DestroyPreviewMaterials()
-            {
-                if (_previewSharedMaterials == null)
-                {
-                    return;
-                }
-
-                for (int materialIndex = 0; materialIndex < _previewSharedMaterials.Length; materialIndex++)
-                {
-                    SafeDestroy(_previewSharedMaterials[materialIndex]);
-                }
-
-                _previewSharedMaterials = null;
-            }
         }
     }
 }

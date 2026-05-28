@@ -489,6 +489,33 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
     {
         ApplyConfiguredMaterialSettings(material, GetCurrentSHBand());
     }
+
+    public void ApplyConfiguredPropertyBlockForEditor(MaterialPropertyBlock propertyBlock)
+    {
+        if (propertyBlock == null)
+        {
+            return;
+        }
+
+        propertyBlock.SetFloat("_SHBand", Mathf.Clamp(GetCurrentSHBand(), 0, 3));
+        propertyBlock.SetFloat("_LightVolumeIntensity", lightVolumeIntensity);
+
+        if (!overrideMaterialProperties)
+        {
+            return;
+        }
+
+        propertyBlock.SetFloat("_GaussianMul", gaussianScale);
+        propertyBlock.SetFloat("_ThinThreshold", thinThreshold);
+        propertyBlock.SetFloat("_AntiAliasing", antiAliasing);
+        propertyBlock.SetFloat("_Log2MinScale", log2MinScale);
+        propertyBlock.SetFloat("_AlphaCutoff", alphaCutoff);
+        propertyBlock.SetFloat("_ScaleCutoff", scaleCutoff);
+        propertyBlock.SetFloat("_Exposure", exposure);
+        propertyBlock.SetFloat("_Opacity", opacity);
+        propertyBlock.SetVector("_OKLCHShift", new Vector4(oklchShift.x, oklchShift.y, oklchShift.z, 0.0f));
+        propertyBlock.SetFloat("_Gamma", Mathf.Max(0.001f, gamma));
+    }
 #endif
 
     int GetSplatObjectMaxSHBand(GameObject rootObject)
