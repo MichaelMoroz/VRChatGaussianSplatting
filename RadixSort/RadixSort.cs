@@ -3,6 +3,11 @@ using UnityEngine;
 using VRC.SDKBase;
 using VRC.Udon;
 
+#if UNITY_EDITOR && !COMPILER_UDONSHARP
+using UnityEditor;
+using UnityEngine.Rendering;
+#endif
+
 [UdonBehaviourSyncMode(BehaviourSyncMode.None)]
 public class RadixSort : UdonSharpBehaviour
 {
@@ -23,6 +28,10 @@ public class RadixSort : UdonSharpBehaviour
     private int _currentBit;
     private bool _sortInProgress;
 
+#if UNITY_EDITOR && !COMPILER_UDONSHARP
+    static Material _editorCopySortedOrderMaterial;
+#endif
+
     public void Sort()
     {
         BeginSort();
@@ -31,11 +40,32 @@ public class RadixSort : UdonSharpBehaviour
 
     public void BeginSort()
     {
+        BeginSortInternal(false);
+    }
+
+#if UNITY_EDITOR && !COMPILER_UDONSHARP
+    public void BeginSortForEditor()
+    {
+        BeginSortInternal(true);
+    }
+#endif
+
+    void BeginSortInternal(bool useEditorOps)
+    {
         // Runtime uniforms that vary each frame
         setStaticUniforms();
 
         // 1. Evaluate key values
-        VRCGraphics.Blit(null, keyValues0, computeKeyValues);
+#if UNITY_EDITOR && !COMPILER_UDONSHARP
+        if (useEditorOps)
+        {
+            Graphics.Blit(null, keyValues0, computeKeyValues);
+        }
+        else
+#endif
+        {
+            VRCGraphics.Blit(null, keyValues0, computeKeyValues);
+        }
 
         radixSort.SetTexture("_PrefixSums", prefixSums);
         _currentBit = 0;
@@ -43,6 +73,18 @@ public class RadixSort : UdonSharpBehaviour
     }
 
     public void StepSort(int maxSubpasses)
+    {
+        StepSortInternal(maxSubpasses, false);
+    }
+
+#if UNITY_EDITOR && !COMPILER_UDONSHARP
+    public void StepSortForEditor(int maxSubpasses)
+    {
+        StepSortInternal(maxSubpasses, true);
+    }
+#endif
+
+    void StepSortInternal(int maxSubpasses, bool useEditorOps)
     {
         if (!_sortInProgress)
         {
@@ -56,9 +98,29 @@ public class RadixSort : UdonSharpBehaviour
             radixSort.SetTexture("_KeyValues", keyValues0);
             radixSort.SetInt("_CurrentBit", _currentBit);
 
-            VRCGraphics.Blit(null, prefixSums, radixSort, 0);
+#if UNITY_EDITOR && !COMPILER_UDONSHARP
+            if (useEditorOps)
+            {
+                Graphics.Blit(null, prefixSums, radixSort, 0);
+            }
+            else
+#endif
+            {
+                VRCGraphics.Blit(null, prefixSums, radixSort, 0);
+            }
+
             prefixSums.GenerateMips();
-            VRCGraphics.Blit(null, keyValues1, radixSort, 1);
+
+#if UNITY_EDITOR && !COMPILER_UDONSHARP
+            if (useEditorOps)
+            {
+                Graphics.Blit(null, keyValues1, radixSort, 1);
+            }
+            else
+#endif
+            {
+                VRCGraphics.Blit(null, keyValues1, radixSort, 1);
+            }
 
             // Ping-pong the buffers
             RenderTexture temp = keyValues0;
@@ -97,10 +159,84 @@ public class RadixSort : UdonSharpBehaviour
 
     public void CopySortedOrder(RenderTexture target, int slice)
     {
+        CopySortedOrderInternal(target, slice, false);
+    }
+
+#if UNITY_EDITOR && !COMPILER_UDONSHARP
+    public void CopySortedOrderForEditor(RenderTexture target, int slice)
+    {
+        CopySortedOrderInternal(target, slice, true);
+    }
+
+    static Material GetEditorCopySortedOrderMaterial()
+    {
+        if (_editorCopySortedOrderMaterial != null)
+        {
+            return _editorCopySortedOrderMaterial;
+        }
+
+        Shader shader = Shader.Find("Hidden/GaussianSplatting/CopyRenderOrder");
+        if (shader == null)
+        {
+            return null;
+        }
+
+        _editorCopySortedOrderMaterial = new Material(shader);
+        _editorCopySortedOrderMaterial.name = "GaussianSplatRadixSortCopyRenderOrder";
+        _editorCopySortedOrderMaterial.hideFlags = HideFlags.HideAndDontSave;
+        return _editorCopySortedOrderMaterial;
+    }
+
+    static void DrawFullscreenQuad(Material material)
+    {
+        if (material == null || !material.SetPass(0))
+        {
+            return;
+        }
+
+        GL.PushMatrix();
+        GL.LoadOrtho();
+        GL.Begin(GL.QUADS);
+        GL.TexCoord2(0.0f, 0.0f);
+        GL.Vertex3(0.0f, 0.0f, 0.0f);
+        GL.TexCoord2(1.0f, 0.0f);
+        GL.Vertex3(1.0f, 0.0f, 0.0f);
+        GL.TexCoord2(1.0f, 1.0f);
+        GL.Vertex3(1.0f, 1.0f, 0.0f);
+        GL.TexCoord2(0.0f, 1.0f);
+        GL.Vertex3(0.0f, 1.0f, 0.0f);
+        GL.End();
+        GL.PopMatrix();
+    }
+#endif
+
+    void CopySortedOrderInternal(RenderTexture target, int slice, bool useEditorOps)
+    {
         if (target == null)
         {
             return;
         }
+
+#if UNITY_EDITOR && !COMPILER_UDONSHARP
+        if (useEditorOps)
+        {
+            Material copyMaterial = GetEditorCopySortedOrderMaterial();
+            if (copyMaterial == null)
+            {
+                Debug.LogError("RadixSort: Missing Hidden/GaussianSplatting/CopyRenderOrder shader for editor sorting.");
+                return;
+            }
+
+            copyMaterial.SetTexture("_MainTex", keyValues0);
+
+            RenderTexture active = RenderTexture.active;
+            Graphics.SetRenderTarget(target, 0, CubemapFace.Unknown, slice);
+            GL.Clear(false, true, Color.clear);
+            DrawFullscreenQuad(copyMaterial);
+            RenderTexture.active = active;
+            return;
+        }
+#endif
 
         VRCGraphics.Blit(keyValues0, target, 0, slice);
     }

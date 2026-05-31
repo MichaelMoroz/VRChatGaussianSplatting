@@ -24,18 +24,18 @@ Material:
     serializedVersion: 3
     m_TexEnvs:
     - _KeyValues:
-        m_Texture: {fileID: 8400000, guid: 86c6dca6fd90db441bb34863c44a37a2, type: 2}
+        m_Texture: {fileID: 8400000, guid: 2685775a89a7faf43b069b0cab1a9a8a, type: 2}
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
     - _PrefixSums:
-        m_Texture: {fileID: 8400000, guid: 9c3d6f5ee29d6d44ab0b6ec88a6ce637, type: 2}
+        m_Texture: {fileID: 8400000, guid: a3fbf84a4ae91b349a01246372e6b33e, type: 2}
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
     m_Ints: []
     m_Floats:
     - _BitsPerStep: 4
-    - _CurrentBit: 28
-    - _ElementCount: 3194537
+    - _CurrentBit: 12
+    - _ElementCount: 2785926
     - _GroupSize: 4
     - _ImageSizeLog2: 11
     m_Colors: []

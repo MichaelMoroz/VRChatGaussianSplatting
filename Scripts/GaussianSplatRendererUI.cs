@@ -17,6 +17,9 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
     const int LanguageEnglish = 0;
     const int LanguageJapanese = 1;
     const float DefaultAlphaCutoff = 0.03f;
+    const float DefaultPanelWidth = 1120.0f;
+    const float CombinedPanelWidth = 560.0f;
+    const float BackgroundPadding = 24.0f;
 
     public GaussianSplatRenderer gaussianSplatRenderer;
     public Text currentSplatText;
@@ -72,15 +75,37 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
     float _lastLightVolumeIntensitySliderValue;
     float _lastAlphaCutoffSliderValue;
     GaussianSplatObject[] _sceneSplatObjects;
+    RectTransform _canvasRect;
+    RectTransform _panelRect;
+    Transform _backgroundTransform;
+    GameObject _splatColumnObject;
+    bool _layoutDefaultsInitialized;
+    float _defaultCanvasWidth;
+    float _defaultPanelWidth;
+    Vector3 _defaultBackgroundScale;
 
     void Start()
     {
+#if UNITY_EDITOR && !COMPILER_UDONSHARP
+        if (!Application.isPlaying)
+        {
+            return;
+        }
+#endif
+
         ApplySyncedSplatObjectSelection();
         RefreshUI();
     }
 
     void Update()
     {
+#if UNITY_EDITOR && !COMPILER_UDONSHARP
+        if (!Application.isPlaying)
+        {
+            return;
+        }
+#endif
+
         RefreshUI();
     }
 
@@ -144,12 +169,15 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
             {
                 EditorUtility.SetDirty(ui);
             }
+
+            ui.RefreshUI();
         }
     }
 
     void OnValidate()
     {
         SyncEditorSerializedState();
+        RequestEditorRefresh();
     }
 #endif
 
@@ -315,8 +343,14 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
             return;
         }
 
-#if !COMPILER_UDONSHARP
+#if UNITY_EDITOR && !COMPILER_UDONSHARP
         gaussianSplatRenderer = GaussianSplatRenderer.FindExistingSceneRenderer(gameObject.scene);
+#else
+        GameObject rendererObject = GameObject.Find("GaussianSplatRenderer");
+        if (rendererObject != null)
+        {
+            gaussianSplatRenderer = rendererObject.GetComponent<GaussianSplatRenderer>();
+        }
 #endif
     }
 
@@ -601,6 +635,71 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         }
     }
 
+    void RefreshRenderingModeLayout(bool combinedMode)
+    {
+        if (_canvasRect == null)
+        {
+            _canvasRect = (RectTransform)GetComponent(typeof(RectTransform));
+        }
+
+        if (_panelRect == null)
+        {
+            Transform panelTransform = transform.Find("Panel");
+            if (panelTransform != null)
+            {
+                _panelRect = (RectTransform)panelTransform.GetComponent(typeof(RectTransform));
+            }
+        }
+
+        if (_backgroundTransform == null)
+        {
+            _backgroundTransform = transform.Find("Background");
+        }
+
+        if (_splatColumnObject == null)
+        {
+            Transform splatColumnTransform = transform.Find("Panel/Body Row/Splat Column");
+            if (splatColumnTransform != null)
+            {
+                _splatColumnObject = splatColumnTransform.gameObject;
+            }
+        }
+
+        if (!_layoutDefaultsInitialized)
+        {
+            _defaultCanvasWidth = _canvasRect != null ? _canvasRect.sizeDelta.x : DefaultPanelWidth;
+            _defaultPanelWidth = _panelRect != null ? _panelRect.sizeDelta.x : DefaultPanelWidth;
+            _defaultBackgroundScale = _backgroundTransform != null ? _backgroundTransform.localScale : Vector3.one;
+            _layoutDefaultsInitialized = true;
+        }
+
+        if (_splatColumnObject != null && _splatColumnObject.activeSelf == combinedMode)
+        {
+            _splatColumnObject.SetActive(!combinedMode);
+        }
+
+        float targetWidth = combinedMode ? CombinedPanelWidth : _defaultCanvasWidth;
+        if (_canvasRect != null && !Mathf.Approximately(_canvasRect.sizeDelta.x, targetWidth))
+        {
+            _canvasRect.sizeDelta = new Vector2(targetWidth, _canvasRect.sizeDelta.y);
+        }
+
+        float targetPanelWidth = combinedMode ? CombinedPanelWidth : _defaultPanelWidth;
+        if (_panelRect != null && !Mathf.Approximately(_panelRect.sizeDelta.x, targetPanelWidth))
+        {
+            _panelRect.sizeDelta = new Vector2(targetPanelWidth, _panelRect.sizeDelta.y);
+        }
+
+        if (_backgroundTransform != null)
+        {
+            Vector3 targetScale = new Vector3(targetWidth + BackgroundPadding, _defaultBackgroundScale.y, _defaultBackgroundScale.z);
+            if (_backgroundTransform.localScale != targetScale)
+            {
+                _backgroundTransform.localScale = targetScale;
+            }
+        }
+    }
+
     void RefreshSplatButtons()
     {
         if (splatButtons == null)
@@ -692,7 +791,9 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
 
         if (alwaysUpdateButton != null)
         {
+            bool combinedMode = gaussianSplatRenderer.IsCombinedRenderingMode();
             bool alwaysUpdate = gaussianSplatRenderer.GetAlwaysUpdate();
+            alwaysUpdateButton.interactable = !combinedMode;
             ApplyButtonVisual(alwaysUpdateButton, alwaysUpdate ? GetToggleOnLabel() : GetToggleOffLabel(), alwaysUpdate ? _toggleEnabledColor : _toggleDisabledColor);
         }
     }
@@ -920,6 +1021,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         FindRenderer();
         RefreshSceneSplatObjects();
         RefreshLocalizedLabels();
+        RefreshRenderingModeLayout(gaussianSplatRenderer != null && gaussianSplatRenderer.IsCombinedRenderingMode());
 
         if (gaussianSplatRenderer == null)
         {
@@ -944,10 +1046,13 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
 
         if (currentSplatText != null)
         {
+            bool combinedMode = gaussianSplatRenderer.IsCombinedRenderingMode();
             string currentSplatName = gaussianSplatRenderer.GetCurrentSplatName();
-            currentSplatText.text = currentSplatName == "None"
-                ? GetCurrentSplatNoneLabel()
-                : GetCurrentSplatPrefix() + currentSplatName;
+            currentSplatText.text = combinedMode
+                ? Localize("Rendering Mode: Combined", "表示モード: 統合")
+                : Localize("Rendering Mode: Single", "表示モード: 単体") + "\n" + (currentSplatName == "None"
+                    ? GetCurrentSplatNoneLabel()
+                    : GetCurrentSplatPrefix() + currentSplatName);
         }
 
         if (gaussianScaleText != null)

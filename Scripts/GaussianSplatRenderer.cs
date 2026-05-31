@@ -51,7 +51,7 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
     private Material keyValueMat;
     private GameObject splatObject;
 
-    [HideInInspector, SerializeField] GaussianSplatObject[] cachedSceneSplatObjects;
+    [HideInInspector, SerializeField] GameObject[] cachedSceneSplatObjects;
     [SerializeField] GaussianSplatRenderingMode renderingMode = GaussianSplatRenderingMode.SingleSplat;
     [SerializeField] MeshRenderer combinedSortedRenderer;
     [SerializeField] Material combineDataMaterial;
@@ -72,6 +72,21 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
     [Range(1, 8)] [SerializeField] int sortPipelineFrames = 2;
     [Tooltip("Render texture array used to store sorted splat render order. Slice 0 is screen, slice 1 is photo.")]
     public RenderTexture splatRenderOrder;
+
+#if UNITY_EDITOR && !COMPILER_UDONSHARP
+    sealed class EditorPreviewTargetState
+    {
+        public MeshRenderer sortedRenderer;
+        public RenderTexture renderOrder;
+        public int generation;
+    }
+
+    static GameObject _editorPreviewSorterObject;
+    static RadixSort _editorPreviewRadixSort;
+    static readonly Dictionary<int, EditorPreviewTargetState> _editorPreviewTargets = new Dictionary<int, EditorPreviewTargetState>();
+    static MaterialPropertyBlock _editorPreviewPropertyBlock;
+    static int _editorPreviewGeneration;
+#endif
 
     [Tooltip("If true, the material properties will be overridden with the values set in this script. If false, the material properties will be set to their default values.")]
     [UdonSynced, SerializeField] public bool overrideMaterialProperties = false;
@@ -230,8 +245,8 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         }
 #endif
 
-        GaussianSplatObject[] sceneObjects = cachedSceneSplatObjects;
-        if (sceneObjects == null || sceneObjects.Length == 0)
+        GameObject[] sceneObjectRoots = cachedSceneSplatObjects;
+        if (sceneObjectRoots == null || sceneObjectRoots.Length == 0)
         {
 #if COMPILER_UDONSHARP
             return new GaussianSplatObject[0];
@@ -240,43 +255,44 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
 #endif
         }
 
-        if (includeInactive)
+        int sceneObjectCount = 0;
+        for (int i = 0; i < sceneObjectRoots.Length; i++)
         {
-            return sceneObjects;
-        }
-
-        int activeCount = 0;
-        for (int i = 0; i < sceneObjects.Length; i++)
-        {
-            GaussianSplatObject currentObject = sceneObjects[i];
-            if (currentObject == null || !currentObject.gameObject.activeInHierarchy)
+            GameObject sceneObjectRoot = sceneObjectRoots[i];
+            GaussianSplatObject currentObject = sceneObjectRoot != null
+                ? sceneObjectRoot.GetComponent<GaussianSplatObject>()
+                : null;
+            if (currentObject == null || (!includeInactive && !currentObject.gameObject.activeInHierarchy))
             {
                 continue;
             }
 
-            activeCount++;
+            sceneObjectCount++;
         }
 
-        if (activeCount == sceneObjects.Length)
+        if (sceneObjectCount == 0)
         {
-            return sceneObjects;
+            return new GaussianSplatObject[0];
         }
 
-        GaussianSplatObject[] activeObjects = new GaussianSplatObject[activeCount];
-        int activeIndex = 0;
-        for (int i = 0; i < sceneObjects.Length; i++)
+        GaussianSplatObject[] sceneObjects = new GaussianSplatObject[sceneObjectCount];
+        int sceneObjectIndex = 0;
+        for (int i = 0; i < sceneObjectRoots.Length; i++)
         {
-            GaussianSplatObject currentObject = sceneObjects[i];
-            if (currentObject == null || !currentObject.gameObject.activeInHierarchy)
+            GameObject sceneObjectRoot = sceneObjectRoots[i];
+            GaussianSplatObject currentObject = sceneObjectRoot != null
+                ? sceneObjectRoot.GetComponent<GaussianSplatObject>()
+                : null;
+            if (currentObject == null || (!includeInactive && !currentObject.gameObject.activeInHierarchy))
             {
                 continue;
             }
 
-            activeObjects[activeIndex] = currentObject;
-            activeIndex++;
+            sceneObjects[sceneObjectIndex] = currentObject;
+            sceneObjectIndex++;
         }
 
-        return activeObjects;
+        return sceneObjects;
     }
 
 #if UNITY_EDITOR && !COMPILER_UDONSHARP
@@ -403,6 +419,48 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
             return;
         }
 
+        GameObject activeObject = activeSplatObject.gameObject;
+        GameObject[] sceneObjectRoots = cachedSceneSplatObjects;
+        if (sceneObjectRoots == null || sceneObjectRoots.Length == 0)
+        {
+            cachedSceneSplatObjects = new GameObject[] { activeObject };
+        }
+        else
+        {
+            int insertIndex = sceneObjectRoots.Length;
+            for (int i = 0; i < sceneObjectRoots.Length; i++)
+            {
+                GameObject currentObject = sceneObjectRoots[i];
+                if (currentObject == activeObject)
+                {
+                    insertIndex = -1;
+                    break;
+                }
+
+                if (currentObject == null && insertIndex == sceneObjectRoots.Length)
+                {
+                    insertIndex = i;
+                }
+            }
+
+            if (insertIndex >= 0)
+            {
+                if (insertIndex == sceneObjectRoots.Length)
+                {
+                    GameObject[] updatedSceneObjects = new GameObject[sceneObjectRoots.Length + 1];
+                    for (int i = 0; i < sceneObjectRoots.Length; i++)
+                    {
+                        updatedSceneObjects[i] = sceneObjectRoots[i];
+                    }
+
+                    sceneObjectRoots = updatedSceneObjects;
+                    cachedSceneSplatObjects = sceneObjectRoots;
+                }
+
+                sceneObjectRoots[insertIndex] = activeObject;
+            }
+        }
+
         if (IsCombinedRenderingMode())
         {
             ResetCameraPositions();
@@ -509,7 +567,7 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         return materials ?? new Material[0];
     }
 
-    Material ResolvePrimarySplatMaterial(Material[] materials)
+    static Material ResolvePrimarySplatMaterial(Material[] materials)
     {
         if (materials == null)
         {
@@ -638,6 +696,14 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
                 {
                     if (combinedOffset + sourceSplatCount > positionCapacity || combinedOffset + sourceSplatCount > colorCapacity)
                     {
+                        _combinedActualSplatCount = 0;
+#if UNITY_EDITOR && !COMPILER_UDONSHARP
+                        if (!Application.isPlaying)
+                        {
+                            SetCombinedRendererEnabled(false);
+                            return false;
+                        }
+#endif
                         Debug.LogError("Combined Gaussian splat resources are too small for the active scene splats. Refresh the renderer resources in the editor.");
                         SetCombinedRendererEnabled(false);
                         return false;
@@ -807,40 +873,6 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         if (material.HasProperty("_OKLCHShift")) material.SetVector("_OKLCHShift", new Vector4(oklchShift.x, oklchShift.y, oklchShift.z, 0.0f));
         if (material.HasProperty("_Gamma")) material.SetFloat("_Gamma", Mathf.Max(0.001f, gamma));
     }
-
-#if UNITY_EDITOR && !COMPILER_UDONSHARP
-    public void ApplyConfiguredMaterialSettingsForEditor(Material material)
-    {
-        ApplyConfiguredMaterialSettings(material, GetCurrentSHBand());
-    }
-
-    public void ApplyConfiguredPropertyBlockForEditor(MaterialPropertyBlock propertyBlock)
-    {
-        if (propertyBlock == null)
-        {
-            return;
-        }
-
-        propertyBlock.SetFloat("_SHBand", Mathf.Clamp(GetCurrentSHBand(), 0, 3));
-        propertyBlock.SetFloat("_LightVolumeIntensity", lightVolumeIntensity);
-
-        if (!overrideMaterialProperties)
-        {
-            return;
-        }
-
-        propertyBlock.SetFloat("_GaussianMul", gaussianScale);
-        propertyBlock.SetFloat("_ThinThreshold", thinThreshold);
-        propertyBlock.SetFloat("_AntiAliasing", antiAliasing);
-        propertyBlock.SetFloat("_Log2MinScale", log2MinScale);
-        propertyBlock.SetFloat("_AlphaCutoff", alphaCutoff);
-        propertyBlock.SetFloat("_ScaleCutoff", scaleCutoff);
-        propertyBlock.SetFloat("_Exposure", exposure);
-        propertyBlock.SetFloat("_Opacity", opacity);
-        propertyBlock.SetVector("_OKLCHShift", new Vector4(oklchShift.x, oklchShift.y, oklchShift.z, 0.0f));
-        propertyBlock.SetFloat("_Gamma", Mathf.Max(0.001f, gamma));
-    }
-#endif
 
     int GetSplatObjectMaxSHBand(GameObject rootObject)
     {
@@ -1026,7 +1058,7 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
 
     public bool GetAlwaysUpdate()
     {
-        return alwaysUpdate;
+        return ShouldAlwaysUpdate();
     }
 
     public void SetAlwaysUpdate(bool value)
@@ -1160,32 +1192,91 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
 
     void Start()
     {
+        if (!EnsureRendererInitialized())
+        {
+            return;
+        }
+
+        DisableMsaaInGame();
+    }
+
+    bool EnsureRenderTextureCreated(RenderTexture renderTexture)
+    {
+        if (renderTexture == null || renderTexture.IsCreated())
+        {
+            return renderTexture != null;
+        }
+
+        renderTexture.Create();
+        return renderTexture.IsCreated();
+    }
+
+    bool EnsureRendererInitialized()
+    {
         if (!IsPrimaryRendererInstance())
         {
             enabled = false;
-            return;
+            return false;
         }
 
-        _radixSort = (RadixSort)GetComponent<RadixSort>();
+        if (_radixSort == null)
+        {
+            _radixSort = (RadixSort)GetComponent<RadixSort>();
+        }
+
         if (_radixSort == null)
         {
             Debug.LogError("RadixSort component not found on the GaussianSplatRenderer GameObject.");
-            return;
+            return false;
         }
+
         if (splatRenderOrder == null)
         {
             Debug.LogError("Splat Render Order texture is not assigned. Please assign a RenderTexture.");
-            return;
+            return false;
         }
 
-        _completedCameraPos = new Vector3[MAX_CAMERA_COUNT];
-        _pendingCameraPos = new Vector3[MAX_CAMERA_COUNT];
-        _pendingCameraWorldPos = new Vector3[MAX_CAMERA_COUNT];
-        _hasCompletedSort = new bool[MAX_CAMERA_COUNT];
-        _hasPendingSort = new bool[MAX_CAMERA_COUNT];
-        ResetCameraPositions();
-        InitializeSplatObject();
-        DisableMsaaInGame();
+        if (!EnsureRenderTextureCreated(splatRenderOrder))
+        {
+            Debug.LogError("Splat Render Order texture could not be created at runtime.");
+            return false;
+        }
+
+        if (!EnsureRenderTextureCreated(_radixSort.keyValues0)
+            || !EnsureRenderTextureCreated(_radixSort.keyValues1)
+            || !EnsureRenderTextureCreated(_radixSort.prefixSums))
+        {
+            Debug.LogError("Radix sort render textures could not be created at runtime.");
+            return false;
+        }
+
+        if ((combinedPositions != null && !EnsureRenderTextureCreated(combinedPositions))
+            || (combinedRotations != null && !EnsureRenderTextureCreated(combinedRotations))
+            || (combinedScales != null && !EnsureRenderTextureCreated(combinedScales))
+            || (combinedColorsCamera != null && !EnsureRenderTextureCreated(combinedColorsCamera))
+            || (combinedColorsScratch != null && !EnsureRenderTextureCreated(combinedColorsScratch)))
+        {
+            Debug.LogError("Combined render textures could not be created at runtime.");
+            return false;
+        }
+
+        bool initializedCameraState = _completedCameraPos != null && _completedCameraPos.Length >= MAX_CAMERA_COUNT
+            && _pendingCameraPos != null && _pendingCameraPos.Length >= MAX_CAMERA_COUNT
+            && _pendingCameraWorldPos != null && _pendingCameraWorldPos.Length >= MAX_CAMERA_COUNT
+            && _hasCompletedSort != null && _hasCompletedSort.Length >= MAX_CAMERA_COUNT
+            && _hasPendingSort != null && _hasPendingSort.Length >= MAX_CAMERA_COUNT;
+        if (!initializedCameraState)
+        {
+            _completedCameraPos = new Vector3[MAX_CAMERA_COUNT];
+            _pendingCameraPos = new Vector3[MAX_CAMERA_COUNT];
+            _pendingCameraWorldPos = new Vector3[MAX_CAMERA_COUNT];
+            _hasCompletedSort = new bool[MAX_CAMERA_COUNT];
+            _hasPendingSort = new bool[MAX_CAMERA_COUNT];
+            ResetCameraPositions();
+            InitializeSplatObject();
+        }
+
+        return true;
     }
 
     Vector3 QuantizePosition(Vector3 position)
@@ -1370,10 +1461,54 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         return Mathf.CeilToInt((float)RadixSort.TotalSortPasses / Mathf.Clamp(sortPipelineFrames, 1, RadixSort.TotalSortPasses));
     }
 
+    void BeginSort(bool useEditorOps)
+    {
+#if UNITY_EDITOR && !COMPILER_UDONSHARP
+        if (useEditorOps)
+        {
+            _radixSort.BeginSortForEditor();
+            return;
+        }
+#endif
+
+        _radixSort.BeginSort();
+    }
+
+    void StepSort(int maxSubpasses, bool useEditorOps)
+    {
+#if UNITY_EDITOR && !COMPILER_UDONSHARP
+        if (useEditorOps)
+        {
+            _radixSort.StepSortForEditor(maxSubpasses);
+            return;
+        }
+#endif
+
+        _radixSort.StepSort(maxSubpasses);
+    }
+
+    void CopySortedOrder(int slice, bool useEditorOps)
+    {
+#if UNITY_EDITOR && !COMPILER_UDONSHARP
+        if (useEditorOps)
+        {
+            _radixSort.CopySortedOrderForEditor(splatRenderOrder, slice);
+            return;
+        }
+#endif
+
+        _radixSort.CopySortedOrder(splatRenderOrder, slice);
+    }
+
+    bool ShouldAlwaysUpdate()
+    {
+        return IsCombinedRenderingMode() || alwaysUpdate;
+    }
+
     void RequestCameraSort(Vector3 cameraPos, int cameraID, bool forceUpdate)
     {
         Vector3 quantizedPos = QuantizePosition(cameraPos);
-        if (!forceUpdate && !alwaysUpdate && _hasCompletedSort[cameraID] && quantizedPos == _completedCameraPos[cameraID])
+        if (!forceUpdate && !ShouldAlwaysUpdate() && _hasCompletedSort[cameraID] && quantizedPos == _completedCameraPos[cameraID])
         {
             return;
         }
@@ -1383,50 +1518,50 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         _hasPendingSort[cameraID] = true;
     }
 
-    bool TryStartPendingSort(int cameraID)
+    bool TryStartPendingSort(int cameraID, bool useEditorOps)
     {
         if (!_hasPendingSort[cameraID])
         {
             return false;
         }
 
-        if (!alwaysUpdate && _hasCompletedSort[cameraID] && _pendingCameraPos[cameraID] == _completedCameraPos[cameraID])
+        if (!ShouldAlwaysUpdate() && _hasCompletedSort[cameraID] && _pendingCameraPos[cameraID] == _completedCameraPos[cameraID])
         {
             _hasPendingSort[cameraID] = false;
             return false;
         }
 
         keyValueMat.SetVector("_CameraPos", _sortedRenderer.transform.InverseTransformPoint(_pendingCameraWorldPos[cameraID]));
-        _radixSort.BeginSort();
+        BeginSort(useEditorOps);
         _activeSortCameraId = cameraID;
         _activeSortQuantizedPos = _pendingCameraPos[cameraID];
         _hasPendingSort[cameraID] = false;
         return true;
     }
 
-    void StartNextPendingSort()
+    void StartNextPendingSort(bool useEditorOps)
     {
         if (_activeSortCameraId != NO_ACTIVE_SORT)
         {
             return;
         }
 
-        if (TryStartPendingSort(SCREEN_CAMERA_ID))
+        if (TryStartPendingSort(SCREEN_CAMERA_ID, useEditorOps))
         {
             return;
         }
 
-        TryStartPendingSort(PHOTO_CAMERA_ID);
+        TryStartPendingSort(PHOTO_CAMERA_ID, useEditorOps);
     }
 
-    void PublishActiveSort()
+    void PublishActiveSort(bool useEditorOps)
     {
         if (_activeSortCameraId == NO_ACTIVE_SORT)
         {
             return;
         }
 
-        _radixSort.CopySortedOrder(splatRenderOrder, _activeSortCameraId);
+        CopySortedOrder(_activeSortCameraId, useEditorOps);
         _completedCameraPos[_activeSortCameraId] = _activeSortQuantizedPos;
         _hasCompletedSort[_activeSortCameraId] = true;
 
@@ -1446,44 +1581,46 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         _activeSortQuantizedPos = Vector3.positiveInfinity;
     }
 
-    void ProcessSortPipeline()
+    void ProcessSortPipeline(bool useEditorOps)
     {
-        StartNextPendingSort();
+        StartNextPendingSort(useEditorOps);
         if (_activeSortCameraId == NO_ACTIVE_SORT)
         {
             return;
         }
 
-        _radixSort.StepSort(GetSortSubpassBudget());
+        StepSort(GetSortSubpassBudget(), useEditorOps);
         if (_radixSort.IsSortComplete())
         {
-            PublishActiveSort();
-            StartNextPendingSort();
+            PublishActiveSort(useEditorOps);
+            StartNextPendingSort(useEditorOps);
         }
     }
 
-    void RunBlockingSort(Vector3 cameraPos, int cameraID)
+    void RunBlockingSort(Vector3 cameraPos, int cameraID, bool useEditorOps)
     {
         Vector3 quantizedPos = QuantizePosition(cameraPos);
         keyValueMat.SetVector("_CameraPos", _sortedRenderer.transform.InverseTransformPoint(cameraPos));
-        _radixSort.BeginSort();
+        BeginSort(useEditorOps);
         _activeSortCameraId = cameraID;
         _activeSortQuantizedPos = quantizedPos;
-        _radixSort.StepSort(RadixSort.TotalSortPasses);
-        PublishActiveSort();
+        StepSort(RadixSort.TotalSortPasses, useEditorOps);
+        PublishActiveSort(useEditorOps);
     }
 
-    public void SortCameras(Vector3 screenCamPos)
+    void SortCameraViews(Vector3 screenCamPos, Vector3 photoCamPos, bool sortPhotoCamera, bool useEditorOps)
     {
+        if (!EnsureRendererInitialized())
+        {
+            return;
+        }
+
         if (!IsCombinedRenderingMode() && !ApplyActiveSplatObject(false))
         {
             return;
         }
 
-        VRCCameraSettings photoCam = VRCCameraSettings.PhotoCamera;
-        Vector3 photoCamPos = photoCam != null && photoCam.Active ? photoCam.Position : screenCamPos;
-
-        if (IsCombinedRenderingMode() && !UpdateCombinedTextures(screenCamPos, photoCamPos, false))
+        if (IsCombinedRenderingMode() && !UpdateCombinedTextures(screenCamPos, photoCamPos, useEditorOps))
         {
             return;
         }
@@ -1495,26 +1632,26 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
 
         if (!_hasCompletedSort[SCREEN_CAMERA_ID])
         {
-            RunBlockingSort(screenCamPos, SCREEN_CAMERA_ID);
+            RunBlockingSort(screenCamPos, SCREEN_CAMERA_ID, useEditorOps);
         }
         else
         {
             RequestCameraSort(screenCamPos, SCREEN_CAMERA_ID, false);
         }
 
-        if (photoCam != null && photoCam.Active)
+        if (sortPhotoCamera)
         {
-            if (!_hasCompletedSort[PHOTO_CAMERA_ID])
+            Vector3 quantizedPhotoPos = QuantizePosition(photoCamPos);
+            if (!_hasCompletedSort[PHOTO_CAMERA_ID]
+                || ShouldAlwaysUpdate()
+                || quantizedPhotoPos != _completedCameraPos[PHOTO_CAMERA_ID])
             {
-                RunBlockingSort(photoCam.Position, PHOTO_CAMERA_ID);
-            }
-            else
-            {
-                RequestCameraSort(photoCam.Position, PHOTO_CAMERA_ID, false);
+                _hasPendingSort[PHOTO_CAMERA_ID] = false;
+                RunBlockingSort(photoCamPos, PHOTO_CAMERA_ID, useEditorOps);
             }
         }
 
-        ProcessSortPipeline();
+        ProcessSortPipeline(useEditorOps);
 
         // if (mirror != null && mirror.activeInHierarchy) //Mirror order is currently broken in VRChat
         // {
@@ -1528,6 +1665,48 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
         //     }
         // }
     }
+
+    public void SortCameras(Vector3 screenCamPos)
+    {
+        VRCCameraSettings photoCam = VRCCameraSettings.PhotoCamera;
+        bool sortPhotoCamera = photoCam != null && photoCam.Active;
+        Vector3 photoCamPos = sortPhotoCamera ? photoCam.Position : screenCamPos;
+
+        SortCameraViews(screenCamPos, photoCamPos, sortPhotoCamera, false);
+    }
+
+#if UNITY_EDITOR && !COMPILER_UDONSHARP
+    void SortEditorCamera(Camera camera)
+    {
+        if (camera == null || camera.cameraType != CameraType.SceneView || Application.isPlaying)
+        {
+            return;
+        }
+
+        Vector3 cameraPos = camera.transform.position;
+        if (!EnsureRendererInitialized())
+        {
+            return;
+        }
+
+        if (!IsCombinedRenderingMode() && !ApplyActiveSplatObject(false))
+        {
+            return;
+        }
+
+        if (IsCombinedRenderingMode() && !UpdateCombinedTextures(cameraPos, cameraPos, true))
+        {
+            return;
+        }
+
+        if (!UpdateMaterials())
+        {
+            return;
+        }
+
+        RunBlockingSort(cameraPos, SCREEN_CAMERA_ID, true);
+    }
+#endif
 
     void Update()
     {
@@ -1554,27 +1733,6 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
     }
 
 #if UNITY_EDITOR && !COMPILER_UDONSHARP
-    public int GetCombinedActualSplatCountForEditor()
-    {
-        return _combinedActualSplatCount;
-    }
-
-    public int UpdateCombinedDataTexturesForEditor(Vector3 cameraPosWorld)
-    {
-        if (!IsCombinedRenderingMode() || !UpdateCombinedTextures(cameraPosWorld, cameraPosWorld, true))
-        {
-            _combinedActualSplatCount = 0;
-            return 0;
-        }
-
-        if (!UpdateMaterials())
-        {
-            return 0;
-        }
-
-        return _combinedActualSplatCount;
-    }
-
     static bool IsSceneSplatObject(GaussianSplatObject splatObject, UnityEngine.SceneManagement.Scene scene)
     {
         if (splatObject == null)
@@ -1593,6 +1751,11 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
             return false;
         }
 
+        if (!ShouldUseEditorPreviewScene(rootObject.scene))
+        {
+            return false;
+        }
+
         if (scene.IsValid() && rootObject.scene != scene)
         {
             return false;
@@ -1604,10 +1767,360 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
     [InitializeOnLoadMethod]
     static void RegisterSceneAutomation()
     {
+        Camera.onPreCull -= OnEditorCameraPreCull;
+        Camera.onPreCull += OnEditorCameraPreCull;
         EditorApplication.hierarchyChanged -= OnEditorHierarchyChanged;
         EditorApplication.hierarchyChanged += OnEditorHierarchyChanged;
         EditorApplication.delayCall -= OnEditorHierarchyChanged;
         EditorApplication.delayCall += OnEditorHierarchyChanged;
+    }
+
+    static bool ShouldUseEditorPreviewScene(UnityEngine.SceneManagement.Scene scene)
+    {
+        if (!scene.IsValid() || !scene.isLoaded)
+        {
+            return false;
+        }
+
+        if (!UnityEditor.SceneManagement.EditorSceneManager.IsPreviewScene(scene))
+        {
+            return true;
+        }
+
+        UnityEditor.SceneManagement.PrefabStage prefabStage = UnityEditor.SceneManagement.PrefabStageUtility.GetCurrentPrefabStage();
+        return prefabStage != null && prefabStage.scene == scene;
+    }
+
+    static MaterialPropertyBlock GetEditorPreviewPropertyBlock()
+    {
+        if (_editorPreviewPropertyBlock == null)
+        {
+            _editorPreviewPropertyBlock = new MaterialPropertyBlock();
+        }
+
+        return _editorPreviewPropertyBlock;
+    }
+
+    static RenderTexture CreateTemporarySortRenderTexture(string textureName, int width, int height, RenderTextureFormat format, bool useMipMap, int volumeDepth)
+    {
+        RenderTexture renderTexture = new RenderTexture(width, height, 0, format, RenderTextureReadWrite.Linear);
+        renderTexture.name = textureName;
+        renderTexture.hideFlags = HideFlags.HideAndDontSave;
+        renderTexture.dimension = volumeDepth > 1 ? TextureDimension.Tex2DArray : TextureDimension.Tex2D;
+        renderTexture.volumeDepth = volumeDepth;
+        renderTexture.useMipMap = useMipMap;
+        renderTexture.autoGenerateMips = false;
+        renderTexture.wrapMode = TextureWrapMode.Clamp;
+        renderTexture.filterMode = FilterMode.Point;
+        renderTexture.enableRandomWrite = false;
+        renderTexture.anisoLevel = 0;
+        renderTexture.antiAliasing = 1;
+        renderTexture.Create();
+        return renderTexture;
+    }
+
+    static void ReleaseTemporarySortRenderTexture(ref RenderTexture renderTexture)
+    {
+        if (renderTexture == null)
+        {
+            return;
+        }
+
+        renderTexture.Release();
+        DestroyImmediate(renderTexture);
+        renderTexture = null;
+    }
+
+    static void EnsureTemporarySortRenderTexture(ref RenderTexture targetTexture, string textureName, int width, int height, RenderTextureFormat format, bool useMipMap, int volumeDepth)
+    {
+        bool needsRecreate = targetTexture == null
+            || targetTexture.width < width
+            || targetTexture.height < height
+            || targetTexture.format != format
+            || targetTexture.dimension != (volumeDepth > 1 ? TextureDimension.Tex2DArray : TextureDimension.Tex2D)
+            || targetTexture.volumeDepth != volumeDepth
+            || targetTexture.useMipMap != useMipMap
+            || targetTexture.autoGenerateMips
+            || targetTexture.wrapMode != TextureWrapMode.Clamp
+            || targetTexture.filterMode != FilterMode.Point
+            || targetTexture.enableRandomWrite
+            || targetTexture.anisoLevel != 0
+            || targetTexture.antiAliasing != 1
+            || !targetTexture.IsCreated();
+        if (!needsRecreate)
+        {
+            return;
+        }
+
+        ReleaseTemporarySortRenderTexture(ref targetTexture);
+        targetTexture = CreateTemporarySortRenderTexture(textureName, width, height, format, useMipMap, volumeDepth);
+    }
+
+    static Material CreateEditorPreviewMaterial(string assetPath, string materialName)
+    {
+        Material sourceMaterial = LoadPackageMaterial(assetPath);
+        if (sourceMaterial == null)
+        {
+            Debug.LogError($"Missing Gaussian splat editor preview material at '{assetPath}'.");
+            return null;
+        }
+
+        Material previewMaterial = new Material(sourceMaterial);
+        previewMaterial.name = materialName;
+        previewMaterial.hideFlags = HideFlags.HideAndDontSave;
+        return previewMaterial;
+    }
+
+    static bool EnsureEditorPreviewSorter(int requiredWidth, int requiredHeight)
+    {
+        if (_editorPreviewSorterObject == null)
+        {
+            _editorPreviewSorterObject = new GameObject("GaussianSplatEditorPreviewSorter");
+            _editorPreviewSorterObject.hideFlags = HideFlags.HideAndDontSave;
+            _editorPreviewRadixSort = _editorPreviewSorterObject.AddComponent<RadixSort>();
+            _editorPreviewRadixSort.hideFlags = HideFlags.HideAndDontSave;
+            _editorPreviewRadixSort.computeKeyValues = CreateEditorPreviewMaterial("Assets/VRChatGaussianSplatting/Resources/Materials/VRChatGaussianSplatting_ComputeKeyValue.mat", "GaussianSplatEditorPreviewComputeKeyValue");
+            _editorPreviewRadixSort.radixSort = CreateEditorPreviewMaterial("Assets/VRChatGaussianSplatting/RadixSort/Materials/Misha_RadixSort.mat", "GaussianSplatEditorPreviewRadixSort");
+        }
+
+        if (_editorPreviewRadixSort == null || _editorPreviewRadixSort.computeKeyValues == null || _editorPreviewRadixSort.radixSort == null)
+        {
+            return false;
+        }
+
+        EnsureTemporarySortRenderTexture(ref _editorPreviewRadixSort.keyValues0, "GaussianSplatEditorPreview_KeyValues0", requiredWidth, requiredHeight, RenderTextureFormat.RGFloat, false, 1);
+        EnsureTemporarySortRenderTexture(ref _editorPreviewRadixSort.keyValues1, "GaussianSplatEditorPreview_KeyValues1", requiredWidth, requiredHeight, RenderTextureFormat.RGFloat, false, 1);
+        EnsureTemporarySortRenderTexture(ref _editorPreviewRadixSort.prefixSums, "GaussianSplatEditorPreview_PrefixSums", requiredWidth, requiredHeight, RenderTextureFormat.RFloat, true, 1);
+        return true;
+    }
+
+    static void ApplyEditorPreviewRenderOrder(MeshRenderer renderer, RenderTexture renderOrder, int actualSplatCount)
+    {
+        if (renderer == null)
+        {
+            return;
+        }
+
+        Material[] materials = renderer.sharedMaterials;
+        if (materials == null)
+        {
+            return;
+        }
+
+        MaterialPropertyBlock propertyBlock = GetEditorPreviewPropertyBlock();
+
+        for (int i = 0; i < materials.Length; i++)
+        {
+            renderer.GetPropertyBlock(propertyBlock, i);
+            propertyBlock.SetTexture("_GS_RenderOrder", renderOrder);
+            propertyBlock.SetInt("_ActualSplatCount", actualSplatCount);
+            renderer.SetPropertyBlock(propertyBlock, i);
+            propertyBlock.Clear();
+        }
+    }
+
+    static void ClearEditorPreviewRenderOrder(MeshRenderer renderer)
+    {
+        if (renderer == null)
+        {
+            return;
+        }
+
+        Material[] materials = renderer.sharedMaterials;
+        if (materials == null)
+        {
+            return;
+        }
+
+        for (int i = 0; i < materials.Length; i++)
+        {
+            renderer.SetPropertyBlock(null, i);
+        }
+    }
+
+    static EditorPreviewTargetState GetOrCreateEditorPreviewTargetState(GaussianSplatObject splatObject, MeshRenderer sortedRenderer, int requiredWidth, int requiredHeight)
+    {
+        int targetId = splatObject.GetInstanceID();
+        if (!_editorPreviewTargets.TryGetValue(targetId, out EditorPreviewTargetState state))
+        {
+            state = new EditorPreviewTargetState();
+            _editorPreviewTargets[targetId] = state;
+        }
+
+        state.sortedRenderer = sortedRenderer;
+        state.generation = _editorPreviewGeneration;
+        EnsureTemporarySortRenderTexture(ref state.renderOrder, sortedRenderer.name + "_EditorPreviewRenderOrder", requiredWidth, requiredHeight, RenderTextureFormat.RFloat, false, 2);
+        return state;
+    }
+
+    static void ReleaseEditorPreviewTargetState(int targetId, EditorPreviewTargetState state)
+    {
+        if (state != null)
+        {
+            ClearEditorPreviewRenderOrder(state.sortedRenderer);
+            ReleaseTemporarySortRenderTexture(ref state.renderOrder);
+        }
+
+        _editorPreviewTargets.Remove(targetId);
+    }
+
+    static void CleanupUnusedEditorPreviewTargets()
+    {
+        if (_editorPreviewTargets.Count == 0)
+        {
+            return;
+        }
+
+        List<int> staleTargetIds = new List<int>();
+        foreach (KeyValuePair<int, EditorPreviewTargetState> pair in _editorPreviewTargets)
+        {
+            EditorPreviewTargetState state = pair.Value;
+            if (state == null || state.generation != _editorPreviewGeneration)
+            {
+                staleTargetIds.Add(pair.Key);
+            }
+        }
+
+        for (int i = 0; i < staleTargetIds.Count; i++)
+        {
+            int staleTargetId = staleTargetIds[i];
+            if (_editorPreviewTargets.TryGetValue(staleTargetId, out EditorPreviewTargetState staleState))
+            {
+                ReleaseEditorPreviewTargetState(staleTargetId, staleState);
+            }
+        }
+    }
+
+    static bool ShouldProcessEditorPreviewSplatObject(GaussianSplatObject splatObject)
+    {
+        if (!IsSceneSplatObject(splatObject, default(UnityEngine.SceneManagement.Scene)))
+        {
+            return false;
+        }
+
+        if (splatObject.enabled == false || !splatObject.gameObject.activeInHierarchy)
+        {
+            return false;
+        }
+
+        return FindExistingSceneRenderer(splatObject.gameObject.scene) == null;
+    }
+
+    static void SortOrphanEditorPreview(GaussianSplatObject splatObject, Camera camera)
+    {
+        if (splatObject == null || camera == null)
+        {
+            return;
+        }
+
+        MeshRenderer sortedRenderer = splatObject.GetSortedRenderer();
+        if (sortedRenderer == null)
+        {
+            return;
+        }
+
+        Material[] materials = sortedRenderer.sharedMaterials;
+        Material positionsMaterial = ResolvePrimarySplatMaterial(materials);
+        if (positionsMaterial == null || !positionsMaterial.HasProperty("_GS_Positions"))
+        {
+            return;
+        }
+
+        Texture positionsTexture = positionsMaterial.GetTexture("_GS_Positions");
+        if (positionsTexture == null)
+        {
+            return;
+        }
+
+        int textureElementCount = positionsTexture.width * positionsTexture.height;
+        int actualSplatCount = positionsMaterial.HasProperty("_ActualSplatCount") ? positionsMaterial.GetInt("_ActualSplatCount") : 0;
+        int elementCount = actualSplatCount > 0 && actualSplatCount <= textureElementCount ? actualSplatCount : textureElementCount;
+        if (elementCount <= 0)
+        {
+            return;
+        }
+
+        ComputeRequiredSortTextureSize(elementCount, out int requiredWidth, out int requiredHeight);
+        if (!EnsureEditorPreviewSorter(requiredWidth, requiredHeight))
+        {
+            return;
+        }
+
+        EditorPreviewTargetState state = GetOrCreateEditorPreviewTargetState(splatObject, sortedRenderer, requiredWidth, requiredHeight);
+        ApplyEditorPreviewRenderOrder(sortedRenderer, state.renderOrder, elementCount);
+
+        _editorPreviewRadixSort.elementCount = elementCount;
+        Material keyValuesMaterial = _editorPreviewRadixSort.computeKeyValues;
+        keyValuesMaterial.SetTexture("_GS_Positions", positionsTexture);
+        keyValuesMaterial.SetInt("_GS_Positions_CoordMask", positionsMaterial.HasProperty("_GS_Positions_CoordMask") ? positionsMaterial.GetInt("_GS_Positions_CoordMask") : 0);
+        keyValuesMaterial.SetInt("_GS_Positions_CoordShift", positionsMaterial.HasProperty("_GS_Positions_CoordShift") ? positionsMaterial.GetInt("_GS_Positions_CoordShift") : 0);
+        keyValuesMaterial.SetVector("_CameraPos", sortedRenderer.transform.InverseTransformPoint(camera.transform.position));
+
+        _editorPreviewRadixSort.BeginSortForEditor();
+        _editorPreviewRadixSort.StepSortForEditor(RadixSort.TotalSortPasses);
+        _editorPreviewRadixSort.CopySortedOrderForEditor(state.renderOrder, SCREEN_CAMERA_ID);
+        splatObject.ShowSorted();
+    }
+
+    static void SortOrphanEditorPreviews(Camera camera)
+    {
+        GaussianSplatObject[] sceneSplatObjects = Resources.FindObjectsOfTypeAll<GaussianSplatObject>();
+        for (int i = 0; i < sceneSplatObjects.Length; i++)
+        {
+            GaussianSplatObject splatObject = sceneSplatObjects[i];
+            if (!ShouldProcessEditorPreviewSplatObject(splatObject))
+            {
+                continue;
+            }
+
+            SortOrphanEditorPreview(splatObject, camera);
+        }
+    }
+
+    static void OnEditorCameraPreCull(Camera camera)
+    {
+        if (camera == null || Application.isPlaying || camera.cameraType != CameraType.SceneView)
+        {
+            return;
+        }
+
+        _editorPreviewGeneration++;
+
+        GaussianSplatRenderer[] sceneRenderers = FindSceneRenderers();
+        for (int i = 0; i < sceneRenderers.Length; i++)
+        {
+            GaussianSplatRenderer renderer = sceneRenderers[i];
+            if (!ShouldProcessEditorRenderer(renderer))
+            {
+                continue;
+            }
+
+            renderer.SortEditorCamera(camera);
+        }
+
+        SortOrphanEditorPreviews(camera);
+        CleanupUnusedEditorPreviewTargets();
+    }
+
+    static bool ShouldProcessEditorRenderer(GaussianSplatRenderer renderer)
+    {
+        if (renderer == null || !renderer.enabled)
+        {
+            return false;
+        }
+
+        GameObject rootObject = renderer.transform.root != null ? renderer.transform.root.gameObject : renderer.gameObject;
+        if (rootObject == null || EditorUtility.IsPersistent(rootObject))
+        {
+            return false;
+        }
+
+        if (!ShouldUseEditorPreviewScene(rootObject.scene))
+        {
+            return false;
+        }
+
+        return (renderer.hideFlags & (HideFlags.HideAndDontSave | HideFlags.NotEditable)) == 0;
     }
 
     static void OnEditorHierarchyChanged()
@@ -1625,7 +2138,6 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
             if (renderer.IsCombinedRenderingMode())
             {
                 renderer.UpdateSortingResourceTextures();
-                changed = true;
             }
 
             if (changed)
@@ -1633,6 +2145,8 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
                 EditorUtility.SetDirty(renderer);
             }
         }
+
+        CleanupUnusedEditorPreviewTargets();
 
         GaussianSplatRendererUI.RequestEditorRefresh();
     }
@@ -1656,6 +2170,11 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
             }
 
             if ((renderer.hideFlags & (HideFlags.HideAndDontSave | HideFlags.NotEditable)) != 0)
+            {
+                continue;
+            }
+
+            if (!ShouldUseEditorPreviewScene(rootObject.scene))
             {
                 continue;
             }
@@ -1795,16 +2314,37 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
     bool RefreshCachedSceneSplatObjects()
     {
         GaussianSplatObject[] sceneObjects = CollectSceneSplatObjects(gameObject.scene, true);
-        if (SplatObjectArraysMatch(cachedSceneSplatObjects, sceneObjects))
+        GameObject[] sceneObjectRoots = new GameObject[sceneObjects.Length];
+        for (int i = 0; i < sceneObjects.Length; i++)
+        {
+            GaussianSplatObject sceneObject = sceneObjects[i];
+            sceneObjectRoots[i] = sceneObject != null ? sceneObject.gameObject : null;
+        }
+
+        bool changed = !SplatObjectArraysMatch(cachedSceneSplatObjects, sceneObjectRoots);
+        for (int i = 0; i < sceneObjects.Length; i++)
+        {
+            GaussianSplatObject sceneObject = sceneObjects[i];
+            if (sceneObject == null || sceneObject.gaussianSplatRenderer == this)
+            {
+                continue;
+            }
+
+            sceneObject.gaussianSplatRenderer = this;
+            EditorUtility.SetDirty(sceneObject);
+            changed = true;
+        }
+
+        if (!changed)
         {
             return false;
         }
 
-        cachedSceneSplatObjects = sceneObjects;
+        cachedSceneSplatObjects = sceneObjectRoots;
         return true;
     }
 
-    static bool SplatObjectArraysMatch(GaussianSplatObject[] left, GaussianSplatObject[] right)
+    static bool SplatObjectArraysMatch(GameObject[] left, GameObject[] right)
     {
         if (ReferenceEquals(left, right))
         {
@@ -2744,9 +3284,6 @@ public class GaussianSplatRenderer : UdonSharpBehaviour
 
         string resourceFolderPath = GetSortResourceFolderPath();
         string assetPrefix = SanitizeAssetName(name);
-
-        Undo.RecordObject(this, "Update Gaussian Splat Sorting Resources");
-        Undo.RecordObject(radixSort, "Update Gaussian Splat Sorting Resources");
 
         bool resourcesChanged = false;
         resourcesChanged |= EnsureSortRenderTexture(ref radixSort.keyValues0, resourceFolderPath, assetPrefix + "_KeyValues0", requiredWidth, requiredHeight, RenderTextureFormat.RGFloat, false, 1);

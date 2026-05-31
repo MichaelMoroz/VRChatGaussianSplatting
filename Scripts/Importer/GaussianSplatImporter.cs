@@ -334,6 +334,8 @@ namespace GaussianSplatting
             GaussianSplatObject splatObject = go.GetComponent<GaussianSplatObject>();
             if (splatObject == null)
                 splatObject = go.AddUdonSharpComponent<GaussianSplatObject>();
+            splatObject.gaussianSplatRenderer = null;
+            splatObject.sortedObject = null;
             splatObject.sortedRenderer = meshRenderer;
             splatObject.SetMaxSHBand(Mathf.Clamp(maxSHBand, 0, 3));
             UdonSharpEditorUtility.CopyProxyToUdon(splatObject);

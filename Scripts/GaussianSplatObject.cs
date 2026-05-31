@@ -17,7 +17,7 @@ namespace GaussianSplatting
 #if UNITY_EDITOR && !COMPILER_UDONSHARP
         void Reset()
         {
-            EnsureSceneRenderer(true);
+            EnsureSceneRenderer(false);
         }
 
         void EnsureSceneRenderer(bool createIfMissing)
@@ -54,6 +54,14 @@ namespace GaussianSplatting
 
             return GaussianSplatRenderer.FindExistingSceneRenderer(gameObject.scene);
 #else
+            if (gaussianSplatRenderer == null)
+            {
+                GameObject rendererObject = GameObject.Find("GaussianSplatRenderer");
+                if (rendererObject != null)
+                {
+                    gaussianSplatRenderer = rendererObject.GetComponent<GaussianSplatRenderer>();
+                }
+            }
             return gaussianSplatRenderer;
 #endif
         }
