@@ -34,7 +34,7 @@ namespace GaussianSplatting
         const float SHNonZeroEpsilon = 1e-8f;
         const int MaxImportSplatCount = 4096 * 4096;
 
-        internal readonly struct TextureLayout
+        public readonly struct TextureLayout
         {
             public readonly int Width;
             public readonly int Height;
@@ -48,7 +48,7 @@ namespace GaussianSplatting
             public int Capacity => Width * Height;
         }
 
-        internal readonly struct PassInfo
+        public readonly struct PassInfo
         {
             public readonly int PassIndex;
             public readonly int SplatOffset;
@@ -109,7 +109,7 @@ namespace GaussianSplatting
             return candidate.Width > best.Width;
         }
 
-        internal static TextureLayout ChoosePotTextureLayout(int texelCount)
+        public static TextureLayout ChoosePotTextureLayout(int texelCount)
         {
             const int minWidth = 4;
             if (texelCount <= 0)
@@ -181,7 +181,72 @@ namespace GaussianSplatting
             return shift;
         }
 
-        internal static PassInfo[] CreatePassLayout(int splatCount, int requestedSplatsPerPass, int maxAlphaMaskCount, bool useSRGB)
+        public static void ConfigureSplatMaterial(
+            Material splatMat,
+            Texture positions,
+            Texture colors,
+            Texture rotations,
+            Texture scales,
+            Texture sh,
+            int shCoeffCount,
+            int shCoeffStride,
+            Vector4 shMin,
+            Vector4 shRange,
+            int actualSplatCount,
+            float shBand,
+            Texture colorsCamera,
+            bool useCameraColorArray,
+            Texture precomputedSort,
+            int splatCount,
+            int splatOffset)
+        {
+            splatMat.SetTexture("_GS_Positions", positions);
+            int positionBlocksPerRow = Mathf.Max(1, (positions != null ? positions.width : 1) >> 2);
+            splatMat.SetInt("_GS_Positions_CoordMask", positionBlocksPerRow - 1);
+            splatMat.SetInt("_GS_Positions_CoordShift", ComputeTextureCoordShift(positionBlocksPerRow));
+            splatMat.SetTexture("_GS_Colors", colors);
+            splatMat.SetTexture("_GS_Rotations", rotations);
+            splatMat.SetTexture("_GS_Scales", scales);
+            splatMat.SetTexture("_GS_SH", sh);
+
+            int shBlocksPerRow = Mathf.Max(1, (sh != null ? sh.width : 1) >> 2);
+            splatMat.SetInt("_GS_SH_CoordMask", sh != null ? shBlocksPerRow - 1 : 0);
+            splatMat.SetInt("_GS_SH_CoordShift", sh != null ? ComputeTextureCoordShift(shBlocksPerRow) : 0);
+            splatMat.SetInt("_GS_SH_CoeffCount", shCoeffCount);
+            splatMat.SetInt("_GS_SH_CoeffStride", shCoeffStride);
+            splatMat.SetVector("_GS_SH_Min", shMin);
+            splatMat.SetVector("_GS_SH_Range", shRange);
+            splatMat.SetInt("_ActualSplatCount", actualSplatCount);
+            splatMat.SetFloat("_SHBand", shBand);
+
+            splatMat.SetTexture("_GS_ColorsCamera", colorsCamera);
+            splatMat.SetFloat("_GS_CameraColorArray", useCameraColorArray ? 1.0f : 0.0f);
+            if (useCameraColorArray) splatMat.EnableKeyword("GS_CAMERA_COLOR_ARRAY");
+            else splatMat.DisableKeyword("GS_CAMERA_COLOR_ARRAY");
+
+            if (precomputedSort != null)
+            {
+                splatMat.SetTexture("_GS_RenderOrderPrecomputed", precomputedSort);
+                int renderOrderBlocksPerRow = Mathf.Max(1, precomputedSort.width >> 2);
+                splatMat.SetInt("_GS_RenderOrderPrecomputed_CoordMask", renderOrderBlocksPerRow - 1);
+                splatMat.SetInt("_GS_RenderOrderPrecomputed_CoordShift", ComputeTextureCoordShift(renderOrderBlocksPerRow));
+                splatMat.SetInteger("_PRECOMPUTED_SORTING", 1);
+                splatMat.EnableKeyword("_PRECOMPUTED_SORTING_ON");
+            }
+            else
+            {
+                splatMat.SetTexture("_GS_RenderOrderPrecomputed", null);
+                splatMat.SetInt("_GS_RenderOrderPrecomputed_CoordMask", 0);
+                splatMat.SetInt("_GS_RenderOrderPrecomputed_CoordShift", 0);
+                splatMat.SetInteger("_PRECOMPUTED_SORTING", 0);
+                splatMat.DisableKeyword("_PRECOMPUTED_SORTING_ON");
+            }
+
+            splatMat.SetInt("_SplatCount", splatCount);
+            splatMat.SetInt("_SplatOffset", splatOffset);
+        }
+
+        public static PassInfo[] CreatePassLayout(int splatCount, int requestedSplatsPerPass, int maxAlphaMaskCount, bool useSRGB)
         {
             if (splatCount <= 0)
             {
@@ -214,7 +279,7 @@ namespace GaussianSplatting
             return passes.ToArray();
         }
 
-        internal static void AppendMeshLayout(List<int> indexCounts, List<MeshTopology> topologies, PassInfo[] passInfos, bool useSRGB)
+        public static void AppendMeshLayout(List<int> indexCounts, List<MeshTopology> topologies, PassInfo[] passInfos, bool useSRGB)
         {
             if (useSRGB)
             {
@@ -242,7 +307,7 @@ namespace GaussianSplatting
             }
         }
 
-        internal static Mesh CreateMultiPassMesh(List<int> indexCounts, List<MeshTopology> topologies, Bounds bounds)
+        public static Mesh CreateMultiPassMesh(List<int> indexCounts, List<MeshTopology> topologies, Bounds bounds)
         {
             Mesh mesh = new Mesh();
             mesh.vertices = new Vector3[3];
@@ -675,47 +740,28 @@ namespace GaussianSplatting
                         splatMat = new Material(mainMat); // copy the base pass settings without relying on parent inheritance
                     }
 
-                    splatMat.SetTexture("_GS_Positions", xyzTex);
-                    int positionBlocksPerRow = Mathf.Max(1, (xyzTex != null ? xyzTex.width : 1) >> 2);
-                    splatMat.SetInt("_GS_Positions_CoordMask", positionBlocksPerRow - 1);
-                    splatMat.SetInt("_GS_Positions_CoordShift", ComputeTextureCoordShift(positionBlocksPerRow));
-                    splatMat.SetTexture("_GS_Colors", colDcTex);
-                    splatMat.SetTexture("_GS_Rotations", rotTex);
-                    splatMat.SetTexture("_GS_Scales", scaleTex);
-                    splatMat.SetTexture("_GS_SH", shTex);
-                    int shBlocksPerRow = Mathf.Max(1, (shTex != null ? shTex.width : 1) >> 2);
-                    splatMat.SetInt("_GS_SH_CoordMask", shBlocksPerRow - 1);
-                    splatMat.SetInt("_GS_SH_CoordShift", ComputeTextureCoordShift(shBlocksPerRow));
-                    splatMat.SetInt("_GS_SH_CoeffCount", importedSHCoeffCount);
-                    splatMat.SetInt("_GS_SH_CoeffStride", n);
-                    splatMat.SetVector("_GS_SH_Min", new Vector4(sharedShMin.x, sharedShMin.y, sharedShMin.z, 0f));
-                    splatMat.SetVector("_GS_SH_Range", new Vector4(
-                        Mathf.Max(sharedShRange.x, shRangeEpsilon),
-                        Mathf.Max(sharedShRange.y, shRangeEpsilon),
-                        Mathf.Max(sharedShRange.z, shRangeEpsilon),
-                        0f));
-                    splatMat.SetInt("_ActualSplatCount", n);
-                    splatMat.SetFloat("_SHBand", (float)effectiveDefaultSHBand);
-                    splatMat.SetTexture("_GS_ColorsCamera", null);
-                    splatMat.SetFloat("_GS_CameraColorArray", 0.0f);
-                    splatMat.DisableKeyword("GS_CAMERA_COLOR_ARRAY");
-                    if(precomputeSorting)
-                    {
-                        splatMat.SetTexture("_GS_RenderOrderPrecomputed", sortedTex);
-                        int renderOrderBlocksPerRow = Mathf.Max(1, (sortedTex != null ? sortedTex.width : 1) >> 2);
-                        splatMat.SetInt("_GS_RenderOrderPrecomputed_CoordMask", renderOrderBlocksPerRow - 1);
-                        splatMat.SetInt("_GS_RenderOrderPrecomputed_CoordShift", ComputeTextureCoordShift(renderOrderBlocksPerRow));
-                        splatMat.SetInteger("_PRECOMPUTED_SORTING", 1);
-                        splatMat.EnableKeyword("_PRECOMPUTED_SORTING_ON");
-                    }
-                    else
-                    {
-                        splatMat.SetTexture("_GS_RenderOrderPrecomputed", null);
-                        splatMat.SetInt("_GS_RenderOrderPrecomputed_CoordMask", 0);
-                        splatMat.SetInt("_GS_RenderOrderPrecomputed_CoordShift", 0);
-                        splatMat.SetInteger("_PRECOMPUTED_SORTING", 0);
-                        splatMat.DisableKeyword("_PRECOMPUTED_SORTING_ON");
-                    }
+                    ConfigureSplatMaterial(
+                        splatMat,
+                        xyzTex,
+                        colDcTex,
+                        rotTex,
+                        scaleTex,
+                        shTex,
+                        importedSHCoeffCount,
+                        n,
+                        new Vector4(sharedShMin.x, sharedShMin.y, sharedShMin.z, 0f),
+                        new Vector4(
+                            Mathf.Max(sharedShRange.x, shRangeEpsilon),
+                            Mathf.Max(sharedShRange.y, shRangeEpsilon),
+                            Mathf.Max(sharedShRange.z, shRangeEpsilon),
+                            0f),
+                        n,
+                        (float)effectiveDefaultSHBand,
+                        null,
+                        false,
+                        precomputeSorting ? sortedTex : null,
+                        passInfo.SplatCount,
+                        passInfo.SplatOffset);
 
                     if(passInfo.HasAlphaMask) {
                         // Create alpha depth mask pass
@@ -724,8 +770,6 @@ namespace GaussianSplatting
                         materials.Add(alphaDepthMask);
                     }
                     splatMat.name = splatMatName;
-                    splatMat.SetInt("_SplatCount", passInfo.SplatCount);
-                    splatMat.SetInt("_SplatOffset", passInfo.SplatOffset);
                     materials.Add(splatMat);
                 }
 
@@ -781,17 +825,89 @@ namespace GaussianSplatting
             return tex;
         }
 
+        public static string SanitizeAssetName(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+            {
+                return "GaussianSplatRenderer";
+            }
+
+            char[] invalidChars = Path.GetInvalidFileNameChars();
+            char[] chars = value.ToCharArray();
+            for (int i = 0; i < chars.Length; i++)
+            {
+                if (Array.IndexOf(invalidChars, chars[i]) >= 0)
+                {
+                    chars[i] = '_';
+                }
+            }
+
+            return new string(chars);
+        }
+
+        public static void EnsureFolderExists(string folderPath)
+        {
+            if (string.IsNullOrEmpty(folderPath) || AssetDatabase.IsValidFolder(folderPath))
+            {
+                return;
+            }
+
+            string[] parts = folderPath.Replace('\\', '/').Split('/');
+            string currentPath = parts[0];
+            for (int i = 1; i < parts.Length; i++)
+            {
+                string nextPath = currentPath + "/" + parts[i];
+                if (!AssetDatabase.IsValidFolder(nextPath))
+                {
+                    AssetDatabase.CreateFolder(currentPath, parts[i]);
+                }
+
+                currentPath = nextPath;
+            }
+        }
+
+        public static string GetSceneTempResourceFolderPath(UnityEngine.SceneManagement.Scene scene, string subfolder)
+        {
+            string sceneName = scene.name;
+            if (string.IsNullOrEmpty(sceneName) && !string.IsNullOrEmpty(scene.path))
+            {
+                sceneName = Path.GetFileNameWithoutExtension(scene.path);
+            }
+
+            string rootPath = "Assets/Temp/GS_" + SanitizeAssetName(string.IsNullOrEmpty(sceneName) ? "UnsavedScene" : sceneName);
+            if (string.IsNullOrEmpty(subfolder))
+            {
+                return rootPath;
+            }
+
+            return rootPath + "/" + subfolder.TrimStart('/');
+        }
+
+        public static Material CreateMaterialFromTemplate(Material template, string shaderName, string materialName)
+        {
+            Shader shader = template != null ? template.shader : Shader.Find(shaderName);
+            if (shader == null)
+            {
+                return null;
+            }
+
+            Material material = template != null ? new Material(template) : new Material(shader);
+            material.name = materialName;
+            return material;
+        }
+
         public static T CreateOrReplaceAsset<T>(T asset, string path) where T : UnityEngine.Object
         {
             string assetName = Path.GetFileNameWithoutExtension(path);
             asset.name = assetName;
 
             T savedAsset = null;
+            bool createdAsset = false;
 
             T existing = AssetDatabase.LoadAssetAtPath<T>(path);
             if (existing != null)
             {
-                EditorUtility.CopySerialized(asset, existing);
+                EditorUtility.CopySerializedIfDifferent(asset, existing);
                 savedAsset = existing;
                 UnityEngine.Object.DestroyImmediate(asset);
             }
@@ -805,14 +921,16 @@ namespace GaussianSplatting
 
                 AssetDatabase.CreateAsset(asset, path);
                 savedAsset = AssetDatabase.LoadAssetAtPath<T>(path) ?? asset;
+                createdAsset = true;
             }
 
+            bool renamedAsset = savedAsset != null && savedAsset.name != assetName;
             if (savedAsset != null && savedAsset.name != assetName)
             {
                 savedAsset.name = assetName;
             }
 
-            if (savedAsset != null)
+            if (savedAsset != null && (createdAsset || renamedAsset))
             {
                 EditorUtility.SetDirty(savedAsset);
             }

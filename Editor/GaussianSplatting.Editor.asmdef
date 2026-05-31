@@ -4,6 +4,7 @@
     "references": [
         "GaussianSplatting",
         "RadixSort",
+        "Unity.TextMeshPro",
         "UdonSharp.Runtime",
         "UdonSharp.Editor"
     ],

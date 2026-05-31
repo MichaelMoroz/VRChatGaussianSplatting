@@ -12,7 +12,8 @@
         "GUID:6490804aa441dfe4b88eb56cccbdf081",
         "GUID:3456780c4fb2d324ab9c633d6f1b0ddb",
         "GUID:99835874ee819da44948776e0df4ff1d",
-        "GUID:bc5b6639936e3f6438fa6930c41e8dc1"
+        "GUID:bc5b6639936e3f6438fa6930c41e8dc1",
+        "Unity.TextMeshPro"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

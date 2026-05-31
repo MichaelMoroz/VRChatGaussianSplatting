@@ -1,4 +1,5 @@
 using UdonSharp;
+using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 using VRC.SDKBase;
@@ -16,43 +17,24 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
 {
     const int LanguageEnglish = 0;
     const int LanguageJapanese = 1;
+    const int SliderShBand = 0;
+    const int SliderAntiAliasing = 1;
+    const int SliderLightVolumeIntensity = 2;
+    const int SliderAlphaCutoff = 3;
     const float DefaultAlphaCutoff = 0.03f;
+    const float MaxAlphaCutoff = 0.3f;
     const float DefaultPanelWidth = 1120.0f;
     const float CombinedPanelWidth = 560.0f;
     const float BackgroundPadding = 24.0f;
+    const float SliderChangeThreshold = 0.0001f;
 
     public GaussianSplatRenderer gaussianSplatRenderer;
-    public Text currentSplatText;
-    public Text sortingSectionText;
-    public Text cameraQuantizationLabelText;
-    public Text cameraQuantizationText;
-    public Text sortingStepsLabelText;
-    public Text sortingStepsText;
-    public Text alwaysUpdateLabelText;
-    public Button alwaysUpdateButton;
-    public Text materialSectionText;
-    public Text shBandLabelText;
-    public Slider shBandSlider;
-    public Text shBandText;
-    public Text vrcLightVolumesLabelText;
-    public Button vrcLightVolumesButton;
-    public Text antiAliasingLabelText;
-    public Slider antiAliasingSlider;
-    public Text antiAliasingText;
-    public Text lightVolumeIntensityLabelText;
-    public Slider lightVolumeIntensitySlider;
-    public Text lightVolumeIntensityText;
-    public Text gaussianScaleLabelText;
-    public Text gaussianScaleText;
-    public Text alphaCutoffLabelText;
-    public Slider alphaCutoffSlider;
-    public Text alphaCutoffText;
-    public Text languageSectionText;
-    public Button englishLanguageButton;
-    public Button japaneseLanguageButton;
-    public Text splatSectionText;
-    public Button splatScrollUpButton;
-    public Button splatScrollDownButton;
+    public TextMeshProUGUI currentSplatText, sortingSectionText, cameraQuantizationLabelText, cameraQuantizationText, sortingStepsLabelText, sortingStepsText;
+    public TextMeshProUGUI alwaysUpdateLabelText, materialSectionText, shBandLabelText, shBandText, vrcLightVolumesLabelText, antiAliasingLabelText, antiAliasingText;
+    public TextMeshProUGUI lightVolumeIntensityLabelText, lightVolumeIntensityText, gaussianScaleLabelText, gaussianScaleText, alphaCutoffLabelText, alphaCutoffText;
+    public TextMeshProUGUI languageSectionText, splatSectionText;
+    public Button alwaysUpdateButton, vrcLightVolumesButton, englishLanguageButton, japaneseLanguageButton, splatScrollUpButton, splatScrollDownButton;
+    public Slider shBandSlider, antiAliasingSlider, lightVolumeIntensitySlider, alphaCutoffSlider;
     public Button[] splatButtons;
     [HideInInspector] public GaussianSplatObject[] cachedSceneSplatObjects;
 
@@ -70,42 +52,30 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
 
     int _splatListStartIndex;
     bool _sliderValuesInitialized;
+    bool _layoutDefaultsInitialized;
     float _lastShBandSliderValue;
     float _lastAntiAliasingSliderValue;
     float _lastLightVolumeIntensitySliderValue;
     float _lastAlphaCutoffSliderValue;
+    float _defaultCanvasWidth;
+    float _defaultPanelWidth;
     GaussianSplatObject[] _sceneSplatObjects;
     RectTransform _canvasRect;
     RectTransform _panelRect;
     Transform _backgroundTransform;
     GameObject _splatColumnObject;
-    bool _layoutDefaultsInitialized;
-    float _defaultCanvasWidth;
-    float _defaultPanelWidth;
     Vector3 _defaultBackgroundScale;
 
     void Start()
     {
-#if UNITY_EDITOR && !COMPILER_UDONSHARP
-        if (!Application.isPlaying)
-        {
-            return;
-        }
-#endif
-
+        if (SkipRuntimeRefresh()) return;
         ApplySyncedSplatObjectSelection();
         RefreshUI();
     }
 
     void Update()
     {
-#if UNITY_EDITOR && !COMPILER_UDONSHARP
-        if (!Application.isPlaying)
-        {
-            return;
-        }
-#endif
-
+        if (SkipRuntimeRefresh()) return;
         RefreshUI();
     }
 
@@ -121,30 +91,16 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         EditorApplication.hierarchyChanged += RequestEditorRefresh;
     }
 
-    internal static void RequestEditorRefresh()
+    internal static void RequestEditorRefresh() { _editorRefreshRequested = true; }
+
+    static bool IsSceneObject(Component component)
     {
-        _editorRefreshRequested = true;
-    }
-
-    static bool IsSceneUi(GaussianSplatRendererUI ui)
-    {
-        if (ui == null)
+        if (component == null)
         {
             return false;
         }
-
-        GameObject rootObject = ui.transform.root != null ? ui.transform.root.gameObject : ui.gameObject;
-        if (rootObject == null || EditorUtility.IsPersistent(rootObject))
-        {
-            return false;
-        }
-
-        if ((ui.hideFlags & (HideFlags.HideAndDontSave | HideFlags.NotEditable)) != 0)
-        {
-            return false;
-        }
-
-        return true;
+        GameObject rootObject = component.transform.root != null ? component.transform.root.gameObject : component.gameObject;
+        return rootObject != null && !EditorUtility.IsPersistent(rootObject) && (component.hideFlags & (HideFlags.HideAndDontSave | HideFlags.NotEditable)) == 0;
     }
 
     static void RefreshEditorUis()
@@ -153,23 +109,19 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         {
             return;
         }
-
         _editorRefreshRequested = false;
-
         GaussianSplatRendererUI[] sceneUis = Resources.FindObjectsOfTypeAll<GaussianSplatRendererUI>();
         for (int i = 0; i < sceneUis.Length; i++)
         {
             GaussianSplatRendererUI ui = sceneUis[i];
-            if (!IsSceneUi(ui))
+            if (!IsSceneObject(ui))
             {
                 continue;
             }
-
             if (ui.SyncEditorSerializedState())
             {
                 EditorUtility.SetDirty(ui);
             }
-
             ui.RefreshUI();
         }
     }
@@ -179,219 +131,90 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         SyncEditorSerializedState();
         RequestEditorRefresh();
     }
-#endif
 
-    string FormatFloat(float value)
-    {
-        float roundedValue = Mathf.Round(value * 100.0f) * 0.01f;
-        return roundedValue.ToString();
-    }
-
-    string Localize(string english, string japanese)
-    {
-        return selectedLanguage == LanguageJapanese ? japanese : english;
-    }
-
-    string GetCurrentSplatPrefix()
-    {
-        return Localize("Current Splat: ", "現在のスプラット: ");
-    }
-
-    string GetCurrentSplatNoneLabel()
-    {
-        return Localize("Current Splat: None", "現在のスプラット: なし");
-    }
-
-    string GetToggleOnLabel()
-    {
-        return Localize("On", "オン");
-    }
-
-    string GetToggleOffLabel()
-    {
-        return Localize("Off", "オフ");
-    }
-
-    string GetScrollUpLabel()
-    {
-        return Localize("Up", "上へ");
-    }
-
-    string GetScrollDownLabel()
-    {
-        return Localize("Down", "下へ");
-    }
-
-    string GetRenderingSuffix()
-    {
-        return Localize(" (Rendering)", " (表示中)");
-    }
-
-    string GetEnabledSuffix()
-    {
-        return Localize(" (On)", " (有効)");
-    }
-
-    Text ResolveSubtitleText()
-    {
-        Transform subtitleTransform = transform.Find("Panel/Body Row/Settings Column/Subtitle");
-        if (subtitleTransform == null)
-        {
-            return null;
-        }
-
-        return (Text)subtitleTransform.GetComponent(typeof(Text));
-    }
-
-    void RefreshLocalizedLabels()
-    {
-        Text subtitleText = ResolveSubtitleText();
-        if (subtitleText != null)
-        {
-            subtitleText.text = Localize(
-                "Github: https://github.com/MichaelMoroz/VRChatGaussianSplatting\nDeveloped by misha_m",
-                "Github: https://github.com/MichaelMoroz/VRChatGaussianSplatting\n開発: misha_m");
-        }
-
-        if (sortingSectionText != null)
-        {
-            sortingSectionText.text = Localize("Sorting Settings", "ソート設定");
-        }
-
-        if (cameraQuantizationLabelText != null)
-        {
-            cameraQuantizationLabelText.text = Localize("Camera move amount to trigger resort", "再ソートするカメラ移動量");
-        }
-
-        if (sortingStepsLabelText != null)
-        {
-            sortingStepsLabelText.text = Localize("Pipeline sort over N frames", "ソートを N フレームに分散");
-        }
-
-        if (alwaysUpdateLabelText != null)
-        {
-            alwaysUpdateLabelText.text = Localize("Sort every frame", "毎フレームソート");
-        }
-
-        if (materialSectionText != null)
-        {
-            materialSectionText.text = Localize("Material Settings", "マテリアル設定");
-        }
-
-        if (shBandLabelText != null)
-        {
-            shBandLabelText.text = Localize("SH Band (global)", "SH バンド (共有)");
-        }
-
-        if (vrcLightVolumesLabelText != null)
-        {
-            vrcLightVolumesLabelText.text = Localize("VRC Light Volumes (global)", "VRC Light Volumes (共有)");
-        }
-
-        if (lightVolumeIntensityLabelText != null)
-        {
-            lightVolumeIntensityLabelText.text = Localize("Light Volume Intensity", "Light Volume Intensity");
-        }
-
-        if (antiAliasingLabelText != null)
-        {
-            antiAliasingLabelText.text = Localize("Antialiasing", "アンチエイリアス");
-        }
-
-        if (gaussianScaleLabelText != null)
-        {
-            gaussianScaleLabelText.text = Localize("Gaussian Scale (global)", "Gaussian Scale (共有)");
-        }
-
-        if (alphaCutoffLabelText != null)
-        {
-            alphaCutoffLabelText.text = Localize("Alpha Cutoff\n(lower = better quality)", "アルファカットオフ\n(低いほど高品質)");
-        }
-
-        if (languageSectionText != null)
-        {
-            languageSectionText.text = Localize("Language", "言語");
-        }
-
-        if (splatSectionText != null)
-        {
-            splatSectionText.text = Localize("Splat Object (global)", "スプラットオブジェクト (共有)");
-        }
-
-        RefreshLanguageButtons();
-    }
-
-    void RefreshLanguageButtons()
-    {
-        if (englishLanguageButton != null)
-        {
-            englishLanguageButton.interactable = true;
-            ApplyButtonVisual(englishLanguageButton, "English", selectedLanguage == LanguageEnglish ? _selectedSplatColor : _defaultSplatColor);
-        }
-
-        if (japaneseLanguageButton != null)
-        {
-            japaneseLanguageButton.interactable = true;
-            ApplyButtonVisual(japaneseLanguageButton, "日本語", selectedLanguage == LanguageJapanese ? _selectedSplatColor : _defaultSplatColor);
-        }
-    }
-
-    void FindRenderer()
-    {
-        if (gaussianSplatRenderer != null)
-        {
-            return;
-        }
-
-#if UNITY_EDITOR && !COMPILER_UDONSHARP
-        gaussianSplatRenderer = GaussianSplatRenderer.FindExistingSceneRenderer(gameObject.scene);
-#else
-        GameObject rendererObject = GameObject.Find("GaussianSplatRenderer");
-        if (rendererObject != null)
-        {
-            gaussianSplatRenderer = rendererObject.GetComponent<GaussianSplatRenderer>();
-        }
-#endif
-    }
-
-#if UNITY_EDITOR && !COMPILER_UDONSHARP
     bool SyncEditorSerializedState()
     {
         if (EditorUtility.IsPersistent(this))
         {
             return false;
         }
-
         GaussianSplatRenderer previousRenderer = gaussianSplatRenderer;
         GaussianSplatObject[] previousCachedSceneSplatObjects = cachedSceneSplatObjects;
-
         FindRenderer();
         RefreshSceneSplatObjects();
-
         return gaussianSplatRenderer != previousRenderer || !SplatObjectArraysMatch(previousCachedSceneSplatObjects, cachedSceneSplatObjects);
     }
 #endif
 
+    bool SkipRuntimeRefresh()
+    {
+#if UNITY_EDITOR && !COMPILER_UDONSHARP
+        return !Application.isPlaying;
+#else
+        return false;
+#endif
+    }
+
+    string Localize(string english, string japanese) { return selectedLanguage == LanguageJapanese ? japanese : english; }
+    string FormatFloat(float value) { return (Mathf.Round(value * 100.0f) * 0.01f).ToString(); }
+    string ToggleLabel(bool enabled) { return Localize(enabled ? "On" : "Off", enabled ? "オン" : "オフ"); }
+    string ScrollLabel(bool up) { return Localize(up ? "Up" : "Down", up ? "上へ" : "下へ"); }
+    string CurrentSplatNoneLabel() { return Localize("Current Splat: None", "現在のスプラット: なし"); }
+
+    void SetText(TextMeshProUGUI text, string value) { if (text != null && text.text != value) text.text = value; }
+    void SetLocalizedText(TextMeshProUGUI text, string english, string japanese) { SetText(text, Localize(english, japanese)); }
+    void SetActive(Component component, bool active) { if (component != null && component.gameObject.activeSelf != active) component.gameObject.SetActive(active); }
+    void SetInteractable(Selectable selectable, bool interactable) { if (selectable != null && selectable.interactable != interactable) selectable.interactable = interactable; }
+    void SetSliderWithoutNotify(Slider slider, float value) { if (slider != null && !Mathf.Approximately(slider.value, value)) slider.SetValueWithoutNotify(value); }
+    TextMeshProUGUI ResolveSubtitleText()
+    {
+        Transform subtitleTransform = transform.Find("Panel/Body Row/Settings Column/Subtitle");
+        return subtitleTransform != null ? subtitleTransform.GetComponent<TextMeshProUGUI>() : null;
+    }
+
+    void RefreshLocalizedLabels()
+    {
+        SetText(ResolveSubtitleText(), Localize(
+            "Github: https://github.com/MichaelMoroz/VRChatGaussianSplatting\nDeveloped by misha_m",
+            "Github: https://github.com/MichaelMoroz/VRChatGaussianSplatting\n開発: misha_m"));
+        SetLocalizedText(sortingSectionText, "Sorting Settings", "ソート設定");
+        SetLocalizedText(cameraQuantizationLabelText, "Camera move amount to trigger resort", "再ソートするカメラ移動量");
+        SetLocalizedText(sortingStepsLabelText, "Pipeline sort over N frames", "ソートを N フレームに分散");
+        SetLocalizedText(alwaysUpdateLabelText, "Sort every frame", "毎フレームソート");
+        SetLocalizedText(materialSectionText, "Material Settings", "マテリアル設定");
+        SetLocalizedText(shBandLabelText, "SH Band (global)", "SH バンド (共有)");
+        SetLocalizedText(vrcLightVolumesLabelText, "VRC Light Volumes (global)", "VRC Light Volumes (共有)");
+        SetLocalizedText(lightVolumeIntensityLabelText, "Light Volume Intensity", "Light Volume Intensity");
+        SetLocalizedText(antiAliasingLabelText, "Antialiasing", "アンチエイリアス");
+        SetLocalizedText(gaussianScaleLabelText, "Gaussian Scale (global)", "Gaussian Scale (共有)");
+        SetLocalizedText(alphaCutoffLabelText, "Alpha Cutoff\n(lower = better quality)", "アルファカットオフ\n(低いほど高品質)");
+        SetLocalizedText(languageSectionText, "Language", "言語");
+        SetLocalizedText(splatSectionText, "Splat Object (global)", "スプラットオブジェクト (共有)");
+        RefreshLanguageButtons();
+    }
+
+    void RefreshLanguageButtons()
+    {
+        if (englishLanguageButton != null) { SetInteractable(englishLanguageButton, true); ApplyButtonVisual(englishLanguageButton, "English", selectedLanguage == LanguageEnglish ? _selectedSplatColor : _defaultSplatColor); }
+        if (japaneseLanguageButton != null) { SetInteractable(japaneseLanguageButton, true); ApplyButtonVisual(japaneseLanguageButton, "日本語", selectedLanguage == LanguageJapanese ? _selectedSplatColor : _defaultSplatColor); }
+    }
+
+    void FindRenderer()
+    {
+        if (gaussianSplatRenderer != null) return;
+#if UNITY_EDITOR && !COMPILER_UDONSHARP
+        gaussianSplatRenderer = GaussianSplatRenderer.FindExistingSceneRenderer(gameObject.scene);
+#else
+        GameObject rendererObject = GameObject.Find("GaussianSplatRenderer");
+        if (rendererObject != null) gaussianSplatRenderer = rendererObject.GetComponent<GaussianSplatRenderer>();
+#endif
+    }
+
     static bool SplatObjectArraysMatch(GaussianSplatObject[] left, GaussianSplatObject[] right)
     {
-        if (ReferenceEquals(left, right))
-        {
-            return true;
-        }
-
-        if (left == null || right == null || left.Length != right.Length)
-        {
-            return false;
-        }
-
-        for (int i = 0; i < left.Length; i++)
-        {
-            if (left[i] != right[i])
-            {
-                return false;
-            }
-        }
-
+        if (left == right) return true;
+        if (left == null || right == null || left.Length != right.Length) return false;
+        for (int i = 0; i < left.Length; i++) if (left[i] != right[i]) return false;
         return true;
     }
 
@@ -403,35 +226,16 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         for (int i = 0; i < allObjects.Length; i++)
         {
             GaussianSplatObject currentObject = allObjects[i];
-            if (currentObject == null)
+            if (!IsSceneObject(currentObject) || currentObject.gameObject.scene != gameObject.scene)
             {
                 continue;
             }
-
-            GameObject rootObject = currentObject.transform.root != null ? currentObject.transform.root.gameObject : currentObject.gameObject;
-            if (rootObject == null || EditorUtility.IsPersistent(rootObject))
-            {
-                continue;
-            }
-
-            if ((currentObject.hideFlags & (HideFlags.HideAndDontSave | HideFlags.NotEditable)) != 0)
-            {
-                continue;
-            }
-
-            if (currentObject.gameObject.scene != gameObject.scene)
-            {
-                continue;
-            }
-
             sceneObjects.Add(currentObject);
         }
-
-        GaussianSplatObject[] resolvedSceneObjects = sceneObjects.ToArray();
-        _sceneSplatObjects = resolvedSceneObjects;
-        if (!SplatObjectArraysMatch(cachedSceneSplatObjects, resolvedSceneObjects))
+        _sceneSplatObjects = sceneObjects.ToArray();
+        if (!SplatObjectArraysMatch(cachedSceneSplatObjects, _sceneSplatObjects))
         {
-            cachedSceneSplatObjects = resolvedSceneObjects;
+            cachedSceneSplatObjects = _sceneSplatObjects;
         }
 #else
         if (cachedSceneSplatObjects != null && cachedSceneSplatObjects.Length > 0)
@@ -439,7 +243,6 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
             _sceneSplatObjects = cachedSceneSplatObjects;
             return;
         }
-
 #if COMPILER_UDONSHARP
         _sceneSplatObjects = new GaussianSplatObject[0];
 #else
@@ -448,78 +251,39 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
 #endif
     }
 
-    int GetSceneSplatCount()
-    {
-        return _sceneSplatObjects == null ? 0 : _sceneSplatObjects.Length;
-    }
-
-    GaussianSplatObject GetSceneSplatObject(int index)
-    {
-        if (_sceneSplatObjects == null || index < 0 || index >= _sceneSplatObjects.Length)
-        {
-            return null;
-        }
-
-        return _sceneSplatObjects[index];
-    }
-
     int FindSceneSplatObjectIndex(GaussianSplatObject targetSplatObject)
     {
-        if (targetSplatObject == null)
+        if (targetSplatObject == null || _sceneSplatObjects == null)
         {
             return -1;
         }
-
-        int totalSplatCount = GetSceneSplatCount();
-        for (int i = 0; i < totalSplatCount; i++)
+        for (int i = 0; i < _sceneSplatObjects.Length; i++)
         {
-            if (GetSceneSplatObject(i) == targetSplatObject)
+            if (_sceneSplatObjects[i] == targetSplatObject)
             {
                 return i;
             }
         }
-
         return -1;
     }
 
-    void EnsureLocalOwnership()
-    {
-        if (Networking.LocalPlayer != null)
-        {
-            Networking.SetOwner(Networking.LocalPlayer, gameObject);
-        }
-    }
-
-    void RequestSyncedSelectionUpdate()
-    {
-        if (Networking.LocalPlayer != null)
-        {
-            RequestSerialization();
-        }
-    }
+    void EnsureLocalOwnership() { if (Networking.LocalPlayer != null) Networking.SetOwner(Networking.LocalPlayer, gameObject); }
+    void RequestSyncedSelectionUpdate() { if (Networking.LocalPlayer != null) RequestSerialization(); }
 
     void ApplySplatObjectSelection(GaussianSplatObject selectedSplatObject)
     {
-        if (selectedSplatObject == null)
+        if (selectedSplatObject == null || _sceneSplatObjects == null)
         {
             return;
         }
-
-        int totalSplatCount = GetSceneSplatCount();
-        for (int i = 0; i < totalSplatCount; i++)
+        for (int i = 0; i < _sceneSplatObjects.Length; i++)
         {
-            GaussianSplatObject sceneSplatObject = GetSceneSplatObject(i);
-            if (sceneSplatObject == null)
-            {
-                continue;
-            }
-
-            if (!sceneSplatObject.gameObject.activeSelf)
+            GaussianSplatObject sceneSplatObject = _sceneSplatObjects[i];
+            if (sceneSplatObject != null && !sceneSplatObject.gameObject.activeSelf)
             {
                 sceneSplatObject.gameObject.SetActive(true);
             }
         }
-
         if (gaussianSplatRenderer != null)
         {
             gaussianSplatRenderer.NotifySplatObjectEnabled(selectedSplatObject);
@@ -533,17 +297,15 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
     bool ApplySyncedSplatObjectSelection()
     {
         RefreshSceneSplatObjects();
-        if (syncedSelectedSplatObjectIndex < 0 || syncedSelectedSplatObjectIndex >= GetSceneSplatCount())
+        if (_sceneSplatObjects == null || syncedSelectedSplatObjectIndex < 0 || syncedSelectedSplatObjectIndex >= _sceneSplatObjects.Length)
         {
             return false;
         }
-
-        GaussianSplatObject selectedSplatObject = GetSceneSplatObject(syncedSelectedSplatObjectIndex);
+        GaussianSplatObject selectedSplatObject = _sceneSplatObjects[syncedSelectedSplatObjectIndex];
         if (selectedSplatObject == null)
         {
             return false;
         }
-
         ApplySplatObjectSelection(selectedSplatObject);
         return true;
     }
@@ -556,23 +318,10 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         {
             return;
         }
-
         EnsureLocalOwnership();
         syncedSelectedSplatObjectIndex = selectedIndex;
         ApplySyncedSplatObjectSelection();
         RequestSyncedSelectionUpdate();
-    }
-
-    void SetButtonEnabled(Button button, bool enabled, string label, Color enabledColor, Color disabledColor)
-    {
-        if (button == null)
-        {
-            return;
-        }
-
-        button.gameObject.SetActive(true);
-        button.interactable = enabled;
-        ApplyButtonVisual(button, label, enabled ? enabledColor : disabledColor);
     }
 
     void ApplyButtonVisual(Button button, string labelText, Color backgroundColor)
@@ -581,67 +330,63 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         {
             return;
         }
-
         Image image = button.GetComponent<Image>();
         if (image != null)
         {
-            image.color = backgroundColor;
+            if (image.color != backgroundColor)
+            {
+                image.color = backgroundColor;
+            }
         }
-
         ColorBlock colors = button.colors;
         colors.normalColor = backgroundColor;
         colors.highlightedColor = backgroundColor * 1.1f;
         colors.pressedColor = backgroundColor * 0.85f;
         colors.selectedColor = backgroundColor;
         colors.disabledColor = new Color(backgroundColor.r, backgroundColor.g, backgroundColor.b, 0.4f);
-        button.colors = colors;
-
-        Text label = button.GetComponentInChildren<Text>();
-        if (label != null)
+        if (!button.colors.Equals(colors))
         {
-            label.text = labelText;
+            button.colors = colors;
         }
+        TextMeshProUGUI label = button.GetComponentInChildren<TextMeshProUGUI>();
+        SetText(label, labelText);
+    }
+
+    void SetButton(Button button, bool enabled, string label, Color enabledColor, Color disabledColor)
+    {
+        if (button == null)
+        {
+            return;
+        }
+        if (!button.gameObject.activeSelf)
+        {
+            button.gameObject.SetActive(true);
+        }
+        SetInteractable(button, enabled);
+        ApplyButtonVisual(button, label, enabled ? enabledColor : disabledColor);
     }
 
     void SetSplatListVisible(bool visible)
     {
-        if (splatSectionText != null)
-        {
-            splatSectionText.gameObject.SetActive(visible);
-        }
-
-        if (splatScrollUpButton != null)
-        {
-            splatScrollUpButton.gameObject.SetActive(visible);
-        }
-
-        if (splatScrollDownButton != null)
-        {
-            splatScrollDownButton.gameObject.SetActive(visible);
-        }
-
+        SetActive(splatSectionText, visible);
+        SetActive(splatScrollUpButton, visible);
+        SetActive(splatScrollDownButton, visible);
         if (splatButtons == null)
         {
             return;
         }
-
         for (int i = 0; i < splatButtons.Length; i++)
         {
-            Button slotButton = splatButtons[i];
-            if (slotButton != null)
-            {
-                slotButton.gameObject.SetActive(visible);
-            }
+            SetActive(splatButtons[i], visible);
         }
     }
 
-    void RefreshRenderingModeLayout(bool combinedMode)
+    void EnsureLayoutCache()
     {
         if (_canvasRect == null)
         {
             _canvasRect = (RectTransform)GetComponent(typeof(RectTransform));
         }
-
         if (_panelRect == null)
         {
             Transform panelTransform = transform.Find("Panel");
@@ -650,12 +395,10 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
                 _panelRect = (RectTransform)panelTransform.GetComponent(typeof(RectTransform));
             }
         }
-
         if (_backgroundTransform == null)
         {
             _backgroundTransform = transform.Find("Background");
         }
-
         if (_splatColumnObject == null)
         {
             Transform splatColumnTransform = transform.Find("Panel/Body Row/Splat Column");
@@ -664,32 +407,33 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
                 _splatColumnObject = splatColumnTransform.gameObject;
             }
         }
-
-        if (!_layoutDefaultsInitialized)
+        if (_layoutDefaultsInitialized)
         {
-            _defaultCanvasWidth = _canvasRect != null ? _canvasRect.sizeDelta.x : DefaultPanelWidth;
-            _defaultPanelWidth = _panelRect != null ? _panelRect.sizeDelta.x : DefaultPanelWidth;
-            _defaultBackgroundScale = _backgroundTransform != null ? _backgroundTransform.localScale : Vector3.one;
-            _layoutDefaultsInitialized = true;
+            return;
         }
+        _defaultCanvasWidth = _canvasRect != null ? _canvasRect.sizeDelta.x : DefaultPanelWidth;
+        _defaultPanelWidth = _panelRect != null ? _panelRect.sizeDelta.x : DefaultPanelWidth;
+        _defaultBackgroundScale = _backgroundTransform != null ? _backgroundTransform.localScale : Vector3.one;
+        _layoutDefaultsInitialized = true;
+    }
 
+    void RefreshRenderingModeLayout(bool combinedMode)
+    {
+        EnsureLayoutCache();
         if (_splatColumnObject != null && _splatColumnObject.activeSelf == combinedMode)
         {
             _splatColumnObject.SetActive(!combinedMode);
         }
-
         float targetWidth = combinedMode ? CombinedPanelWidth : _defaultCanvasWidth;
         if (_canvasRect != null && !Mathf.Approximately(_canvasRect.sizeDelta.x, targetWidth))
         {
             _canvasRect.sizeDelta = new Vector2(targetWidth, _canvasRect.sizeDelta.y);
         }
-
         float targetPanelWidth = combinedMode ? CombinedPanelWidth : _defaultPanelWidth;
         if (_panelRect != null && !Mathf.Approximately(_panelRect.sizeDelta.x, targetPanelWidth))
         {
             _panelRect.sizeDelta = new Vector2(targetPanelWidth, _panelRect.sizeDelta.y);
         }
-
         if (_backgroundTransform != null)
         {
             Vector3 targetScale = new Vector3(targetWidth + BackgroundPadding, _defaultBackgroundScale.y, _defaultBackgroundScale.z);
@@ -702,258 +446,192 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
 
     void RefreshSplatButtons()
     {
-        if (splatButtons == null)
-        {
-            return;
-        }
-
-        int visibleButtonCount = splatButtons.Length;
-        int totalSplatCount = GetSceneSplatCount();
+        int visibleButtonCount = splatButtons == null ? 0 : splatButtons.Length;
         bool combinedMode = gaussianSplatRenderer != null && gaussianSplatRenderer.IsCombinedRenderingMode();
-
         SetSplatListVisible(!combinedMode);
-        if (combinedMode)
+        if (visibleButtonCount == 0 || combinedMode)
         {
             return;
         }
-
+        int totalSplatCount = _sceneSplatObjects == null ? 0 : _sceneSplatObjects.Length;
         if (totalSplatCount == 0)
         {
             for (int i = 0; i < visibleButtonCount; i++)
             {
-                if (splatButtons[i] != null)
-                {
-                    SetButtonEnabled(splatButtons[i], false, "", _defaultSplatColor, _scrollDisabledColor);
-                }
+                SetButton(splatButtons[i], false, string.Empty, _defaultSplatColor, _scrollDisabledColor);
             }
-
-            SetButtonEnabled(splatScrollUpButton, false, GetScrollUpLabel(), _scrollEnabledColor, _scrollDisabledColor);
-            SetButtonEnabled(splatScrollDownButton, false, GetScrollDownLabel(), _scrollEnabledColor, _scrollDisabledColor);
+            SetButton(splatScrollUpButton, false, ScrollLabel(true), _scrollEnabledColor, _scrollDisabledColor);
+            SetButton(splatScrollDownButton, false, ScrollLabel(false), _scrollEnabledColor, _scrollDisabledColor);
             return;
         }
-
         int maxStartIndex = Mathf.Max(0, totalSplatCount - visibleButtonCount);
         _splatListStartIndex = Mathf.Clamp(_splatListStartIndex, 0, maxStartIndex);
-
+        GameObject currentSplatObject = gaussianSplatRenderer != null ? gaussianSplatRenderer.GetCurrentSplatObject() : null;
+        string renderingSuffix = Localize(" (Rendering)", " (表示中)");
+        string enabledSuffix = Localize(" (On)", " (有効)");
         for (int i = 0; i < visibleButtonCount; i++)
         {
             Button slotButton = splatButtons[i];
+            int splatDataIndex = _splatListStartIndex + i;
             if (slotButton == null)
             {
                 continue;
             }
-
-            int splatDataIndex = _splatListStartIndex + i;
-            bool hasSplat = splatDataIndex < totalSplatCount;
-            if (!hasSplat)
+            if (splatDataIndex >= totalSplatCount)
             {
-                SetButtonEnabled(slotButton, false, "", _defaultSplatColor, _scrollDisabledColor);
+                SetButton(slotButton, false, string.Empty, _defaultSplatColor, _scrollDisabledColor);
                 continue;
             }
-
-            GaussianSplatObject splatObject = GetSceneSplatObject(splatDataIndex);
+            GaussianSplatObject splatObject = _sceneSplatObjects[splatDataIndex];
             if (splatObject == null)
             {
-                SetButtonEnabled(slotButton, false, "", _defaultSplatColor, _scrollDisabledColor);
+                SetButton(slotButton, false, string.Empty, _defaultSplatColor, _scrollDisabledColor);
                 continue;
             }
-
-            bool isRendered = gaussianSplatRenderer != null && gaussianSplatRenderer.GetCurrentSplatObject() == splatObject.gameObject;
-            bool isActive = splatObject.gameObject.activeInHierarchy;
+            bool isRendered = currentSplatObject == splatObject.gameObject;
             string label = splatObject.gameObject.name;
             if (isRendered)
             {
-                label += GetRenderingSuffix();
+                label += renderingSuffix;
             }
-            else if (isActive)
+            else if (splatObject.gameObject.activeInHierarchy)
             {
-                label += GetEnabledSuffix();
+                label += enabledSuffix;
             }
-
-            SetButtonEnabled(slotButton, true, label, isRendered ? _selectedSplatColor : _defaultSplatColor, _scrollDisabledColor);
+            SetButton(slotButton, true, label, isRendered ? _selectedSplatColor : _defaultSplatColor, _scrollDisabledColor);
         }
-
-        SetButtonEnabled(splatScrollUpButton, _splatListStartIndex > 0, GetScrollUpLabel(), _scrollEnabledColor, _scrollDisabledColor);
-        SetButtonEnabled(splatScrollDownButton, _splatListStartIndex < maxStartIndex, GetScrollDownLabel(), _scrollEnabledColor, _scrollDisabledColor);
+        SetButton(splatScrollUpButton, _splatListStartIndex > 0, ScrollLabel(true), _scrollEnabledColor, _scrollDisabledColor);
+        SetButton(splatScrollDownButton, _splatListStartIndex < maxStartIndex, ScrollLabel(false), _scrollEnabledColor, _scrollDisabledColor);
     }
 
     void RefreshSortingControls()
     {
-        if (cameraQuantizationText != null)
-        {
-            cameraQuantizationText.text = FormatFloat(gaussianSplatRenderer.GetCameraPositionQuantization());
-        }
-
-        if (sortingStepsText != null)
-        {
-            sortingStepsText.text = gaussianSplatRenderer.GetSortPipelineFrames().ToString();
-        }
-
+        SetText(cameraQuantizationText, FormatFloat(gaussianSplatRenderer.GetCameraPositionQuantization()));
+        SetText(sortingStepsText, gaussianSplatRenderer.GetSortPipelineFrames().ToString());
         if (alwaysUpdateButton != null)
         {
-            bool combinedMode = gaussianSplatRenderer.IsCombinedRenderingMode();
             bool alwaysUpdate = gaussianSplatRenderer.GetAlwaysUpdate();
-            alwaysUpdateButton.interactable = !combinedMode;
-            ApplyButtonVisual(alwaysUpdateButton, alwaysUpdate ? GetToggleOnLabel() : GetToggleOffLabel(), alwaysUpdate ? _toggleEnabledColor : _toggleDisabledColor);
+            SetInteractable(alwaysUpdateButton, !gaussianSplatRenderer.IsCombinedRenderingMode());
+            ApplyButtonVisual(alwaysUpdateButton, ToggleLabel(alwaysUpdate), alwaysUpdate ? _toggleEnabledColor : _toggleDisabledColor);
         }
     }
 
     void RefreshMaterialControls()
     {
-    #if UNITY_EDITOR && !COMPILER_UDONSHARP
+#if UNITY_EDITOR && !COMPILER_UDONSHARP
         bool allowWriteBack = EditorApplication.isPlaying;
-    #else
+#else
         bool allowWriteBack = true;
-    #endif
-
+#endif
         if (vrcLightVolumesButton != null)
         {
             bool enabled = gaussianSplatRenderer.GetUseVrcLightVolumes();
-            ApplyButtonVisual(vrcLightVolumesButton, enabled ? GetToggleOnLabel() : GetToggleOffLabel(), enabled ? _toggleEnabledColor : _toggleDisabledColor);
+            ApplyButtonVisual(vrcLightVolumesButton, ToggleLabel(enabled), enabled ? _toggleEnabledColor : _toggleDisabledColor);
         }
-
-        SyncShBandSlider(allowWriteBack);
-        SyncAntiAliasingSlider(allowWriteBack);
-        SyncLightVolumeIntensitySlider(allowWriteBack);
-        SyncAlphaCutoffSlider(allowWriteBack);
+        SyncSlider(shBandSlider, shBandText, SliderShBand, allowWriteBack);
+        SyncSlider(antiAliasingSlider, antiAliasingText, SliderAntiAliasing, allowWriteBack);
+        SyncSlider(lightVolumeIntensitySlider, lightVolumeIntensityText, SliderLightVolumeIntensity, allowWriteBack);
+        SyncSlider(alphaCutoffSlider, alphaCutoffText, SliderAlphaCutoff, allowWriteBack);
     }
 
-    bool SliderValueChanged(float currentValue, float previousValue)
+    bool SliderValueChanged(float currentValue, float previousValue) { return Mathf.Abs(currentValue - previousValue) > SliderChangeThreshold; }
+
+    float GetSliderValue(int sliderKind)
     {
-        return Mathf.Abs(currentValue - previousValue) > 0.0001f;
+        switch (sliderKind)
+        {
+            case SliderShBand: return gaussianSplatRenderer.GetCurrentSHBand();
+            case SliderAntiAliasing: return gaussianSplatRenderer.GetAntiAliasing();
+            case SliderLightVolumeIntensity: return gaussianSplatRenderer.GetLightVolumeIntensity();
+            default: return gaussianSplatRenderer.alphaCutoff;
+        }
     }
 
-    void SyncShBandSlider(bool allowWriteBack)
+    float GetLastSliderValue(int sliderKind)
     {
-        if (shBandSlider == null)
+        switch (sliderKind)
+        {
+            case SliderShBand: return _lastShBandSliderValue;
+            case SliderAntiAliasing: return _lastAntiAliasingSliderValue;
+            case SliderLightVolumeIntensity: return _lastLightVolumeIntensitySliderValue;
+            default: return _lastAlphaCutoffSliderValue;
+        }
+    }
+
+    void SetLastSliderValue(int sliderKind, float value)
+    {
+        switch (sliderKind)
+        {
+            case SliderShBand:
+                _lastShBandSliderValue = value;
+                return;
+            case SliderAntiAliasing:
+                _lastAntiAliasingSliderValue = value;
+                return;
+            case SliderLightVolumeIntensity:
+                _lastLightVolumeIntensitySliderValue = value;
+                return;
+            default:
+                _lastAlphaCutoffSliderValue = value;
+                return;
+        }
+    }
+
+    void SetSliderValue(int sliderKind, float value)
+    {
+        switch (sliderKind)
+        {
+            case SliderShBand:
+                gaussianSplatRenderer.SetSHBand(Mathf.RoundToInt(value));
+                return;
+            case SliderAntiAliasing:
+                gaussianSplatRenderer.SetAntiAliasing(value);
+                return;
+            case SliderLightVolumeIntensity:
+                gaussianSplatRenderer.SetLightVolumeIntensity(value);
+                return;
+            default:
+                gaussianSplatRenderer.SetAlphaCutoff(value);
+                return;
+        }
+    }
+
+    void SyncSlider(Slider slider, TextMeshProUGUI valueText, int sliderKind, bool allowWriteBack)
+    {
+        if (slider == null)
         {
             return;
         }
-
-        int maxBand = gaussianSplatRenderer.GetSelectedSplatMaxSHBand();
-        if (!Mathf.Approximately(shBandSlider.maxValue, maxBand))
+        if (sliderKind == SliderShBand)
         {
-            shBandSlider.maxValue = maxBand;
+            float maxBand = gaussianSplatRenderer.GetSelectedSplatMaxSHBand();
+            if (!Mathf.Approximately(slider.maxValue, maxBand))
+            {
+                slider.maxValue = maxBand;
+            }
         }
-
-        int currentBand = gaussianSplatRenderer.GetCurrentSHBand();
-        if (!_sliderValuesInitialized)
+        else if (sliderKind == SliderAlphaCutoff && !Mathf.Approximately(slider.maxValue, MaxAlphaCutoff))
         {
-            shBandSlider.SetValueWithoutNotify(currentBand);
-            _lastShBandSliderValue = currentBand;
+            slider.maxValue = MaxAlphaCutoff;
         }
-        else if (!allowWriteBack || SliderValueChanged(currentBand, _lastShBandSliderValue))
+        float currentValue = GetSliderValue(sliderKind);
+        float lastValue = GetLastSliderValue(sliderKind);
+        bool sliderNeedsRefresh = !_sliderValuesInitialized || SliderValueChanged(currentValue, lastValue) || (!allowWriteBack && SliderValueChanged(slider.value, currentValue));
+        if (sliderNeedsRefresh)
         {
-            shBandSlider.SetValueWithoutNotify(currentBand);
-            _lastShBandSliderValue = currentBand;
+            SetSliderWithoutNotify(slider, currentValue);
+            SetLastSliderValue(sliderKind, currentValue);
         }
-        else if (SliderValueChanged(shBandSlider.value, _lastShBandSliderValue))
+        else if (allowWriteBack && SliderValueChanged(slider.value, lastValue))
         {
-            gaussianSplatRenderer.SetSHBand(Mathf.RoundToInt(shBandSlider.value));
-            currentBand = gaussianSplatRenderer.GetCurrentSHBand();
-            shBandSlider.SetValueWithoutNotify(currentBand);
-            _lastShBandSliderValue = currentBand;
+            SetSliderValue(sliderKind, slider.value);
+            currentValue = GetSliderValue(sliderKind);
+            SetSliderWithoutNotify(slider, currentValue);
+            SetLastSliderValue(sliderKind, currentValue);
         }
-
-        if (shBandText != null)
+        if (valueText != null)
         {
-            shBandText.text = currentBand.ToString();
-        }
-    }
-
-    void SyncAntiAliasingSlider(bool allowWriteBack)
-    {
-        if (antiAliasingSlider == null)
-        {
-            return;
-        }
-
-        float currentValue = gaussianSplatRenderer.GetAntiAliasing();
-        if (!_sliderValuesInitialized)
-        {
-            antiAliasingSlider.SetValueWithoutNotify(currentValue);
-            _lastAntiAliasingSliderValue = currentValue;
-        }
-        else if (!allowWriteBack || SliderValueChanged(currentValue, _lastAntiAliasingSliderValue))
-        {
-            antiAliasingSlider.SetValueWithoutNotify(currentValue);
-            _lastAntiAliasingSliderValue = currentValue;
-        }
-        else if (SliderValueChanged(antiAliasingSlider.value, _lastAntiAliasingSliderValue))
-        {
-            gaussianSplatRenderer.SetAntiAliasing(antiAliasingSlider.value);
-            currentValue = gaussianSplatRenderer.GetAntiAliasing();
-            antiAliasingSlider.SetValueWithoutNotify(currentValue);
-            _lastAntiAliasingSliderValue = currentValue;
-        }
-
-        if (antiAliasingText != null)
-        {
-            antiAliasingText.text = FormatFloat(currentValue);
-        }
-    }
-
-    void SyncLightVolumeIntensitySlider(bool allowWriteBack)
-    {
-        if (lightVolumeIntensitySlider == null)
-        {
-            return;
-        }
-
-        float currentValue = gaussianSplatRenderer.GetLightVolumeIntensity();
-        if (!_sliderValuesInitialized)
-        {
-            lightVolumeIntensitySlider.SetValueWithoutNotify(currentValue);
-            _lastLightVolumeIntensitySliderValue = currentValue;
-        }
-        else if (!allowWriteBack || SliderValueChanged(currentValue, _lastLightVolumeIntensitySliderValue))
-        {
-            lightVolumeIntensitySlider.SetValueWithoutNotify(currentValue);
-            _lastLightVolumeIntensitySliderValue = currentValue;
-        }
-        else if (SliderValueChanged(lightVolumeIntensitySlider.value, _lastLightVolumeIntensitySliderValue))
-        {
-            gaussianSplatRenderer.SetLightVolumeIntensity(lightVolumeIntensitySlider.value);
-            currentValue = gaussianSplatRenderer.GetLightVolumeIntensity();
-            lightVolumeIntensitySlider.SetValueWithoutNotify(currentValue);
-            _lastLightVolumeIntensitySliderValue = currentValue;
-        }
-
-        if (lightVolumeIntensityText != null)
-        {
-            lightVolumeIntensityText.text = FormatFloat(currentValue);
-        }
-    }
-
-    void SyncAlphaCutoffSlider(bool allowWriteBack)
-    {
-        if (alphaCutoffSlider == null)
-        {
-            return;
-        }
-
-        float currentValue = gaussianSplatRenderer.alphaCutoff;
-        if (!_sliderValuesInitialized)
-        {
-            alphaCutoffSlider.SetValueWithoutNotify(currentValue);
-            _lastAlphaCutoffSliderValue = currentValue;
-        }
-        else if (!allowWriteBack || SliderValueChanged(currentValue, _lastAlphaCutoffSliderValue))
-        {
-            alphaCutoffSlider.SetValueWithoutNotify(currentValue);
-            _lastAlphaCutoffSliderValue = currentValue;
-        }
-        else if (SliderValueChanged(alphaCutoffSlider.value, _lastAlphaCutoffSliderValue))
-        {
-            gaussianSplatRenderer.SetAlphaCutoff(alphaCutoffSlider.value);
-            currentValue = gaussianSplatRenderer.alphaCutoff;
-            alphaCutoffSlider.SetValueWithoutNotify(currentValue);
-            _lastAlphaCutoffSliderValue = currentValue;
-        }
-
-        if (alphaCutoffText != null)
-        {
-            alphaCutoffText.text = FormatFloat(currentValue);
+            SetText(valueText, sliderKind == SliderShBand ? Mathf.RoundToInt(currentValue).ToString() : FormatFloat(currentValue));
         }
     }
 
@@ -963,15 +641,44 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         {
             return;
         }
-
+        RefreshSceneSplatObjects();
         int splatDataIndex = _splatListStartIndex + slotIndex;
-        GaussianSplatObject selectedSplatObject = GetSceneSplatObject(splatDataIndex);
+        GaussianSplatObject selectedSplatObject = _sceneSplatObjects != null && splatDataIndex >= 0 && splatDataIndex < _sceneSplatObjects.Length ? _sceneSplatObjects[splatDataIndex] : null;
         if (selectedSplatObject == null)
         {
             return;
         }
-
         SelectSplatObject(selectedSplatObject);
+        RefreshUI();
+    }
+
+    void StepCameraQuantization(float delta)
+    {
+        if (gaussianSplatRenderer == null)
+        {
+            return;
+        }
+        gaussianSplatRenderer.SetCameraPositionQuantization(gaussianSplatRenderer.GetCameraPositionQuantization() + delta);
+        RefreshUI();
+    }
+
+    void StepSortingSteps(int delta)
+    {
+        if (gaussianSplatRenderer == null)
+        {
+            return;
+        }
+        gaussianSplatRenderer.SetSortPipelineFrames(gaussianSplatRenderer.GetSortPipelineFrames() + delta);
+        RefreshUI();
+    }
+
+    void StepGaussianScale(float delta)
+    {
+        if (gaussianSplatRenderer == null)
+        {
+            return;
+        }
+        gaussianSplatRenderer.SetGaussianScale(gaussianSplatRenderer.gaussianScale + delta);
         RefreshUI();
     }
 
@@ -992,18 +699,13 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
     public void SelectSplatSlot14() { SelectSplatSlot(14); }
     public void SelectSplatSlot15() { SelectSplatSlot(15); }
 
-    public void ScrollSplatListUp()
-    {
-        _splatListStartIndex = Mathf.Max(0, _splatListStartIndex - 1);
-        RefreshUI();
-    }
+    public void ScrollSplatListUp() { _splatListStartIndex = Mathf.Max(0, _splatListStartIndex - 1); RefreshUI(); }
 
     public void ScrollSplatListDown()
     {
         int visibleButtonCount = splatButtons == null ? 0 : splatButtons.Length;
-        int totalSplatCount = GetSceneSplatCount();
-        int maxStartIndex = Mathf.Max(0, totalSplatCount - visibleButtonCount);
-        _splatListStartIndex = Mathf.Min(maxStartIndex, _splatListStartIndex + 1);
+        int totalSplatCount = _sceneSplatObjects == null ? 0 : _sceneSplatObjects.Length;
+        _splatListStartIndex = Mathf.Min(Mathf.Max(0, totalSplatCount - visibleButtonCount), _splatListStartIndex + 1);
         RefreshUI();
     }
 
@@ -1021,176 +723,46 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         FindRenderer();
         RefreshSceneSplatObjects();
         RefreshLocalizedLabels();
-        RefreshRenderingModeLayout(gaussianSplatRenderer != null && gaussianSplatRenderer.IsCombinedRenderingMode());
-
+        bool combinedMode = gaussianSplatRenderer != null && gaussianSplatRenderer.IsCombinedRenderingMode();
+        RefreshRenderingModeLayout(combinedMode);
         if (gaussianSplatRenderer == null)
         {
-            if (currentSplatText != null)
-            {
-                currentSplatText.text = GetCurrentSplatNoneLabel();
-            }
-
-            if (alphaCutoffSlider != null)
-            {
-                alphaCutoffSlider.value = DefaultAlphaCutoff;
-            }
-
-            if (alphaCutoffText != null)
-            {
-                alphaCutoffText.text = FormatFloat(DefaultAlphaCutoff);
-            }
-
+            SetText(currentSplatText, CurrentSplatNoneLabel());
+            SetSliderWithoutNotify(alphaCutoffSlider, DefaultAlphaCutoff);
+            SetText(alphaCutoffText, FormatFloat(DefaultAlphaCutoff));
             RefreshSplatButtons();
             return;
         }
-
         if (currentSplatText != null)
         {
-            bool combinedMode = gaussianSplatRenderer.IsCombinedRenderingMode();
+            string modeLabel = combinedMode ? Localize("Rendering Mode: Combined", "表示モード: 統合") : Localize("Rendering Mode: Single", "表示モード: 単体");
             string currentSplatName = gaussianSplatRenderer.GetCurrentSplatName();
-            currentSplatText.text = combinedMode
-                ? Localize("Rendering Mode: Combined", "表示モード: 統合")
-                : Localize("Rendering Mode: Single", "表示モード: 単体") + "\n" + (currentSplatName == "None"
-                    ? GetCurrentSplatNoneLabel()
-                    : GetCurrentSplatPrefix() + currentSplatName);
+            SetText(currentSplatText, combinedMode
+                ? modeLabel
+                : modeLabel + "\n" + (currentSplatName == "None" ? CurrentSplatNoneLabel() : Localize("Current Splat: ", "現在のスプラット: ") + currentSplatName));
         }
-
-        if (gaussianScaleText != null)
-        {
-            gaussianScaleText.text = FormatFloat(gaussianSplatRenderer.gaussianScale);
-        }
-
-        if (alphaCutoffText != null)
-        {
-            alphaCutoffText.text = FormatFloat(gaussianSplatRenderer.alphaCutoff);
-        }
-
+        SetText(gaussianScaleText, FormatFloat(gaussianSplatRenderer.gaussianScale));
+        SetText(alphaCutoffText, FormatFloat(gaussianSplatRenderer.alphaCutoff));
         RefreshSortingControls();
         RefreshMaterialControls();
         RefreshSplatButtons();
         _sliderValuesInitialized = true;
     }
 
-    public void IncreaseMinSortDistance()
-    {
-    }
+    public void IncreaseCameraQuantization() { StepCameraQuantization(cameraQuantizationStep); }
+    public void DecreaseCameraQuantization() { StepCameraQuantization(-cameraQuantizationStep); }
+    public void IncreaseSortingSteps() { StepSortingSteps(1); }
+    public void DecreaseSortingSteps() { StepSortingSteps(-1); }
 
-    public void DecreaseMinSortDistance()
-    {
-    }
+    public void ToggleAlwaysUpdate() { if (gaussianSplatRenderer == null) return; gaussianSplatRenderer.ToggleAlwaysUpdate(); RefreshUI(); }
+    public void ToggleVrcLightVolumes() { if (gaussianSplatRenderer == null) return; gaussianSplatRenderer.ToggleVrcLightVolumes(); RefreshUI(); }
 
-    public void IncreaseMaxSortDistance()
-    {
-    }
+    public void IncreaseGaussianScale() { StepGaussianScale(gaussianScaleStep); }
+    public void DecreaseGaussianScale() { StepGaussianScale(-gaussianScaleStep); }
 
-    public void DecreaseMaxSortDistance()
-    {
-    }
-
-    public void IncreaseCameraQuantization()
-    {
-        if (gaussianSplatRenderer == null)
-        {
-            return;
-        }
-
-        gaussianSplatRenderer.SetCameraPositionQuantization(gaussianSplatRenderer.GetCameraPositionQuantization() + cameraQuantizationStep);
-        RefreshUI();
-    }
-
-    public void DecreaseCameraQuantization()
-    {
-        if (gaussianSplatRenderer == null)
-        {
-            return;
-        }
-
-        gaussianSplatRenderer.SetCameraPositionQuantization(gaussianSplatRenderer.GetCameraPositionQuantization() - cameraQuantizationStep);
-        RefreshUI();
-    }
-
-    public void IncreaseSortingSteps()
-    {
-        if (gaussianSplatRenderer == null)
-        {
-            return;
-        }
-
-        gaussianSplatRenderer.SetSortPipelineFrames(gaussianSplatRenderer.GetSortPipelineFrames() + 1);
-        RefreshUI();
-    }
-
-    public void DecreaseSortingSteps()
-    {
-        if (gaussianSplatRenderer == null)
-        {
-            return;
-        }
-
-        gaussianSplatRenderer.SetSortPipelineFrames(gaussianSplatRenderer.GetSortPipelineFrames() - 1);
-        RefreshUI();
-    }
-
-    public void ToggleAlwaysUpdate()
-    {
-        if (gaussianSplatRenderer == null)
-        {
-            return;
-        }
-
-        gaussianSplatRenderer.ToggleAlwaysUpdate();
-        RefreshUI();
-    }
-
-    public void ToggleVrcLightVolumes()
-    {
-        if (gaussianSplatRenderer == null)
-        {
-            return;
-        }
-
-        gaussianSplatRenderer.ToggleVrcLightVolumes();
-        RefreshUI();
-    }
-
-    public void IncreaseGaussianScale()
-    {
-        if (gaussianSplatRenderer == null)
-        {
-            return;
-        }
-
-        gaussianSplatRenderer.SetGaussianScale(gaussianSplatRenderer.gaussianScale + gaussianScaleStep);
-        RefreshUI();
-    }
-
-    public void DecreaseGaussianScale()
-    {
-        if (gaussianSplatRenderer == null)
-        {
-            return;
-        }
-
-        gaussianSplatRenderer.SetGaussianScale(gaussianSplatRenderer.gaussianScale - gaussianScaleStep);
-        RefreshUI();
-    }
-
-    void SetLanguage(int language)
-    {
-        selectedLanguage = Mathf.Clamp(language, LanguageEnglish, LanguageJapanese);
-        RefreshUI();
-    }
-
-    public void SetLanguageEnglish()
-    {
-        SetLanguage(LanguageEnglish);
-    }
-
-    public void SetLanguageJapanese()
-    {
-        SetLanguage(LanguageJapanese);
-    }
-
+    void SetLanguage(int language) { selectedLanguage = Mathf.Clamp(language, LanguageEnglish, LanguageJapanese); RefreshUI(); }
+    public void SetLanguageEnglish() { SetLanguage(LanguageEnglish); }
+    public void SetLanguageJapanese() { SetLanguage(LanguageJapanese); }
 }
 
 }
