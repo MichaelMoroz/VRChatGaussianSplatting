@@ -17,16 +17,16 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
 {
     const int LanguageEnglish = 0;
     const int LanguageJapanese = 1;
+    const float MinAlphaCutoff = 0.005f;
+    const float MinPositiveLodCull = 0.0001f;
     const int SliderShBand = 0;
     const int SliderAntiAliasing = 1;
     const int SliderLightVolumeIntensity = 2;
     const int SliderAlphaCutoff = 3;
     const int SliderAlphaCull = 4;
     const int SliderLODCull = 5;
-    const float MinAlphaCutoff = 0.005f;
     const float DefaultAlphaCutoff = 0.04f;
     const float MaxAlphaCutoff = 0.3f;
-    const float MinAlphaCull = 0.005f;
     const float DefaultAlphaCull = 0.04f;
     const float MaxAlphaCull = 0.3f;
     const float DefaultLODCull = 0.0f;
@@ -179,13 +179,63 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
     void SetText(TextMeshProUGUI text, string value) { if (text != null && text.text != value) text.text = value; }
     void SetLocalizedText(TextMeshProUGUI text, string english, string japanese) { SetText(text, Localize(english, japanese)); }
     void SetActive(Component component, bool active) { if (component != null && component.gameObject.activeSelf != active) component.gameObject.SetActive(active); }
-        void SetParentActive(Component component, bool active)
-        {
-            Transform parent = component != null ? component.transform.parent : null;
-            if (parent != null && parent.gameObject.activeSelf != active) parent.gameObject.SetActive(active);
-        }
+    void SetParentActive(Component component, bool active)
+    {
+        Transform parent = component != null ? component.transform.parent : null;
+        if (parent != null && parent.gameObject.activeSelf != active) parent.gameObject.SetActive(active);
+    }
     void SetInteractable(Selectable selectable, bool interactable) { if (selectable != null && selectable.interactable != interactable) selectable.interactable = interactable; }
     void SetSliderWithoutNotify(Slider slider, float value) { if (slider != null && !Mathf.Approximately(slider.value, value)) slider.SetValueWithoutNotify(value); }
+
+    float ToLogSliderValue(float value, float minValue, float maxValue)
+    {
+        float clampedValue = Mathf.Clamp(value, minValue, maxValue);
+        return Mathf.InverseLerp(Mathf.Log(minValue), Mathf.Log(maxValue), Mathf.Log(clampedValue));
+    }
+
+    float FromLogSliderValue(float sliderValue, float minValue, float maxValue)
+    {
+        return Mathf.Exp(Mathf.Lerp(Mathf.Log(minValue), Mathf.Log(maxValue), Mathf.Clamp01(sliderValue)));
+    }
+
+    float ToZeroLogSliderValue(float value, float minPositiveValue, float maxValue)
+    {
+        if (value <= 0.0f)
+        {
+            return 0.0f;
+        }
+        return ToLogSliderValue(Mathf.Max(value, minPositiveValue), minPositiveValue, maxValue);
+    }
+
+    float FromZeroLogSliderValue(float sliderValue, float minPositiveValue, float maxValue)
+    {
+        if (sliderValue <= 0.0f)
+        {
+            return 0.0f;
+        }
+        return FromLogSliderValue(sliderValue, minPositiveValue, maxValue);
+    }
+
+    float GetSliderDisplayValue(int sliderKind, float actualValue)
+    {
+        switch (sliderKind)
+        {
+            case SliderAlphaCutoff: return ToLogSliderValue(actualValue, MinAlphaCutoff, MaxAlphaCutoff);
+            case SliderLODCull: return ToZeroLogSliderValue(actualValue, MinPositiveLodCull, MaxLODCull);
+            default: return actualValue;
+        }
+    }
+
+    float GetActualSliderValue(int sliderKind, float sliderValue)
+    {
+        switch (sliderKind)
+        {
+            case SliderAlphaCutoff: return FromLogSliderValue(sliderValue, MinAlphaCutoff, MaxAlphaCutoff);
+            case SliderLODCull: return FromZeroLogSliderValue(sliderValue, MinPositiveLodCull, MaxLODCull);
+            default: return sliderValue;
+        }
+    }
+
     TextMeshProUGUI ResolveSubtitleText()
     {
         Transform subtitleTransform = transform.Find("Panel/Body Row/Settings Column/Subtitle");
@@ -585,52 +635,6 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
 
     bool SliderValueChanged(float currentValue, float previousValue) { return Mathf.Abs(currentValue - previousValue) > SliderChangeThreshold; }
 
-    bool UsesLogSlider(int sliderKind) { return sliderKind == SliderAlphaCutoff || sliderKind == SliderAlphaCull; }
-
-    float GetSliderMinValue(int sliderKind)
-    {
-        switch (sliderKind)
-        {
-            case SliderAlphaCull: return MinAlphaCull;
-            default: return MinAlphaCutoff;
-        }
-    }
-
-    float GetSliderMaxValue(int sliderKind)
-    {
-        switch (sliderKind)
-        {
-            case SliderAlphaCull: return MaxAlphaCull;
-            default: return MaxAlphaCutoff;
-        }
-    }
-
-    float ActualValueToSliderValue(int sliderKind, float value)
-    {
-        if (!UsesLogSlider(sliderKind))
-        {
-            return value;
-        }
-        float minValue = GetSliderMinValue(sliderKind);
-        float maxValue = GetSliderMaxValue(sliderKind);
-        float logMin = Mathf.Log(minValue);
-        float logMax = Mathf.Log(maxValue);
-        return Mathf.InverseLerp(logMin, logMax, Mathf.Log(Mathf.Clamp(value, minValue, maxValue)));
-    }
-
-    float SliderValueToActualValue(int sliderKind, float value)
-    {
-        if (!UsesLogSlider(sliderKind))
-        {
-            return value;
-        }
-        float minValue = GetSliderMinValue(sliderKind);
-        float maxValue = GetSliderMaxValue(sliderKind);
-        float logMin = Mathf.Log(minValue);
-        float logMax = Mathf.Log(maxValue);
-        return Mathf.Exp(Mathf.Lerp(logMin, logMax, Mathf.Clamp01(value)));
-    }
-
     float GetSliderValue(int sliderKind)
     {
         switch (sliderKind)
@@ -713,7 +717,19 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         {
             return;
         }
-        if (UsesLogSlider(sliderKind))
+        if (sliderKind == SliderShBand)
+        {
+            if (!Mathf.Approximately(slider.minValue, 0.0f))
+            {
+                slider.minValue = 0.0f;
+            }
+            float maxBand = gaussianSplatRenderer.GetSelectedSplatMaxSHBand();
+            if (!Mathf.Approximately(slider.maxValue, maxBand))
+            {
+                slider.maxValue = maxBand;
+            }
+        }
+        else if (sliderKind == SliderAlphaCutoff)
         {
             if (!Mathf.Approximately(slider.minValue, 0.0f))
             {
@@ -724,33 +740,43 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
                 slider.maxValue = 1.0f;
             }
         }
-        else if (sliderKind == SliderShBand)
+        else if (sliderKind == SliderAlphaCull)
         {
-            float maxBand = gaussianSplatRenderer.GetSelectedSplatMaxSHBand();
-            if (!Mathf.Approximately(slider.maxValue, maxBand))
+            if (!Mathf.Approximately(slider.minValue, MinAlphaCutoff))
             {
-                slider.maxValue = maxBand;
+                slider.minValue = MinAlphaCutoff;
+            }
+            if (!Mathf.Approximately(slider.maxValue, MaxAlphaCull))
+            {
+                slider.maxValue = MaxAlphaCull;
             }
         }
-        else if (sliderKind == SliderLODCull && !Mathf.Approximately(slider.maxValue, MaxLODCull))
+        else if (sliderKind == SliderLODCull)
         {
-            slider.maxValue = MaxLODCull;
+            if (!Mathf.Approximately(slider.minValue, 0.0f))
+            {
+                slider.minValue = 0.0f;
+            }
+            if (!Mathf.Approximately(slider.maxValue, 1.0f))
+            {
+                slider.maxValue = 1.0f;
+            }
         }
         float currentValue = GetSliderValue(sliderKind);
         float lastValue = GetLastSliderValue(sliderKind);
-        float currentSliderValue = ActualValueToSliderValue(sliderKind, currentValue);
-        float lastSliderValue = ActualValueToSliderValue(sliderKind, lastValue);
-        bool sliderNeedsRefresh = !_sliderValuesInitialized || SliderValueChanged(currentValue, lastValue) || (!allowWriteBack && SliderValueChanged(slider.value, currentSliderValue));
+        float displayedCurrentValue = GetSliderDisplayValue(sliderKind, currentValue);
+        float displayedLastValue = GetSliderDisplayValue(sliderKind, lastValue);
+        bool sliderNeedsRefresh = !_sliderValuesInitialized || SliderValueChanged(currentValue, lastValue) || (!allowWriteBack && SliderValueChanged(slider.value, displayedCurrentValue));
         if (sliderNeedsRefresh)
         {
-            SetSliderWithoutNotify(slider, currentSliderValue);
+            SetSliderWithoutNotify(slider, displayedCurrentValue);
             SetLastSliderValue(sliderKind, currentValue);
         }
-        else if (allowWriteBack && SliderValueChanged(slider.value, lastSliderValue))
+        else if (allowWriteBack && SliderValueChanged(slider.value, displayedLastValue))
         {
-            SetSliderValue(sliderKind, SliderValueToActualValue(sliderKind, slider.value));
+            SetSliderValue(sliderKind, GetActualSliderValue(sliderKind, slider.value));
             currentValue = GetSliderValue(sliderKind);
-            SetSliderWithoutNotify(slider, ActualValueToSliderValue(sliderKind, currentValue));
+            SetSliderWithoutNotify(slider, GetSliderDisplayValue(sliderKind, currentValue));
             SetLastSliderValue(sliderKind, currentValue);
         }
         if (valueText != null)
@@ -843,21 +869,11 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         if (gaussianSplatRenderer == null)
         {
             SetText(currentSplatText, CurrentSplatNoneLabel() + "\n" + RenderedSplatCountLabel(0));
-            if (alphaCutoffSlider != null)
-            {
-                if (!Mathf.Approximately(alphaCutoffSlider.minValue, 0.0f)) alphaCutoffSlider.minValue = 0.0f;
-                if (!Mathf.Approximately(alphaCutoffSlider.maxValue, 1.0f)) alphaCutoffSlider.maxValue = 1.0f;
-            }
-            SetSliderWithoutNotify(alphaCutoffSlider, ActualValueToSliderValue(SliderAlphaCutoff, DefaultAlphaCutoff));
+            SetSliderWithoutNotify(alphaCutoffSlider, GetSliderDisplayValue(SliderAlphaCutoff, DefaultAlphaCutoff));
             SetText(alphaCutoffText, FormatFloat(DefaultAlphaCutoff));
-            if (alphaCullSlider != null)
-            {
-                if (!Mathf.Approximately(alphaCullSlider.minValue, 0.0f)) alphaCullSlider.minValue = 0.0f;
-                if (!Mathf.Approximately(alphaCullSlider.maxValue, 1.0f)) alphaCullSlider.maxValue = 1.0f;
-            }
-            SetSliderWithoutNotify(alphaCullSlider, ActualValueToSliderValue(SliderAlphaCull, DefaultAlphaCull));
+            SetSliderWithoutNotify(alphaCullSlider, DefaultAlphaCull);
             SetText(alphaCullText, FormatFloat(DefaultAlphaCull));
-            SetSliderWithoutNotify(lodCullSlider, DefaultLODCull);
+            SetSliderWithoutNotify(lodCullSlider, GetSliderDisplayValue(SliderLODCull, DefaultLODCull));
             SetText(lodCullText, FormatFloat(DefaultLODCull));
             RefreshSplatButtons();
             return;
