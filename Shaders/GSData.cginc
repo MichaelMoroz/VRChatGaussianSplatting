@@ -21,6 +21,7 @@ float _AntiAliasing;
 float _Log2MinScale;
 float _AlphaCutoff;
 float _AlphaCull;
+float _LODCull;
 float _Exposure;
 float _Gamma;
 float _Opacity;

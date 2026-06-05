@@ -19,8 +19,8 @@ public partial class GaussianSplatRenderer : UdonSharpBehaviour
     const int MAX_COMBINED_SPLAT_COUNT = 1 << 24;
     const int SCREEN_CAMERA_ID = 0;
     const int PHOTO_CAMERA_ID = 1;
-    const float DEFAULT_ALPHA_CUTOFF = 0.03f;
-    const float DEFAULT_ALPHA_CULL = 0.01f;
+    const float DEFAULT_ALPHA_CUTOFF = 0.04f;
+    const float DEFAULT_ALPHA_CULL = 0.04f;
 
     Vector3[] _completedCameraPos;
     bool[] _hasCompletedSort;
@@ -56,6 +56,7 @@ public partial class GaussianSplatRenderer : UdonSharpBehaviour
     [Range(-20.0f, 10.0f)] [SerializeField] float log2MinScale = -15.0f;
     [Range(0.005f, 0.3f)] [SerializeField] public float alphaCutoff = DEFAULT_ALPHA_CUTOFF;
     [Range(0.005f, 0.3f)] [SerializeField] public float alphaCull = DEFAULT_ALPHA_CULL;
+    [Range(0.0f, 0.1f)] [SerializeField] public float lodCull = 0.0f;
     [Range(0.0f, 100.0f)] [SerializeField] float scaleCutoff = 100.0f;
     [Range(0.0f, 5.0f)] [SerializeField] float exposure = 1.0f;
     [Range(0.0f, 5.0f)] [SerializeField] float opacity = 1.0f;
@@ -345,6 +346,7 @@ public partial class GaussianSplatRenderer : UdonSharpBehaviour
         if (material.HasProperty("_Log2MinScale")) material.SetFloat("_Log2MinScale", log2MinScale);
         if (material.HasProperty("_AlphaCutoff")) material.SetFloat("_AlphaCutoff", alphaCutoff);
         if (material.HasProperty("_AlphaCull")) material.SetFloat("_AlphaCull", alphaCull);
+        if (material.HasProperty("_LODCull")) material.SetFloat("_LODCull", lodCull);
         if (material.HasProperty("_ScaleCutoff")) material.SetFloat("_ScaleCutoff", scaleCutoff);
         if (material.HasProperty("_Exposure")) material.SetFloat("_Exposure", exposure);
         if (material.HasProperty("_Opacity")) material.SetFloat("_Opacity", opacity);
@@ -403,6 +405,23 @@ public partial class GaussianSplatRenderer : UdonSharpBehaviour
     public void SetAlphaCutoff(float value) { overrideMaterialProperties = true; alphaCutoff = Mathf.Clamp(value, 0.005f, 0.3f); ApplyMaterialSettingsToSelectedObject(); }
     public float GetAlphaCull() { return alphaCull; }
     public void SetAlphaCull(float value) { overrideMaterialProperties = true; alphaCull = Mathf.Clamp(value, 0.005f, 0.3f); ApplyMaterialSettingsToSelectedObject(); }
+    public float GetLODCull() { return lodCull; }
+    public void SetLODCull(float value) { overrideMaterialProperties = true; lodCull = Mathf.Clamp(value, 0.0f, 0.1f); ApplyMaterialSettingsToSelectedObject(); }
+
+    bool QualityPresetMatches(float cull, float cutoff) { return Mathf.Abs(alphaCull - cull) < 0.001f && Mathf.Abs(alphaCutoff - cutoff) < 0.001f; }
+    public int GetQualityPresetIndex()
+    {
+        if (QualityPresetMatches(0.15f, 0.15f)) return 0;
+        if (QualityPresetMatches(0.07f, 0.1f)) return 1;
+        if (QualityPresetMatches(0.04f, 0.04f)) return 2;
+        if (QualityPresetMatches(0.01f, 0.01f)) return 3;
+        return -1;
+    }
+    void ApplyQualityPreset(float cull, float cutoff) { overrideMaterialProperties = true; alphaCull = cull; alphaCutoff = cutoff; ApplyMaterialSettingsToSelectedObject(); }
+    public void SetQualityVeryLow() { ApplyQualityPreset(0.15f, 0.15f); }
+    public void SetQualityLow() { ApplyQualityPreset(0.07f, 0.1f); }
+    public void SetQualityMedium() { ApplyQualityPreset(0.04f, 0.04f); }
+    public void SetQualityHigh() { ApplyQualityPreset(0.01f, 0.01f); }
 
     int GetCombinedRenderedSplatCount()
     {

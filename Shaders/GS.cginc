@@ -182,6 +182,10 @@ void geo(point v2g input[1], inout TriangleStream<g2f> triStream, uint instanceI
 
     float3 splatWorldPos = mul(unity_ObjectToWorld, float4(splat.mean, 1)).xyz;
 
+    float3 camToSplat = splatWorldPos - _WorldSpaceCameraPos;
+    float lodMaxScale = max(splat.scale.x, max(splat.scale.y, splat.scale.z));
+    if (lodMaxScale * lodMaxScale < (_LODCull * _LODCull) * dot(camToSplat, camToSplat)) return; // distance-based LOD cull (no projection)
+
     float4 splatClipPos = mul(UNITY_MATRIX_VP, float4(splatWorldPos, 1));
     if (splatClipPos.w <= 0) return; // behind camera
     splatClipPos.xyz /= splatClipPos.w; // perspective divide

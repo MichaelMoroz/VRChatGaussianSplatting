@@ -34,5 +34,5 @@ Material:
     - _GS_Positions_CoordMask: 127
     - _GS_Positions_CoordShift: 7
     m_Colors:
-    - _CameraPos: {r: 1.9724563, g: 0.17090933, b: 1.2690518, a: 0}
+    - _CameraPos: {r: 2.7398787, g: -1.5471256, b: 5.217936, a: 0}
   m_BuildTextureStacks: []

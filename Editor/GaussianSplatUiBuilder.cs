@@ -17,8 +17,9 @@ namespace GaussianSplatting.Editor
 {
     static class GaussianSplatUiBuilder
     {
-        const float DefaultAlphaCutoff = 0.03f;
-        const float DefaultAlphaCull = 0.01f;
+        const float DefaultAlphaCutoff = 0.04f;
+        const float DefaultAlphaCull = 0.04f;
+        const float DefaultLODCull = 0.0f;
         const string UiFontAssetPath = "Assets/VRChatGaussianSplatting/Resources/Fonts/NotoSansJP-VF.ttf";
         const string UiTextMeshProFontAssetPath = "Assets/VRChatGaussianSplatting/Resources/Fonts/NotoSansJP-VF TMP.asset";
         const string UiMaterialFolderPath = "Assets/VRChatGaussianSplatting/Resources/Materials";
@@ -43,7 +44,7 @@ namespace GaussianSplatting.Editor
                 characters.Add((char)code);
             }
 
-            const string localizedCharacters = "表示モード統合単体現在のスプラットなし再ソートするカメラ移動量をフレームに分散毎マテリアル設定バンド共有光源強度アンチエイリアスアルファカットオフ低いほど高品質言語上へ下開発有効中日本語オンオフ示ライトボリュームガウスケールカリング減少";
+            const string localizedCharacters = "表示モード統合単体現在のスプラットなし再ソートするカメラ移動量をフレームに分散毎マテリアル設定バンド共有光源強度アンチエイリアスアルファカットオフ低いほど高品質言語上へ下開発有効中日本語オンオフ示ライトボリュームガウスケールカリング減少距離最";
             for (int i = 0; i < localizedCharacters.Length; i++)
             {
                 characters.Add(localizedCharacters[i]);
@@ -190,10 +191,22 @@ namespace GaussianSplatting.Editor
             CreateSliderSetting("Light Volume Intensity", "Light Volume Intensity", 0.0f, 4.0f, false, "1", 0.0f, out generatedUi.lightVolumeIntensityLabelText, out generatedUi.lightVolumeIntensitySlider, out generatedUi.lightVolumeIntensityText);
             CreateSliderSetting("AntiAliasing", "Antialiasing", 0.0f, 3.0f, false, "1", 0.0f, out generatedUi.antiAliasingLabelText, out generatedUi.antiAliasingSlider, out generatedUi.antiAliasingText);
             CreateStepperSetting("Gaussian Scale", "Gaussian Scale (global)", "1", nameof(GaussianSplatRendererUI.DecreaseGaussianScale), nameof(GaussianSplatRendererUI.IncreaseGaussianScale), out generatedUi.gaussianScaleLabelText, out generatedUi.gaussianScaleText);
-            CreateSliderSetting("Alpha Cutoff", "Alpha Cutoff\n(lower = better quality)", 0.005f, 0.3f, false, "0.03", 0.0f, out generatedUi.alphaCutoffLabelText, out generatedUi.alphaCutoffSlider, out generatedUi.alphaCutoffText);
+            CreateSliderSetting("Alpha Cutoff", "Alpha Cutoff\n(lower = better quality)", 0.005f, 0.3f, false, "0.04", 0.0f, out generatedUi.alphaCutoffLabelText, out generatedUi.alphaCutoffSlider, out generatedUi.alphaCutoffText);
             generatedUi.alphaCutoffSlider.value = DefaultAlphaCutoff;
-            CreateSliderSetting("Alpha Cull", "Alpha Cull\n(higher = fewer splats)", 0.005f, 0.3f, false, "0.01", 0.0f, out generatedUi.alphaCullLabelText, out generatedUi.alphaCullSlider, out generatedUi.alphaCullText);
+            CreateSliderSetting("Alpha Cull", "Alpha Cull\n(higher = fewer splats)", 0.005f, 0.3f, false, "0.04", 0.0f, out generatedUi.alphaCullLabelText, out generatedUi.alphaCullSlider, out generatedUi.alphaCullText);
             generatedUi.alphaCullSlider.value = DefaultAlphaCull;
+            CreateSliderSetting("LOD Cull", "LOD Cull\n(higher = fewer splats)", 0.0f, 0.1f, false, "0", 0.0f, out generatedUi.lodCullLabelText, out generatedUi.lodCullSlider, out generatedUi.lodCullText);
+            generatedUi.lodCullSlider.value = DefaultLODCull;
+            generatedUi.qualitySectionText = CreateTextElement("Quality Section", settingsColumn.transform, "Quality", 18, TextAnchor.MiddleLeft);
+            GameObject qualityRow = CreateHorizontalGroup("Quality Row", settingsColumn.transform, 8.0f, false);
+            generatedUi.qualityVeryLowButton = CreateButtonElement("Quality Very Low Button", qualityRow.transform, "Very Low", new Color(0.2f, 0.2f, 0.24f, 1.0f), 0.0f, 1.0f);
+            generatedUi.qualityLowButton = CreateButtonElement("Quality Low Button", qualityRow.transform, "Low", new Color(0.2f, 0.2f, 0.24f, 1.0f), 0.0f, 1.0f);
+            generatedUi.qualityMediumButton = CreateButtonElement("Quality Medium Button", qualityRow.transform, "Medium", new Color(0.2f, 0.2f, 0.24f, 1.0f), 0.0f, 1.0f);
+            generatedUi.qualityHighButton = CreateButtonElement("Quality High Button", qualityRow.transform, "High", new Color(0.2f, 0.2f, 0.24f, 1.0f), 0.0f, 1.0f);
+            AddUdonSharpButtonEvent(generatedUi.qualityVeryLowButton, generatedUi, nameof(GaussianSplatRendererUI.SetQualityVeryLow));
+            AddUdonSharpButtonEvent(generatedUi.qualityLowButton, generatedUi, nameof(GaussianSplatRendererUI.SetQualityLow));
+            AddUdonSharpButtonEvent(generatedUi.qualityMediumButton, generatedUi, nameof(GaussianSplatRendererUI.SetQualityMedium));
+            AddUdonSharpButtonEvent(generatedUi.qualityHighButton, generatedUi, nameof(GaussianSplatRendererUI.SetQualityHigh));
             generatedUi.languageSectionText = CreateTextElement("Language Section", settingsColumn.transform, "Language", 18, TextAnchor.MiddleLeft);
             GameObject languageRow = CreateHorizontalGroup("Language Row", settingsColumn.transform, 8.0f, false);
             Button englishLanguageButton = CreateButtonElement("English Button", languageRow.transform, "English", new Color(0.2f, 0.2f, 0.24f, 1.0f), 0.0f, 1.0f);

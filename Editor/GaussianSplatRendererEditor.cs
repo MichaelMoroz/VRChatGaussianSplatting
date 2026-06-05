@@ -24,6 +24,7 @@ namespace GaussianSplatting.Editor
         SerializedProperty _log2MinScale;
         SerializedProperty _alphaCutoff;
         SerializedProperty _alphaCull;
+        SerializedProperty _lodCull;
         SerializedProperty _scaleCutoff;
         SerializedProperty _exposure;
         SerializedProperty _opacity;
@@ -48,6 +49,7 @@ namespace GaussianSplatting.Editor
             _log2MinScale = serializedObject.FindProperty("log2MinScale");
             _alphaCutoff = serializedObject.FindProperty("alphaCutoff");
             _alphaCull = serializedObject.FindProperty("alphaCull");
+            _lodCull = serializedObject.FindProperty("lodCull");
             _scaleCutoff = serializedObject.FindProperty("scaleCutoff");
             _exposure = serializedObject.FindProperty("exposure");
             _opacity = serializedObject.FindProperty("opacity");
@@ -101,6 +103,7 @@ namespace GaussianSplatting.Editor
             }
 
             EditorGUILayout.Space();
+            DrawQualityPresetButtons();
             EditorGUILayout.PropertyField(_overrideMaterialProperties, new GUIContent("Override Material Properties"));
             using (new EditorGUI.DisabledScope(!_overrideMaterialProperties.boolValue))
             {
@@ -110,12 +113,31 @@ namespace GaussianSplatting.Editor
                 EditorGUILayout.Slider(_log2MinScale, -20.0f, 10.0f, new GUIContent("Log2 Minimum Scale"));
                 EditorGUILayout.Slider(_alphaCutoff, 0.0f, 1.0f, new GUIContent("Alpha Cutoff"));
                 EditorGUILayout.Slider(_alphaCull, 0.0f, 1.0f, new GUIContent("Alpha Cull"));
+                EditorGUILayout.Slider(_lodCull, 0.0f, 0.1f, new GUIContent("LOD Cull"));
                 EditorGUILayout.Slider(_scaleCutoff, 0.0f, 100.0f, new GUIContent("Scale Cutoff"));
                 EditorGUILayout.Slider(_exposure, 0.0f, 5.0f, new GUIContent("Exposure"));
                 EditorGUILayout.Slider(_opacity, 0.0f, 5.0f, new GUIContent("Opacity"));
                 EditorGUILayout.PropertyField(_oklchShift, new GUIContent("OKLCH Color Shift"));
                 DrawMinFloatField(_gamma, new GUIContent("Gamma"), 0.001f);
             }
+        }
+
+        void DrawQualityPresetButtons()
+        {
+            EditorGUILayout.LabelField("Quality Preset", EditorStyles.boldLabel);
+            EditorGUILayout.BeginHorizontal();
+            if (GUILayout.Button("Very Low")) ApplyQualityPreset(0.15f, 0.15f);
+            if (GUILayout.Button("Low")) ApplyQualityPreset(0.07f, 0.1f);
+            if (GUILayout.Button("Medium")) ApplyQualityPreset(0.04f, 0.04f);
+            if (GUILayout.Button("High")) ApplyQualityPreset(0.01f, 0.01f);
+            EditorGUILayout.EndHorizontal();
+        }
+
+        void ApplyQualityPreset(float cull, float cutoff)
+        {
+            _overrideMaterialProperties.boolValue = true;
+            _alphaCull.floatValue = cull;
+            _alphaCutoff.floatValue = cutoff;
         }
 
         static void DrawMinFloatField(SerializedProperty property, GUIContent label, float minValue)

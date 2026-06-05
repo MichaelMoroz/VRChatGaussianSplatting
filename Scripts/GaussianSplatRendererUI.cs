@@ -22,10 +22,13 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
     const int SliderLightVolumeIntensity = 2;
     const int SliderAlphaCutoff = 3;
     const int SliderAlphaCull = 4;
-    const float DefaultAlphaCutoff = 0.03f;
+    const int SliderLODCull = 5;
+    const float DefaultAlphaCutoff = 0.04f;
     const float MaxAlphaCutoff = 0.3f;
-    const float DefaultAlphaCull = 0.01f;
+    const float DefaultAlphaCull = 0.04f;
     const float MaxAlphaCull = 0.3f;
+    const float DefaultLODCull = 0.0f;
+    const float MaxLODCull = 0.1f;
     const float DefaultPanelWidth = 1120.0f;
     const float CombinedPanelWidth = 560.0f;
     const float BackgroundPadding = 24.0f;
@@ -36,10 +39,12 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
     public TextMeshProUGUI alwaysUpdateLabelText, materialSectionText, shBandLabelText, shBandText, vrcLightVolumesLabelText, antiAliasingLabelText, antiAliasingText;
     public TextMeshProUGUI lightVolumeIntensityLabelText, lightVolumeIntensityText, gaussianScaleLabelText, gaussianScaleText, alphaCutoffLabelText, alphaCutoffText;
     public TextMeshProUGUI alphaCullLabelText, alphaCullText;
+    public TextMeshProUGUI lodCullLabelText, lodCullText, qualitySectionText;
     public TextMeshProUGUI languageSectionText, splatSectionText;
     public Button alwaysUpdateButton, vrcLightVolumesButton, englishLanguageButton, japaneseLanguageButton, splatScrollUpButton, splatScrollDownButton;
+    public Button qualityVeryLowButton, qualityLowButton, qualityMediumButton, qualityHighButton;
     public Slider shBandSlider, antiAliasingSlider, lightVolumeIntensitySlider, alphaCutoffSlider;
-    public Slider alphaCullSlider;
+    public Slider alphaCullSlider, lodCullSlider;
     public Button[] splatButtons;
     [HideInInspector] public GaussianSplatObject[] cachedSceneSplatObjects;
 
@@ -63,6 +68,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
     float _lastLightVolumeIntensitySliderValue;
     float _lastAlphaCutoffSliderValue;
     float _lastAlphaCullSliderValue;
+    float _lastLODCullSliderValue;
     float _defaultCanvasWidth;
     float _defaultPanelWidth;
     GaussianSplatObject[] _sceneSplatObjects;
@@ -195,6 +201,8 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         SetLocalizedText(gaussianScaleLabelText, "Gaussian Scale (global)", "ガウススケール (共有)");
         SetLocalizedText(alphaCutoffLabelText, "Alpha Cutoff\n(lower = better quality)", "アルファカットオフ\n(低いほど高品質)");
         SetLocalizedText(alphaCullLabelText, "Alpha Cull\n(higher = fewer splats)", "アルファカリング\n(高いほどスプラット減少)");
+        SetLocalizedText(lodCullLabelText, "LOD Cull\n(higher = fewer splats)", "距離カリング\n(高いほどスプラット減少)");
+        SetLocalizedText(qualitySectionText, "Quality", "品質");
         SetLocalizedText(languageSectionText, "Language", "言語");
         SetLocalizedText(splatSectionText, "Splat Object (global)", "スプラットオブジェクト (共有)");
         RefreshLanguageButtons();
@@ -539,6 +547,26 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         SyncSlider(lightVolumeIntensitySlider, lightVolumeIntensityText, SliderLightVolumeIntensity, allowWriteBack);
         SyncSlider(alphaCutoffSlider, alphaCutoffText, SliderAlphaCutoff, allowWriteBack);
         SyncSlider(alphaCullSlider, alphaCullText, SliderAlphaCull, allowWriteBack);
+        SyncSlider(lodCullSlider, lodCullText, SliderLODCull, allowWriteBack);
+        RefreshQualityButtons();
+    }
+
+    void RefreshQualityButtons()
+    {
+        int activePreset = gaussianSplatRenderer != null ? gaussianSplatRenderer.GetQualityPresetIndex() : -1;
+        SetQualityButton(qualityVeryLowButton, 0, activePreset, Localize("Very Low", "最低"));
+        SetQualityButton(qualityLowButton, 1, activePreset, Localize("Low", "低"));
+        SetQualityButton(qualityMediumButton, 2, activePreset, Localize("Medium", "中"));
+        SetQualityButton(qualityHighButton, 3, activePreset, Localize("High", "高"));
+    }
+
+    void SetQualityButton(Button button, int presetIndex, int activePreset, string label)
+    {
+        if (button == null)
+        {
+            return;
+        }
+        ApplyButtonVisual(button, label, presetIndex == activePreset ? _selectedSplatColor : _defaultSplatColor);
     }
 
     bool SliderValueChanged(float currentValue, float previousValue) { return Mathf.Abs(currentValue - previousValue) > SliderChangeThreshold; }
@@ -551,6 +579,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
             case SliderAntiAliasing: return gaussianSplatRenderer.GetAntiAliasing();
             case SliderLightVolumeIntensity: return gaussianSplatRenderer.GetLightVolumeIntensity();
             case SliderAlphaCull: return gaussianSplatRenderer.GetAlphaCull();
+            case SliderLODCull: return gaussianSplatRenderer.GetLODCull();
             default: return gaussianSplatRenderer.alphaCutoff;
         }
     }
@@ -563,6 +592,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
             case SliderAntiAliasing: return _lastAntiAliasingSliderValue;
             case SliderLightVolumeIntensity: return _lastLightVolumeIntensitySliderValue;
             case SliderAlphaCull: return _lastAlphaCullSliderValue;
+            case SliderLODCull: return _lastLODCullSliderValue;
             default: return _lastAlphaCutoffSliderValue;
         }
     }
@@ -582,6 +612,9 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
                 return;
             case SliderAlphaCull:
                 _lastAlphaCullSliderValue = value;
+                return;
+            case SliderLODCull:
+                _lastLODCullSliderValue = value;
                 return;
             default:
                 _lastAlphaCutoffSliderValue = value;
@@ -604,6 +637,9 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
                 return;
             case SliderAlphaCull:
                 gaussianSplatRenderer.SetAlphaCull(value);
+                return;
+            case SliderLODCull:
+                gaussianSplatRenderer.SetLODCull(value);
                 return;
             default:
                 gaussianSplatRenderer.SetAlphaCutoff(value);
@@ -632,6 +668,10 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         else if (sliderKind == SliderAlphaCull && !Mathf.Approximately(slider.maxValue, MaxAlphaCull))
         {
             slider.maxValue = MaxAlphaCull;
+        }
+        else if (sliderKind == SliderLODCull && !Mathf.Approximately(slider.maxValue, MaxLODCull))
+        {
+            slider.maxValue = MaxLODCull;
         }
         float currentValue = GetSliderValue(sliderKind);
         float lastValue = GetLastSliderValue(sliderKind);
@@ -741,6 +781,8 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
             SetText(alphaCutoffText, FormatFloat(DefaultAlphaCutoff));
             SetSliderWithoutNotify(alphaCullSlider, DefaultAlphaCull);
             SetText(alphaCullText, FormatFloat(DefaultAlphaCull));
+            SetSliderWithoutNotify(lodCullSlider, DefaultLODCull);
+            SetText(lodCullText, FormatFloat(DefaultLODCull));
             RefreshSplatButtons();
             return;
         }
@@ -756,6 +798,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         SetText(gaussianScaleText, FormatFloat(gaussianSplatRenderer.gaussianScale));
         SetText(alphaCutoffText, FormatFloat(gaussianSplatRenderer.alphaCutoff));
         SetText(alphaCullText, FormatFloat(gaussianSplatRenderer.alphaCull));
+        SetText(lodCullText, FormatFloat(gaussianSplatRenderer.lodCull));
         RefreshSortingControls();
         RefreshMaterialControls();
         RefreshSplatButtons();
@@ -774,6 +817,11 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
     void SetLanguage(int language) { selectedLanguage = Mathf.Clamp(language, LanguageEnglish, LanguageJapanese); RefreshUI(); }
     public void SetLanguageEnglish() { SetLanguage(LanguageEnglish); }
     public void SetLanguageJapanese() { SetLanguage(LanguageJapanese); }
+
+    public void SetQualityVeryLow() { if (gaussianSplatRenderer == null) return; gaussianSplatRenderer.SetQualityVeryLow(); RefreshUI(); }
+    public void SetQualityLow() { if (gaussianSplatRenderer == null) return; gaussianSplatRenderer.SetQualityLow(); RefreshUI(); }
+    public void SetQualityMedium() { if (gaussianSplatRenderer == null) return; gaussianSplatRenderer.SetQualityMedium(); RefreshUI(); }
+    public void SetQualityHigh() { if (gaussianSplatRenderer == null) return; gaussianSplatRenderer.SetQualityHigh(); RefreshUI(); }
 }
 
 }

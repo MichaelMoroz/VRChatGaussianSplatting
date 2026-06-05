@@ -33,8 +33,9 @@ Shader "VRChatGaussianSplatting/GaussianSplattingStochastic"
         _ThinThreshold ("Thinness Threshold", Range(0, 1)) = 0.005
         _AntiAliasing ("Antialiasing", Range(0, 5.0)) = 1.0
         _Log2MinScale ("Log2 of Minimum Scale", Range(-20, 10)) = -15.0
-        _AlphaCutoff ("Alpha Cutoff", Range(0, 1)) = 0.03
-        _AlphaCull ("Alpha Cull", Range(0, 1)) = 0.01
+        _AlphaCutoff ("Alpha Cutoff", Range(0, 1)) = 0.04
+        _AlphaCull ("Alpha Cull", Range(0, 1)) = 0.04
+        _LODCull ("LOD Cull", Range(0, 0.1)) = 0.0
         _ScaleCutoff ("Scale Cutoff", Range(0, 100)) = 100.0
         _Exposure ("Exposure", Range(0, 5)) = 1.0
         _Opacity ("Opacity", Range(0, 5)) = 1.0
