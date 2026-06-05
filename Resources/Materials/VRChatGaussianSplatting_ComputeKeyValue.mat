@@ -30,9 +30,9 @@ Material:
     m_Ints: []
     m_Floats:
     - _CameraPosQuantization: 0.075
-    - _ElementCount: 2785926
+    - _ElementCount: 1285927
     - _GS_Positions_CoordMask: 255
     - _GS_Positions_CoordShift: 8
     m_Colors:
-    - _CameraPos: {r: 0.20328426, g: 0.7774043, b: 1.3949842, a: 0}
+    - _CameraPos: {r: 0.5719571, g: 0.8621922, b: 2.1556473, a: 0}
   m_BuildTextureStacks: []
