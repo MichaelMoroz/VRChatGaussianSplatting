@@ -1,24 +1,9 @@
 #ifndef __GS_QUATERNION_CGINC__
 #define __GS_QUATERNION_CGINC__
 
-float4 quaternion(float3 axis, float angle)
-{
-    return float4(axis * sin(angle * 0.5), cos(angle * 0.5));
-}
-
-float4 qmul(float4 a, float4 b)
-{
-    return float4(a.w * b.xyz + b.w * a.xyz + cross(a.xyz, b.xyz), a.w * b.w - dot(a.xyz, b.xyz));
-}
-
 float3x3 q_unit(float a)
 {
     return float3x3(a, 0, 0, 0, a, 0, 0, 0, a);
-}
-
-float3 qrot(float3 x, float4 q)
-{
-    return x + 2.0 * cross(cross(x, q.xyz) + q.w * x, q.xyz);
 }
 
 float4 qconj(float4 q)
@@ -54,45 +39,6 @@ float4 m2q(float3x3 m)
     q.y = abs(q.y) * sign(m[0][2] - m[2][0]);
     q.z = abs(q.z) * sign(m[1][0] - m[0][1]);
     return q;
-}
-
-float3 normalize_safe(float3 v)
-{
-    float l2 = dot(v, v);
-    if (l2 < 1e-6)
-    {
-        return float3(0, 0, 1);
-    }
-
-    return v / sqrt(l2);
-}
-
-float3 quaternionAxis(float4 q)
-{
-    return normalize_safe(q.xyz);
-}
-
-float quaternionAngle(float4 q)
-{
-    float l = length(q.xyz);
-    if (l < 1e-6)
-    {
-        return 0.0;
-    }
-
-    return atan2(l, q.w) * 2.0;
-}
-
-float3 quaternionToAxisAngle(float4 q)
-{
-    return quaternionAxis(q) * quaternionAngle(q);
-}
-
-float4 axisAngleToQuaternion(float3 aa)
-{
-    float angle = length(aa);
-    float3 axis = normalize_safe(aa);
-    return float4(axis * sin(angle * 0.5), cos(angle * 0.5));
 }
 
 #endif

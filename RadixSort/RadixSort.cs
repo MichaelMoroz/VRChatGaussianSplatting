@@ -19,6 +19,7 @@ public class RadixSort : UdonSharpBehaviour
     [SerializeField] public RenderTexture prefixSums;
 
     [HideInInspector] [SerializeField] public int elementCount = 1024 * 1024;
+    [SerializeField] int pipelinedPassesPerFrame = 1;
 
     public const int BitsPerPass = 4;
     public const int TotalSortPasses = 8;
@@ -27,26 +28,76 @@ public class RadixSort : UdonSharpBehaviour
 
     private int _currentBit;
     private bool _sortInProgress;
+    private RenderTexture _targetRenderOrder;
+    private int _targetSlice;
 
 #if UNITY_EDITOR && !COMPILER_UDONSHARP
     static Material _editorCopySortedOrderMaterial;
 #endif
 
-    public void Sort()
+    // Game: start a pipelined sort whose finished order will be copied into renderOrder[slice].
+    public void BeginSort(RenderTexture renderOrder, int slice)
     {
-        BeginSort();
-        StepSort(TotalSortPasses);
-    }
-
-    public void BeginSort()
-    {
+        _targetRenderOrder = renderOrder;
+        _targetSlice = slice;
         BeginSortInternal(false);
     }
 
-#if UNITY_EDITOR && !COMPILER_UDONSHARP
-    public void BeginSortForEditor()
+    // Game: advance the in-flight sort by the configured number of radix subpasses for this frame.
+    // Returns true on the frame the sort completes, after the sorted order has been copied into the
+    // target render-order texture.
+    public bool RunSort()
     {
+        if (!_sortInProgress)
+        {
+            return false;
+        }
+        StepSortInternal(GetPipelinedPassesPerFrame(), false);
+        if (_sortInProgress)
+        {
+            return false;
+        }
+        CopySortedOrderInternal(_targetRenderOrder, _targetSlice, false);
+        return true;
+    }
+
+    // Game: if idle and requested, start a new pipelined sort; then advance the in-flight sort by
+    // the configured number of radix passes for this frame. Returns true on the frame the sort is
+    // published into the target render-order texture.
+    public bool UpdatePipelinedSort(RenderTexture renderOrder, int slice, bool requestSort)
+    {
+        if (!_sortInProgress)
+        {
+            if (!requestSort)
+            {
+                return false;
+            }
+            _targetRenderOrder = renderOrder;
+            _targetSlice = slice;
+            BeginSortInternal(false);
+        }
+        return RunSort();
+    }
+
+    // Game: run a complete sort immediately and copy the order (used for the occasional photo camera).
+    public void RunFullSort(RenderTexture renderOrder, int slice)
+    {
+        _targetRenderOrder = renderOrder;
+        _targetSlice = slice;
+        BeginSortInternal(false);
+        StepSortInternal(TotalSortPasses, false);
+        CopySortedOrderInternal(renderOrder, slice, false);
+    }
+
+#if UNITY_EDITOR && !COMPILER_UDONSHARP
+    // Editor previews: full sort + copy every frame for the given camera slice.
+    public void RunFullSortForEditor(RenderTexture renderOrder, int slice)
+    {
+        _targetRenderOrder = renderOrder;
+        _targetSlice = slice;
         BeginSortInternal(true);
+        StepSortInternal(TotalSortPasses, true);
+        CopySortedOrderInternal(renderOrder, slice, true);
     }
 #endif
 
@@ -71,18 +122,6 @@ public class RadixSort : UdonSharpBehaviour
         _currentBit = 0;
         _sortInProgress = true;
     }
-
-    public void StepSort(int maxSubpasses)
-    {
-        StepSortInternal(maxSubpasses, false);
-    }
-
-#if UNITY_EDITOR && !COMPILER_UDONSHARP
-    public void StepSortForEditor(int maxSubpasses)
-    {
-        StepSortInternal(maxSubpasses, true);
-    }
-#endif
 
     void StepSortInternal(int maxSubpasses, bool useEditorOps)
     {
@@ -141,9 +180,20 @@ public class RadixSort : UdonSharpBehaviour
         return !_sortInProgress;
     }
 
-    public RenderTexture GetSortedKeyValues()
+    public bool SetPipelinedPassesPerFrame(int value)
     {
-        return keyValues0;
+        int clampedValue = Mathf.Clamp(value, 1, TotalSortPasses);
+        if (pipelinedPassesPerFrame == clampedValue)
+        {
+            return false;
+        }
+        pipelinedPassesPerFrame = clampedValue;
+        return true;
+    }
+
+    int GetPipelinedPassesPerFrame()
+    {
+        return Mathf.Clamp(pipelinedPassesPerFrame, 1, TotalSortPasses);
     }
 
     public void CancelSort()
@@ -152,22 +202,7 @@ public class RadixSort : UdonSharpBehaviour
         _currentBit = 0;
     }
 
-    public void CopySortedOrder(RenderTexture target)
-    {
-        CopySortedOrder(target, 0);
-    }
-
-    public void CopySortedOrder(RenderTexture target, int slice)
-    {
-        CopySortedOrderInternal(target, slice, false);
-    }
-
 #if UNITY_EDITOR && !COMPILER_UDONSHARP
-    public void CopySortedOrderForEditor(RenderTexture target, int slice)
-    {
-        CopySortedOrderInternal(target, slice, true);
-    }
-
     static Material GetEditorCopySortedOrderMaterial()
     {
         if (_editorCopySortedOrderMaterial != null)

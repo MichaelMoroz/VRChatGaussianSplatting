@@ -2,7 +2,6 @@
 #pragma target 5.0
 #pragma exclude_renderers gles
 #pragma shader_feature_local _PRECOMPUTED_SORTING_ON
-#pragma shader_feature_local __ GS_CAMERA_COLOR_ARRAY
 #pragma multi_compile_local __ _VRC_LIGHT_VOLUMES_ON
 #pragma vertex vert
 #pragma fragment frag
@@ -149,13 +148,16 @@ bool GSTryGetRaySplatDepth(float3 splatPos, float3 splatScale, float4 splatRotat
 [maxvertexcount(GS_MAX_VERTEX_COUNT)]
 [instance(32)]
 void geo(point v2g input[1], inout TriangleStream<g2f> triStream, uint instanceID : SV_GSInstanceID, uint geoPrimID : SV_PrimitiveID) {
+    uint splatCount = (uint)max(_SplatCount, 0);
+    uint splatOffset = (uint)max(_SplatOffset, 0);
+    uint actualSplatCount = (uint)max(_ActualSplatCount, 0);
     uint id = geoPrimID * 32 + instanceID;
-    if (id >= _SplatCount) return; // check if id is within bounds
-    id += _SplatOffset; // offset for the current batch
+    if (id >= splatCount) return; // check if id is within bounds
+    id += splatOffset; // offset for the current batch
+    if (id >= actualSplatCount) return;
     #ifdef _BACK_TO_FRONT
-        id = _ActualSplatCount - id - 1; // flip the order for back-to-front rendering
+        id = actualSplatCount - id - 1u; // flip the order for back-to-front rendering
     #endif
-    if (id >= _ActualSplatCount) return;
     
     g2f o;
     UNITY_SETUP_INSTANCE_ID(input[0]);
@@ -244,7 +246,7 @@ void geo(point v2g input[1], inout TriangleStream<g2f> triStream, uint instanceI
     o.color.a *= areaScale; // scale alpha by area ratio
     o.gaussianExp = 0.5 * cutoffSigmaRadius * cutoffSigmaRadius;
 #ifdef _LEGACY_RANDOMIZED_ORDER
-    o.splatID = id;
+    o.splatID = splat.id;
 #endif
 
 #ifdef _VRC_LIGHT_VOLUMES_ON

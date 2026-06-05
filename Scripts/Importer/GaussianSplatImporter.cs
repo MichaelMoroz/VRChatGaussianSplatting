@@ -221,8 +221,8 @@ namespace GaussianSplatting
 
             splatMat.SetTexture("_GS_ColorsCamera", colorsCamera);
             splatMat.SetFloat("_GS_CameraColorArray", useCameraColorArray ? 1.0f : 0.0f);
-            if (useCameraColorArray) splatMat.EnableKeyword("GS_CAMERA_COLOR_ARRAY");
-            else splatMat.DisableKeyword("GS_CAMERA_COLOR_ARRAY");
+            splatMat.DisableKeyword("GS_CAMERA_COLOR_ARRAY");
+            splatMat.DisableKeyword("_GS_CAMERACOLORARRAY_ON");
 
             if (precomputedSort != null)
             {
@@ -866,6 +866,77 @@ namespace GaussianSplatting
             }
         }
 
+        static RenderTexture CreateSortRenderTextureAsset(string folderPath, string assetName, int width, int height, RenderTextureFormat format, bool useMipMap, int volumeDepth)
+        {
+            EnsureFolderExists(folderPath);
+            RenderTexture renderTexture = new RenderTexture(width, height, 0, format, RenderTextureReadWrite.Linear);
+            renderTexture.name = assetName;
+            renderTexture.dimension = volumeDepth > 1 ? UnityEngine.Rendering.TextureDimension.Tex2DArray : UnityEngine.Rendering.TextureDimension.Tex2D;
+            renderTexture.volumeDepth = volumeDepth;
+            renderTexture.useMipMap = useMipMap;
+            renderTexture.autoGenerateMips = false;
+            renderTexture.wrapMode = TextureWrapMode.Clamp;
+            renderTexture.filterMode = FilterMode.Point;
+            renderTexture.anisoLevel = 0;
+            renderTexture.antiAliasing = 1;
+            renderTexture.Create();
+            AssetDatabase.CreateAsset(renderTexture, folderPath + "/" + assetName + ".renderTexture");
+            return renderTexture;
+        }
+
+        /// <summary>
+        /// Ensures the referenced RenderTexture asset exists at the expected scene-local path with the
+        /// requested format/size. Re-points the reference when it is missing, in-memory, or owned by a
+        /// different folder (e.g. a duplicated scene). Returns true when the reference or asset changed.
+        /// </summary>
+        public static bool EnsureSortRenderTexture(ref RenderTexture targetTexture, string folderPath, string assetName, int width, int height, RenderTextureFormat format, bool useMipMap, int volumeDepth)
+        {
+            string assetPath = folderPath + "/" + assetName + ".renderTexture";
+            bool changed = false;
+            if (targetTexture == null || AssetDatabase.GetAssetPath(targetTexture) != assetPath)
+            {
+                EnsureFolderExists(folderPath);
+                targetTexture = AssetDatabase.LoadAssetAtPath<RenderTexture>(assetPath);
+                if (targetTexture == null)
+                {
+                    targetTexture = CreateSortRenderTextureAsset(folderPath, assetName, width, height, format, useMipMap, volumeDepth);
+                    return true;
+                }
+                changed = true;
+            }
+            bool needsResize = targetTexture.width != width
+                || targetTexture.height != height
+                || targetTexture.format != format
+                || targetTexture.dimension != (volumeDepth > 1 ? UnityEngine.Rendering.TextureDimension.Tex2DArray : UnityEngine.Rendering.TextureDimension.Tex2D)
+                || targetTexture.volumeDepth != volumeDepth
+                || targetTexture.useMipMap != useMipMap
+                || targetTexture.autoGenerateMips
+                || targetTexture.wrapMode != TextureWrapMode.Clamp
+                || targetTexture.filterMode != FilterMode.Point
+                || targetTexture.anisoLevel != 0
+                || targetTexture.antiAliasing != 1;
+            if (!needsResize)
+            {
+                return changed;
+            }
+            Undo.RecordObject(targetTexture, "Resize Gaussian Splat Sort Texture");
+            targetTexture.Release();
+            targetTexture.width = width;
+            targetTexture.height = height;
+            targetTexture.format = format;
+            targetTexture.dimension = volumeDepth > 1 ? UnityEngine.Rendering.TextureDimension.Tex2DArray : UnityEngine.Rendering.TextureDimension.Tex2D;
+            targetTexture.volumeDepth = volumeDepth;
+            targetTexture.useMipMap = useMipMap;
+            targetTexture.autoGenerateMips = false;
+            targetTexture.wrapMode = TextureWrapMode.Clamp;
+            targetTexture.filterMode = FilterMode.Point;
+            targetTexture.anisoLevel = 0;
+            targetTexture.antiAliasing = 1;
+            targetTexture.Create();
+            EditorUtility.SetDirty(targetTexture);
+            return true;
+        }
+
         public static string GetSceneTempResourceFolderPath(UnityEngine.SceneManagement.Scene scene, string subfolder)
         {
             string sceneName = scene.name;
@@ -901,40 +972,31 @@ namespace GaussianSplatting
             string assetName = Path.GetFileNameWithoutExtension(path);
             asset.name = assetName;
 
-            T savedAsset = null;
-            bool createdAsset = false;
-
             T existing = AssetDatabase.LoadAssetAtPath<T>(path);
             if (existing != null)
             {
                 EditorUtility.CopySerializedIfDifferent(asset, existing);
-                savedAsset = existing;
-                UnityEngine.Object.DestroyImmediate(asset);
-            }
-            else
-            {
-                UnityEngine.Object existingMainAsset = AssetDatabase.LoadMainAssetAtPath(path);
-                if (existingMainAsset != null)
+                Material existingMaterial = existing as Material;
+                Material sourceMaterial = asset as Material;
+                if (existingMaterial != null && sourceMaterial != null && existingMaterial.renderQueue != sourceMaterial.renderQueue)
                 {
-                    AssetDatabase.DeleteAsset(path);
+                    existingMaterial.renderQueue = sourceMaterial.renderQueue;
+                    EditorUtility.SetDirty(existingMaterial);
                 }
-
-                AssetDatabase.CreateAsset(asset, path);
-                savedAsset = AssetDatabase.LoadAssetAtPath<T>(path) ?? asset;
-                createdAsset = true;
+                UnityEngine.Object.DestroyImmediate(asset);
+                existing.name = assetName;
+                return existing;
             }
 
-            bool renamedAsset = savedAsset != null && savedAsset.name != assetName;
-            if (savedAsset != null && savedAsset.name != assetName)
+            EnsureFolderExists(Path.GetDirectoryName(path));
+            if (AssetDatabase.LoadMainAssetAtPath(path) != null)
             {
-                savedAsset.name = assetName;
+                AssetDatabase.DeleteAsset(path);
             }
-
-            if (savedAsset != null && (createdAsset || renamedAsset))
-            {
-                EditorUtility.SetDirty(savedAsset);
-            }
-
+            AssetDatabase.CreateAsset(asset, path);
+            T savedAsset = AssetDatabase.LoadAssetAtPath<T>(path) ?? asset;
+            savedAsset.name = assetName;
+            EditorUtility.SetDirty(savedAsset);
             return savedAsset;
         }
 

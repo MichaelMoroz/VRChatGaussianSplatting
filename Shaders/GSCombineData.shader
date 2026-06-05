@@ -26,7 +26,7 @@ Shader "Hidden/GaussianSplatting/CombineData"
         GS_SOURCE_SLOT_LIST(GS_DECLARE_SOURCE_TEXTURES)
         #undef GS_DECLARE_SOURCE_TEXTURES
 
-        #define GS_DECLARE_SOURCE_VECTORS(slot) float4 _GS_SourceLayout##slot, _GS_SourceShLayout##slot, _GS_SourceDecode##slot, _GS_SourceShMin##slot, _GS_SourceShRange##slot;
+        #define GS_DECLARE_SOURCE_VECTORS(slot) float4 _GS_SourceLayout##slot, _GS_SourceShLayout##slot, _GS_SourceDecode##slot, _GS_SourceShMin##slot, _GS_SourceShRange##slot, _GS_SourceTransformRotation##slot, _GS_SourceTransformScale##slot;
         GS_SOURCE_SLOT_LIST(GS_DECLARE_SOURCE_VECTORS)
         #undef GS_DECLARE_SOURCE_VECTORS
 
@@ -109,7 +109,7 @@ Shader "Hidden/GaussianSplatting/CombineData"
                     gaussian.position = source.mean; \
                     gaussian.rotation = source.quat; \
                     gaussian.scale = source.scale; \
-                    gaussian = GSTransformGaussian(gaussian, _GS_SourceLocalToWorld##slot); \
+                    gaussian = GSTransformGaussian(gaussian, _GS_SourceLocalToWorld##slot, _GS_SourceTransformRotation##slot, _GS_SourceTransformScale##slot.xyz); \
                     color = float4(GSEvaluateSourceSHColor(_GS_SourceSH##slot, _GS_SourceShMin##slot, _GS_SourceShRange##slot, _GS_SourceShLayout##slot, _GS_SourceDecode##slot.z, source.id, source.color.rgb, source.mean, mul(_GS_SourceWorldToLocal##slot, float4(_CameraPosWorld, 1.0)).xyz), source.color.a); \
                     return true; \
                 }

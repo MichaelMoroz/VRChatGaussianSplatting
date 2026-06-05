@@ -29,7 +29,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
     const float SliderChangeThreshold = 0.0001f;
 
     public GaussianSplatRenderer gaussianSplatRenderer;
-    public TextMeshProUGUI currentSplatText, sortingSectionText, cameraQuantizationLabelText, cameraQuantizationText, sortingStepsLabelText, sortingStepsText;
+    public TextMeshProUGUI currentSplatText, sortingSectionText, cameraQuantizationLabelText, cameraQuantizationText;
     public TextMeshProUGUI alwaysUpdateLabelText, materialSectionText, shBandLabelText, shBandText, vrcLightVolumesLabelText, antiAliasingLabelText, antiAliasingText;
     public TextMeshProUGUI lightVolumeIntensityLabelText, lightVolumeIntensityText, gaussianScaleLabelText, gaussianScaleText, alphaCutoffLabelText, alphaCutoffText;
     public TextMeshProUGUI languageSectionText, splatSectionText;
@@ -160,6 +160,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
     string ToggleLabel(bool enabled) { return Localize(enabled ? "On" : "Off", enabled ? "オン" : "オフ"); }
     string ScrollLabel(bool up) { return Localize(up ? "Up" : "Down", up ? "上へ" : "下へ"); }
     string CurrentSplatNoneLabel() { return Localize("Current Splat: None", "現在のスプラット: なし"); }
+    string RenderedSplatCountLabel(int count) { return Localize("Rendered Splats: ", "描画スプラット数: ") + count; }
 
     void SetText(TextMeshProUGUI text, string value) { if (text != null && text.text != value) text.text = value; }
     void SetLocalizedText(TextMeshProUGUI text, string english, string japanese) { SetText(text, Localize(english, japanese)); }
@@ -179,7 +180,6 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
             "Github: https://github.com/MichaelMoroz/VRChatGaussianSplatting\n開発: misha_m"));
         SetLocalizedText(sortingSectionText, "Sorting Settings", "ソート設定");
         SetLocalizedText(cameraQuantizationLabelText, "Camera move amount to trigger resort", "再ソートするカメラ移動量");
-        SetLocalizedText(sortingStepsLabelText, "Pipeline sort over N frames", "ソートを N フレームに分散");
         SetLocalizedText(alwaysUpdateLabelText, "Sort every frame", "毎フレームソート");
         SetLocalizedText(materialSectionText, "Material Settings", "マテリアル設定");
         SetLocalizedText(shBandLabelText, "SH Band (global)", "SH バンド (共有)");
@@ -507,7 +507,6 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
     void RefreshSortingControls()
     {
         SetText(cameraQuantizationText, FormatFloat(gaussianSplatRenderer.GetCameraPositionQuantization()));
-        SetText(sortingStepsText, gaussianSplatRenderer.GetSortPipelineFrames().ToString());
         if (alwaysUpdateButton != null)
         {
             bool alwaysUpdate = gaussianSplatRenderer.GetAlwaysUpdate();
@@ -662,16 +661,6 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         RefreshUI();
     }
 
-    void StepSortingSteps(int delta)
-    {
-        if (gaussianSplatRenderer == null)
-        {
-            return;
-        }
-        gaussianSplatRenderer.SetSortPipelineFrames(gaussianSplatRenderer.GetSortPipelineFrames() + delta);
-        RefreshUI();
-    }
-
     void StepGaussianScale(float delta)
     {
         if (gaussianSplatRenderer == null)
@@ -727,7 +716,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         RefreshRenderingModeLayout(combinedMode);
         if (gaussianSplatRenderer == null)
         {
-            SetText(currentSplatText, CurrentSplatNoneLabel());
+            SetText(currentSplatText, CurrentSplatNoneLabel() + "\n" + RenderedSplatCountLabel(0));
             SetSliderWithoutNotify(alphaCutoffSlider, DefaultAlphaCutoff);
             SetText(alphaCutoffText, FormatFloat(DefaultAlphaCutoff));
             RefreshSplatButtons();
@@ -737,9 +726,10 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         {
             string modeLabel = combinedMode ? Localize("Rendering Mode: Combined", "表示モード: 統合") : Localize("Rendering Mode: Single", "表示モード: 単体");
             string currentSplatName = gaussianSplatRenderer.GetCurrentSplatName();
+            string renderedCountLabel = RenderedSplatCountLabel(gaussianSplatRenderer.GetCurrentRenderedSplatCount());
             SetText(currentSplatText, combinedMode
-                ? modeLabel
-                : modeLabel + "\n" + (currentSplatName == "None" ? CurrentSplatNoneLabel() : Localize("Current Splat: ", "現在のスプラット: ") + currentSplatName));
+                ? modeLabel + "\n" + renderedCountLabel
+                : modeLabel + "\n" + (currentSplatName == "None" ? CurrentSplatNoneLabel() : Localize("Current Splat: ", "現在のスプラット: ") + currentSplatName) + "\n" + renderedCountLabel);
         }
         SetText(gaussianScaleText, FormatFloat(gaussianSplatRenderer.gaussianScale));
         SetText(alphaCutoffText, FormatFloat(gaussianSplatRenderer.alphaCutoff));
@@ -751,8 +741,6 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
 
     public void IncreaseCameraQuantization() { StepCameraQuantization(cameraQuantizationStep); }
     public void DecreaseCameraQuantization() { StepCameraQuantization(-cameraQuantizationStep); }
-    public void IncreaseSortingSteps() { StepSortingSteps(1); }
-    public void DecreaseSortingSteps() { StepSortingSteps(-1); }
 
     public void ToggleAlwaysUpdate() { if (gaussianSplatRenderer == null) return; gaussianSplatRenderer.ToggleAlwaysUpdate(); RefreshUI(); }
     public void ToggleVrcLightVolumes() { if (gaussianSplatRenderer == null) return; gaussianSplatRenderer.ToggleVrcLightVolumes(); RefreshUI(); }

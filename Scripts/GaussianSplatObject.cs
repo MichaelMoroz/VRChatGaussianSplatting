@@ -76,6 +76,17 @@ namespace GaussianSplatting
             NotifyRendererEnabled();
         }
 
+        void OnDisable()
+        {
+            // Do NOT resolve via GameObject.Find here: calling Find during OnDisable
+            // triggers Unity's 'go.IsActive()' assertion. Use the reference cached
+            // while the object was enabled instead.
+            if (gaussianSplatRenderer != null)
+            {
+                gaussianSplatRenderer.NotifySplatObjectDisabled(this);
+            }
+        }
+
         public void NotifyRendererEnabled()
         {
             GaussianSplatRenderer sceneRenderer = ResolveSceneRendererReference();

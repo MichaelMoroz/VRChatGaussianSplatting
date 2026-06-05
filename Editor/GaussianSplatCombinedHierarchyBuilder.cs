@@ -1,6 +1,5 @@
 #if UNITY_EDITOR
 using System.Collections.Generic;
-using System.Reflection;
 using GaussianSplatting;
 using UnityEditor;
 using UnityEngine;
@@ -10,14 +9,14 @@ namespace GaussianSplatting.Editor
 {
     static class GaussianSplatCombinedHierarchyBuilder
     {
-        static readonly FieldInfo CombinedSortedRendererField = typeof(GaussianSplatRenderer).GetField("combinedSortedRenderer", BindingFlags.Instance | BindingFlags.NonPublic);
         public static bool EnsureChunkHierarchy(GaussianSplatRenderer renderer)
         {
             if (renderer == null)
             {
                 return false;
             }
-            MeshRenderer parentRenderer = CombinedSortedRendererField != null ? CombinedSortedRendererField.GetValue(renderer) as MeshRenderer : null;
+            GaussianSplatCombiner combiner = renderer.GetCombiner();
+            MeshRenderer parentRenderer = combiner != null ? combiner.GetCombinedSortedRenderer() : null;
             if (parentRenderer == null)
             {
                 return false;

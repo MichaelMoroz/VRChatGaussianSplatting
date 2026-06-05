@@ -1,7 +1,7 @@
 #include "../RadixSort/Utils.cginc"
 
 Texture2D _GS_Positions, _GS_Scales, _GS_Rotations, _GS_Colors, _GS_SH;
-Texture2DArray<float4> _GS_ColorsCamera;
+Texture2D _GS_ColorsCamera;
 float4 _GS_SH_Min;
 float4 _GS_SH_Range;
 Texture2DArray<float> _GS_RenderOrder;
@@ -13,6 +13,7 @@ float4 _GS_RenderOrder_TexelSize;
 float4 _GS_RenderOrderPrecomputed_TexelSize;
 float _VRChatCameraMode;
 float _VRChatMirrorMode;
+float _GS_CameraColorArray;
 float3 _MirrorCameraPos, _VRChatMirrorCameraPos;
 float _GaussianMul;
 float _ThinThreshold;
@@ -143,12 +144,7 @@ uint2 GetSplatCoord(uint id)
 
 float4 LoadSplatColor(uint2 coord)
 {
-#if defined(GS_CAMERA_COLOR_ARRAY)
-    uint slice = (_VRChatCameraMode > 0);
-    return _GS_ColorsCamera[uint3(coord, slice)];
-#else
     return _GS_Colors[coord];
-#endif
 }
 
 SplatData LoadSplatData(uint id) {
@@ -257,16 +253,18 @@ int GetPrecomputedRenderOrderIndex(uint id, float3 cam_dir) {
             best_index = i;
         }
     }
-    if(best_dot > 0.0) {
-        id = _ActualSplatCount - id - 1; // flip the order for positive directions
+    uint actualSplatCount = (uint)max(_ActualSplatCount, 0);
+    if(best_dot > 0.0 && actualSplatCount > 0u) {
+        id = actualSplatCount - id - 1u; // flip the order for positive directions
     }
     uint2 coord = GetBlockCoord(id, uint(_GS_RenderOrderPrecomputed_CoordMask), uint(_GS_RenderOrderPrecomputed_CoordShift));
     return _GS_RenderOrderPrecomputed[int3(coord, best_index)];
 }
 
 SplatData LoadSplatDataRenderOrder(uint id) {
+    uint actualSplatCount = (uint)max(_ActualSplatCount, 1);
     uint renderOrderCapacity = uint(_GS_RenderOrder_TexelSize.z) * uint(_GS_RenderOrder_TexelSize.w);
-    bool validOrder = renderOrderCapacity >= uint(_ActualSplatCount);
+    bool validOrder = renderOrderCapacity >= actualSplatCount;
     uint reordered_id = id;
     bool valid = true;
     if(validOrder) { // if valid order texture
@@ -276,11 +274,11 @@ SplatData LoadSplatDataRenderOrder(uint id) {
             valid = false;
             //reordered_id = _GS_RenderOrderMirror[coord1];
         } else {
-            uint slice = (_VRChatCameraMode > 0);
+            uint slice = _VRChatCameraMode > 0.5 ? 1u : 0u;
             reordered_id = ASUINT_NO_DENORM(_GS_RenderOrder[uint3(coord1, slice)]);
         }
     } else {
-        reordered_id = pcg(reordered_id) % _ActualSplatCount; // randomize order for alpha blending to somewhat work
+        reordered_id = pcg(reordered_id) % actualSplatCount; // randomize order for alpha blending to somewhat work
     }
     SplatData data = LoadSplatData(reordered_id);
     data.id = reordered_id; // store the original ID for debugging purposes
@@ -289,7 +287,8 @@ SplatData LoadSplatDataRenderOrder(uint id) {
 }
 
 SplatData LoadSplatDataRandomized(uint id) {
-    uint reordered_id = pcg(id) % _ActualSplatCount;
+    uint actualSplatCount = (uint)max(_ActualSplatCount, 1);
+    uint reordered_id = pcg(id) % actualSplatCount;
     SplatData data = LoadSplatData(reordered_id);
     data.id = reordered_id;
     data.valid = true;
@@ -297,7 +296,7 @@ SplatData LoadSplatDataRandomized(uint id) {
 }
 
 SplatData LoadSplatDataPrecomputedOrder(uint id, float3 cam_dir) {
-    int precomputedIndex = GetPrecomputedRenderOrderIndex(id, cam_dir);
+    uint precomputedIndex = (uint)max(GetPrecomputedRenderOrderIndex(id, cam_dir), 0);
     SplatData data = LoadSplatData(precomputedIndex);
     data.id = precomputedIndex; // store the original ID for debugging purposes
     data.valid = true; // precomputed order is always valid

@@ -12,7 +12,7 @@ namespace GaussianSplatting.Editor
     {
         SerializedProperty _cameraPositionQuantization;
         SerializedProperty _alwaysUpdate;
-        SerializedProperty _sortPipelineFrames;
+        SerializedProperty _sortPassesPerFrame;
         SerializedProperty _splatRenderOrder;
         SerializedProperty _renderingMode;
 
@@ -35,7 +35,7 @@ namespace GaussianSplatting.Editor
         {
             _cameraPositionQuantization = serializedObject.FindProperty("cameraPositionQuantization");
             _alwaysUpdate = serializedObject.FindProperty("alwaysUpdate");
-            _sortPipelineFrames = serializedObject.FindProperty("sortPipelineFrames");
+            _sortPassesPerFrame = serializedObject.FindProperty("sortPassesPerFrame");
             _splatRenderOrder = serializedObject.FindProperty("splatRenderOrder");
             _renderingMode = serializedObject.FindProperty("renderingMode");
 
@@ -81,8 +81,12 @@ namespace GaussianSplatting.Editor
             EditorGUILayout.PropertyField(_renderingMode, new GUIContent("Rendering Mode"));
             EditorGUILayout.PropertyField(_cameraPositionQuantization, new GUIContent("Camera Position Quantization"));
             EditorGUILayout.PropertyField(_alwaysUpdate, new GUIContent("Always Update"));
-            EditorGUILayout.IntSlider(_sortPipelineFrames, 1, 8, new GUIContent("Sort Pipeline Frames"));
+            EditorGUILayout.IntSlider(_sortPassesPerFrame, 1, RadixSort.TotalSortPasses, new GUIContent("Sort Passes Per Frame"));
             EditorGUILayout.PropertyField(_splatRenderOrder, new GUIContent("Splat Render Order"));
+            if (!serializedObject.isEditingMultipleObjects && target is GaussianSplatRenderer sceneRenderer)
+            {
+                EditorGUILayout.LabelField("Rendered Splat Count", sceneRenderer.GetCurrentRenderedSplatCount().ToString());
+            }
         }
 
         void DrawMaterialSettings()
