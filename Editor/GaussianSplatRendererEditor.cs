@@ -111,8 +111,8 @@ namespace GaussianSplatting.Editor
                 EditorGUILayout.Slider(_thinThreshold, 0.0f, 1.0f, new GUIContent("Thinness Threshold"));
                 EditorGUILayout.Slider(_antiAliasing, 0.0f, 5.0f, new GUIContent("Anti Aliasing"));
                 EditorGUILayout.Slider(_log2MinScale, -20.0f, 10.0f, new GUIContent("Log2 Minimum Scale"));
-                EditorGUILayout.Slider(_alphaCutoff, 0.0f, 1.0f, new GUIContent("Alpha Cutoff"));
-                EditorGUILayout.Slider(_alphaCull, 0.0f, 1.0f, new GUIContent("Alpha Cull"));
+                DrawLogSlider(_alphaCutoff, new GUIContent("Alpha Cutoff"), 0.005f, 0.3f);
+                DrawLogSlider(_alphaCull, new GUIContent("Alpha Cull"), 0.005f, 0.3f);
                 EditorGUILayout.Slider(_lodCull, 0.0f, 0.1f, new GUIContent("LOD Cull"));
                 EditorGUILayout.Slider(_scaleCutoff, 0.0f, 100.0f, new GUIContent("Scale Cutoff"));
                 EditorGUILayout.Slider(_exposure, 0.0f, 5.0f, new GUIContent("Exposure"));
@@ -138,6 +138,23 @@ namespace GaussianSplatting.Editor
             _overrideMaterialProperties.boolValue = true;
             _alphaCull.floatValue = cull;
             _alphaCutoff.floatValue = cutoff;
+        }
+
+        static void DrawLogSlider(SerializedProperty property, GUIContent label, float minValue, float maxValue)
+        {
+            float clampedValue = Mathf.Clamp(property.floatValue, minValue, maxValue);
+            float logMin = Mathf.Log(minValue);
+            float logMax = Mathf.Log(maxValue);
+
+            EditorGUI.showMixedValue = property.hasMultipleDifferentValues;
+            EditorGUI.BeginChangeCheck();
+            float normalizedValue = Mathf.InverseLerp(logMin, logMax, Mathf.Log(clampedValue));
+            float nextNormalizedValue = EditorGUILayout.Slider(label, normalizedValue, 0.0f, 1.0f);
+            if (EditorGUI.EndChangeCheck())
+            {
+                property.floatValue = Mathf.Exp(Mathf.Lerp(logMin, logMax, nextNormalizedValue));
+            }
+            EditorGUI.showMixedValue = false;
         }
 
         static void DrawMinFloatField(SerializedProperty property, GUIContent label, float minValue)
