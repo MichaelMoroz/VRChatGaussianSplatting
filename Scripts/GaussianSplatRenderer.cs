@@ -501,8 +501,30 @@ public partial class GaussianSplatRenderer : UdonSharpBehaviour
             UpdateSourceVisibility();
             return;
         }
-        int sourceIndex = FindSourceIndex(activeSplatObject);
-        if (sourceIndex >= 0 && sourceIndex != _currentSourceIndex)
+        EnsureCurrentSourceSelected();
+        UpdateSourceVisibility();
+        ApplyMaterialSettingsToSelectedObject();
+    }
+
+    public void SelectSplatObject(GaussianSplatObject selectedSplatObject)
+    {
+        if (!EnsureInitialized() || selectedSplatObject == null || !selectedSplatObject.gameObject.activeInHierarchy)
+        {
+            return;
+        }
+        RegisterRuntimeSplatObject(selectedSplatObject);
+        if (IsCombinedRenderingMode())
+        {
+            ResetCameraPositions();
+            UpdateSourceVisibility();
+            return;
+        }
+        int sourceIndex = FindSourceIndex(selectedSplatObject);
+        if (sourceIndex < 0)
+        {
+            return;
+        }
+        if (_currentSourceIndex != sourceIndex)
         {
             _currentSourceIndex = sourceIndex;
             ResetCameraPositions();

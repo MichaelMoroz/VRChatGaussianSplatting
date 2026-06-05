@@ -355,17 +355,10 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         {
             return;
         }
-        for (int i = 0; i < _sceneSplatObjects.Length; i++)
-        {
-            GaussianSplatObject sceneSplatObject = _sceneSplatObjects[i];
-            if (sceneSplatObject != null && !sceneSplatObject.gameObject.activeSelf)
-            {
-                sceneSplatObject.gameObject.SetActive(true);
-            }
-        }
+        selectedSplatObject.gameObject.SetActive(true);
         if (gaussianSplatRenderer != null)
         {
-            gaussianSplatRenderer.NotifySplatObjectEnabled(selectedSplatObject);
+            gaussianSplatRenderer.SelectSplatObject(selectedSplatObject);
         }
         else
         {
@@ -547,7 +540,6 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         _splatListStartIndex = Mathf.Clamp(_splatListStartIndex, 0, maxStartIndex);
         GameObject currentSplatObject = gaussianSplatRenderer != null ? gaussianSplatRenderer.GetCurrentSplatObject() : null;
         string renderingSuffix = Localize(" (Rendering)", " (表示中)");
-        string enabledSuffix = Localize(" (On)", " (有効)");
         for (int i = 0; i < visibleButtonCount; i++)
         {
             Button slotButton = splatButtons[i];
@@ -572,10 +564,6 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
             if (isRendered)
             {
                 label += renderingSuffix;
-            }
-            else if (splatObject.gameObject.activeInHierarchy)
-            {
-                label += enabledSuffix;
             }
             SetButton(slotButton, true, label, isRendered ? _selectedSplatColor : _defaultSplatColor, _scrollDisabledColor);
         }
