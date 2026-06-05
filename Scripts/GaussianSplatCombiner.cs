@@ -32,6 +32,7 @@ public partial class GaussianSplatCombiner : UdonSharpBehaviour
     [SerializeField] Material combineDataMaterial;
     [SerializeField] RenderTextureFormat combinedPositionsFormat = RenderTextureFormat.ARGBFloat, combinedRotationsFormat = RenderTextureFormat.ARGBHalf, combinedScalesFormat = RenderTextureFormat.ARGBHalf, combinedColorsFormat = RenderTextureFormat.ARGB32, combinedColorsCameraFormat = RenderTextureFormat.ARGB32;
     [SerializeField, HideInInspector] bool combinedTextureFormatsInitialized = true;
+    [SerializeField] int combinedStartRenderQueue = 4050;
     [SerializeField] RenderTexture combinedPositions, combinedRotations, combinedScales, combinedColors, combinedColorsCamera;
     [SerializeField] int builtCombinedElementCount;
 

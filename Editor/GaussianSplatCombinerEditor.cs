@@ -15,6 +15,7 @@ namespace GaussianSplatting.Editor
         SerializedProperty _combinedScalesFormat;
         SerializedProperty _combinedColorsFormat;
         SerializedProperty _combinedColorsCameraFormat;
+        SerializedProperty _combinedStartRenderQueue;
         SerializedProperty _combinedTextureFormatsInitialized;
 
         void OnEnable()
@@ -24,6 +25,7 @@ namespace GaussianSplatting.Editor
             _combinedScalesFormat = serializedObject.FindProperty("combinedScalesFormat");
             _combinedColorsFormat = serializedObject.FindProperty("combinedColorsFormat");
             _combinedColorsCameraFormat = serializedObject.FindProperty("combinedColorsCameraFormat");
+            _combinedStartRenderQueue = serializedObject.FindProperty("combinedStartRenderQueue");
             _combinedTextureFormatsInitialized = serializedObject.FindProperty("combinedTextureFormatsInitialized");
         }
 
@@ -43,6 +45,12 @@ namespace GaussianSplatting.Editor
             EditorGUILayout.PropertyField(_combinedScalesFormat, new GUIContent("Scales"));
             EditorGUILayout.PropertyField(_combinedColorsFormat, new GUIContent("Colors"));
             EditorGUILayout.PropertyField(_combinedColorsCameraFormat, new GUIContent("Camera Colors"));
+            EditorGUILayout.EndVertical();
+
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            EditorGUILayout.LabelField("Render Queue", EditorStyles.boldLabel);
+            EditorGUILayout.HelpBox("Starting render queue for the generated combined materials. Materials are assigned sequential queues from this value on the next editor refresh.", MessageType.Info);
+            EditorGUILayout.PropertyField(_combinedStartRenderQueue, new GUIContent("Start Render Queue"));
             EditorGUILayout.EndVertical();
 
             bool formatChanged = EditorGUI.EndChangeCheck();

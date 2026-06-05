@@ -133,15 +133,11 @@ public partial class GaussianSplatRenderer
         for (int i = 0; i < SceneManager.sceneCount; i++)
         {
             Scene scene = SceneManager.GetSceneAt(i);
-            if (!ShouldUseEditorScene(scene))
+            if (!ShouldUseEditorScene(scene) || UnityEditor.SceneManagement.EditorSceneManager.IsPreviewScene(scene))
             {
                 continue;
             }
             GaussianSplatRenderer renderer = GetPrimarySceneRenderer(scene);
-            if (renderer == null && UnityEditor.SceneManagement.EditorSceneManager.IsPreviewScene(scene) && FindSceneObjects<GaussianSplatObject>(scene).Length > 0)
-            {
-                renderer = EnsureSceneRendererExists(scene);
-            }
             if (renderer == null)
             {
                 ApplyEditorVisibility(scene, false);
@@ -161,11 +157,6 @@ public partial class GaussianSplatRenderer
         if (Application.isPlaying || camera == null || camera.cameraType != CameraType.SceneView)
         {
             return;
-        }
-        UnityEditor.SceneManagement.PrefabStage prefabStage = UnityEditor.SceneManagement.PrefabStageUtility.GetCurrentPrefabStage();
-        if (prefabStage != null && GetPrimarySceneRenderer(prefabStage.scene) == null && FindSceneObjects<GaussianSplatObject>(prefabStage.scene).Length > 0)
-        {
-            EnsureSceneRendererExists(prefabStage.scene);
         }
         GaussianSplatRenderer[] renderers = FindSceneObjects<GaussianSplatRenderer>(default(Scene));
         for (int i = 0; i < renderers.Length; i++)
@@ -274,7 +265,7 @@ public partial class GaussianSplatRenderer
 
     void OnValidate()
     {
-        if (EditorUtility.IsPersistent(this))
+        if (EditorUtility.IsPersistent(this) || UnityEditor.SceneManagement.EditorSceneManager.IsPreviewScene(gameObject.scene))
         {
             return;
         }

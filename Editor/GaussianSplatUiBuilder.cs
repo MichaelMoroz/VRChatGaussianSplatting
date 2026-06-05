@@ -18,6 +18,7 @@ namespace GaussianSplatting.Editor
     static class GaussianSplatUiBuilder
     {
         const float DefaultAlphaCutoff = 0.03f;
+        const float DefaultAlphaCull = 0.01f;
         const string UiFontAssetPath = "Assets/VRChatGaussianSplatting/Resources/Fonts/NotoSansJP-VF.ttf";
         const string UiTextMeshProFontAssetPath = "Assets/VRChatGaussianSplatting/Resources/Fonts/NotoSansJP-VF TMP.asset";
         const string UiMaterialFolderPath = "Assets/VRChatGaussianSplatting/Resources/Materials";
@@ -42,7 +43,7 @@ namespace GaussianSplatting.Editor
                 characters.Add((char)code);
             }
 
-            const string localizedCharacters = "表示モード統合単体現在のスプラットなし再ソートするカメラ移動量をフレームに分散毎マテリアル設定バンド共有光源強度アンチエイリアスアルファカットオフ低いほど高品質言語上へ下開発有効中日本語オンオフ示";
+            const string localizedCharacters = "表示モード統合単体現在のスプラットなし再ソートするカメラ移動量をフレームに分散毎マテリアル設定バンド共有光源強度アンチエイリアスアルファカットオフ低いほど高品質言語上へ下開発有効中日本語オンオフ示ライトボリュームガウスケールカリング減少";
             for (int i = 0; i < localizedCharacters.Length; i++)
             {
                 characters.Add(localizedCharacters[i]);
@@ -191,6 +192,8 @@ namespace GaussianSplatting.Editor
             CreateStepperSetting("Gaussian Scale", "Gaussian Scale (global)", "1", nameof(GaussianSplatRendererUI.DecreaseGaussianScale), nameof(GaussianSplatRendererUI.IncreaseGaussianScale), out generatedUi.gaussianScaleLabelText, out generatedUi.gaussianScaleText);
             CreateSliderSetting("Alpha Cutoff", "Alpha Cutoff\n(lower = better quality)", 0.005f, 0.3f, false, "0.03", 0.0f, out generatedUi.alphaCutoffLabelText, out generatedUi.alphaCutoffSlider, out generatedUi.alphaCutoffText);
             generatedUi.alphaCutoffSlider.value = DefaultAlphaCutoff;
+            CreateSliderSetting("Alpha Cull", "Alpha Cull\n(higher = fewer splats)", 0.005f, 0.3f, false, "0.01", 0.0f, out generatedUi.alphaCullLabelText, out generatedUi.alphaCullSlider, out generatedUi.alphaCullText);
+            generatedUi.alphaCullSlider.value = DefaultAlphaCull;
             generatedUi.languageSectionText = CreateTextElement("Language Section", settingsColumn.transform, "Language", 18, TextAnchor.MiddleLeft);
             GameObject languageRow = CreateHorizontalGroup("Language Row", settingsColumn.transform, 8.0f, false);
             Button englishLanguageButton = CreateButtonElement("English Button", languageRow.transform, "English", new Color(0.2f, 0.2f, 0.24f, 1.0f), 0.0f, 1.0f);

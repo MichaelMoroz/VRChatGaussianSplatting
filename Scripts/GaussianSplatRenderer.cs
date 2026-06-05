@@ -20,6 +20,7 @@ public partial class GaussianSplatRenderer : UdonSharpBehaviour
     const int SCREEN_CAMERA_ID = 0;
     const int PHOTO_CAMERA_ID = 1;
     const float DEFAULT_ALPHA_CUTOFF = 0.03f;
+    const float DEFAULT_ALPHA_CULL = 0.01f;
 
     Vector3[] _completedCameraPos;
     bool[] _hasCompletedSort;
@@ -54,6 +55,7 @@ public partial class GaussianSplatRenderer : UdonSharpBehaviour
     [Range(0.0f, 3.0f)] [SerializeField] float antiAliasing = 1.0f;
     [Range(-20.0f, 10.0f)] [SerializeField] float log2MinScale = -15.0f;
     [Range(0.005f, 0.3f)] [SerializeField] public float alphaCutoff = DEFAULT_ALPHA_CUTOFF;
+    [Range(0.005f, 0.3f)] [SerializeField] public float alphaCull = DEFAULT_ALPHA_CULL;
     [Range(0.0f, 100.0f)] [SerializeField] float scaleCutoff = 100.0f;
     [Range(0.0f, 5.0f)] [SerializeField] float exposure = 1.0f;
     [Range(0.0f, 5.0f)] [SerializeField] float opacity = 1.0f;
@@ -342,6 +344,7 @@ public partial class GaussianSplatRenderer : UdonSharpBehaviour
         if (material.HasProperty("_AntiAliasing")) material.SetFloat("_AntiAliasing", antiAliasing);
         if (material.HasProperty("_Log2MinScale")) material.SetFloat("_Log2MinScale", log2MinScale);
         if (material.HasProperty("_AlphaCutoff")) material.SetFloat("_AlphaCutoff", alphaCutoff);
+        if (material.HasProperty("_AlphaCull")) material.SetFloat("_AlphaCull", alphaCull);
         if (material.HasProperty("_ScaleCutoff")) material.SetFloat("_ScaleCutoff", scaleCutoff);
         if (material.HasProperty("_Exposure")) material.SetFloat("_Exposure", exposure);
         if (material.HasProperty("_Opacity")) material.SetFloat("_Opacity", opacity);
@@ -398,6 +401,8 @@ public partial class GaussianSplatRenderer : UdonSharpBehaviour
     public void SetLightVolumeIntensity(float value) { overrideMaterialProperties = true; lightVolumeIntensity = Mathf.Clamp(value, 0.0f, 4.0f); ApplyMaterialSettingsToSelectedObject(); }
     public void SetGaussianScale(float value) { EnsureLocalOwnership(); overrideMaterialProperties = true; gaussianScale = Mathf.Clamp(value, 0.0f, 2.0f); ApplyMaterialSettingsToSelectedObject(); RequestSyncedStateUpdate(); }
     public void SetAlphaCutoff(float value) { overrideMaterialProperties = true; alphaCutoff = Mathf.Clamp(value, 0.005f, 0.3f); ApplyMaterialSettingsToSelectedObject(); }
+    public float GetAlphaCull() { return alphaCull; }
+    public void SetAlphaCull(float value) { overrideMaterialProperties = true; alphaCull = Mathf.Clamp(value, 0.005f, 0.3f); ApplyMaterialSettingsToSelectedObject(); }
 
     int GetCombinedRenderedSplatCount()
     {

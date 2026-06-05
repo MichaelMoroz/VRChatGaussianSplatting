@@ -432,7 +432,7 @@ namespace GaussianSplatting
             return prefab;
         }
 
-        public static void Import(string plyFile, string prefabOutputPath, bool computeBoundingBox, int splatsPerPass, bool precomputeSorting = false, int maxAlphaMaskCount = 1, bool useSRGB = true, bool importSphericalHarmonics = true, SHBand defaultSHBand = SHBand.SH1, bool compressColorAlphaToBC7 = false, bool compressSHToBC7 = true)
+        public static void Import(string plyFile, string prefabOutputPath, bool computeBoundingBox, int splatsPerPass, bool precomputeSorting = false, int maxAlphaMaskCount = 1, bool useSRGB = true, bool importSphericalHarmonics = true, SHBand defaultSHBand = SHBand.SH1, bool compressColorAlphaToBC7 = false, bool compressSHToBC7 = true, int startRenderQueue = 4050)
         {
             if (!File.Exists(plyFile))
                 throw new FileNotFoundException(plyFile);
@@ -782,7 +782,7 @@ namespace GaussianSplatting
                 Directory.CreateDirectory(outputDataFolder + "/materials");
                 for (int i = 0; i < materials.Count; ++i) {
                     Material splatMat = materials[i];
-                    splatMat.renderQueue = 3500 + i;
+                    splatMat.renderQueue = startRenderQueue + i;
                     string matPath = Path.Combine(outputDataFolder + "/materials", splatMat.name + ".mat");
                     materials[i] = CreateOrReplaceAsset(splatMat, matPath);
                 }
@@ -1029,6 +1029,7 @@ namespace GaussianSplatting.Editor.Importers
         internal static readonly SHBand DefaultImportedSHBand = SHBand.SH3;
         internal const bool DefaultCompressColorAlphaToBC7 = false;
         internal const bool DefaultCompressSHToBC7 = true;
+        internal const int DefaultStartRenderQueue = 4050;
 
         List<string> _plyPaths = new();  
         string _outputFolder = DefaultOutputFolder;
@@ -1042,6 +1043,7 @@ namespace GaussianSplatting.Editor.Importers
         SHBand _defaultSHBand = DefaultImportedSHBand;
         bool _compressColorAlphaToBC7 = DefaultCompressColorAlphaToBC7;
         bool _compressSHToBC7 = DefaultCompressSHToBC7;
+        int _startRenderQueue = DefaultStartRenderQueue;
         Vector2 scrollPosition = Vector2.zero;
 
         public static PlyImportWizard OpenWithPly(string plyPath)
@@ -1180,6 +1182,10 @@ namespace GaussianSplatting.Editor.Importers
                 EditorGUILayout.HelpBox("Precomputing sorting for octahedral directions, makes the gaussian splatting work standalone, without the GaussianSplatRenderer. However this takes way more texture memory and might have rendering artifacts. THIS WILL NO LONGER WORK WITH GaussianSplatRenderer", MessageType.Warning);
             }
           
+            EditorGUILayout.Space(5f);
+            _startRenderQueue = EditorGUILayout.IntField("Start Render Queue", _startRenderQueue);
+            EditorGUILayout.HelpBox("Starting render queue for the generated splat materials. Each generated material is assigned a sequential queue from this value.", MessageType.Info);
+            _startRenderQueue = Mathf.Clamp(_startRenderQueue, 2000, 5000);
             GUILayout.FlexibleSpace();
 
             if (GUILayout.Button("Import All PLYs"))
@@ -1211,7 +1217,7 @@ namespace GaussianSplatting.Editor.Importers
             {
                 EditorUtility.DisplayProgressBar("PLY Import",
                     $"Importing {Path.GetFileName(plyPath)}", 0f);
-                PlySplatImporter.Import(plyPath, prefabPath, _computeBoundingBox, _splatsPerPass, _precomputeSorting, _maxAlphaMaskCount, _useSRGB, _importSphericalHarmonics, _defaultSHBand, _compressColorAlphaToBC7, _compressSHToBC7);
+                PlySplatImporter.Import(plyPath, prefabPath, _computeBoundingBox, _splatsPerPass, _precomputeSorting, _maxAlphaMaskCount, _useSRGB, _importSphericalHarmonics, _defaultSHBand, _compressColorAlphaToBC7, _compressSHToBC7, _startRenderQueue);
             }
             catch (Exception e)
             {

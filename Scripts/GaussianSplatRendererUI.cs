@@ -21,8 +21,11 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
     const int SliderAntiAliasing = 1;
     const int SliderLightVolumeIntensity = 2;
     const int SliderAlphaCutoff = 3;
+    const int SliderAlphaCull = 4;
     const float DefaultAlphaCutoff = 0.03f;
     const float MaxAlphaCutoff = 0.3f;
+    const float DefaultAlphaCull = 0.01f;
+    const float MaxAlphaCull = 0.3f;
     const float DefaultPanelWidth = 1120.0f;
     const float CombinedPanelWidth = 560.0f;
     const float BackgroundPadding = 24.0f;
@@ -32,9 +35,11 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
     public TextMeshProUGUI currentSplatText, sortingSectionText, cameraQuantizationLabelText, cameraQuantizationText;
     public TextMeshProUGUI alwaysUpdateLabelText, materialSectionText, shBandLabelText, shBandText, vrcLightVolumesLabelText, antiAliasingLabelText, antiAliasingText;
     public TextMeshProUGUI lightVolumeIntensityLabelText, lightVolumeIntensityText, gaussianScaleLabelText, gaussianScaleText, alphaCutoffLabelText, alphaCutoffText;
+    public TextMeshProUGUI alphaCullLabelText, alphaCullText;
     public TextMeshProUGUI languageSectionText, splatSectionText;
     public Button alwaysUpdateButton, vrcLightVolumesButton, englishLanguageButton, japaneseLanguageButton, splatScrollUpButton, splatScrollDownButton;
     public Slider shBandSlider, antiAliasingSlider, lightVolumeIntensitySlider, alphaCutoffSlider;
+    public Slider alphaCullSlider;
     public Button[] splatButtons;
     [HideInInspector] public GaussianSplatObject[] cachedSceneSplatObjects;
 
@@ -57,6 +62,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
     float _lastAntiAliasingSliderValue;
     float _lastLightVolumeIntensitySliderValue;
     float _lastAlphaCutoffSliderValue;
+    float _lastAlphaCullSliderValue;
     float _defaultCanvasWidth;
     float _defaultPanelWidth;
     GaussianSplatObject[] _sceneSplatObjects;
@@ -100,7 +106,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
             return false;
         }
         GameObject rootObject = component.transform.root != null ? component.transform.root.gameObject : component.gameObject;
-        return rootObject != null && !EditorUtility.IsPersistent(rootObject) && (component.hideFlags & (HideFlags.HideAndDontSave | HideFlags.NotEditable)) == 0;
+        return rootObject != null && !EditorUtility.IsPersistent(rootObject) && !UnityEditor.SceneManagement.EditorSceneManager.IsPreviewScene(rootObject.scene) && (component.hideFlags & (HideFlags.HideAndDontSave | HideFlags.NotEditable)) == 0;
     }
 
     static void RefreshEditorUis()
@@ -134,7 +140,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
 
     bool SyncEditorSerializedState()
     {
-        if (EditorUtility.IsPersistent(this))
+        if (EditorUtility.IsPersistent(this) || UnityEditor.SceneManagement.EditorSceneManager.IsPreviewScene(gameObject.scene))
         {
             return false;
         }
@@ -184,10 +190,11 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         SetLocalizedText(materialSectionText, "Material Settings", "マテリアル設定");
         SetLocalizedText(shBandLabelText, "SH Band (global)", "SH バンド (共有)");
         SetLocalizedText(vrcLightVolumesLabelText, "VRC Light Volumes (global)", "VRC Light Volumes (共有)");
-        SetLocalizedText(lightVolumeIntensityLabelText, "Light Volume Intensity", "Light Volume Intensity");
+        SetLocalizedText(lightVolumeIntensityLabelText, "Light Volume Intensity", "ライトボリューム強度");
         SetLocalizedText(antiAliasingLabelText, "Antialiasing", "アンチエイリアス");
-        SetLocalizedText(gaussianScaleLabelText, "Gaussian Scale (global)", "Gaussian Scale (共有)");
+        SetLocalizedText(gaussianScaleLabelText, "Gaussian Scale (global)", "ガウススケール (共有)");
         SetLocalizedText(alphaCutoffLabelText, "Alpha Cutoff\n(lower = better quality)", "アルファカットオフ\n(低いほど高品質)");
+        SetLocalizedText(alphaCullLabelText, "Alpha Cull\n(higher = fewer splats)", "アルファカリング\n(高いほどスプラット減少)");
         SetLocalizedText(languageSectionText, "Language", "言語");
         SetLocalizedText(splatSectionText, "Splat Object (global)", "スプラットオブジェクト (共有)");
         RefreshLanguageButtons();
@@ -531,6 +538,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         SyncSlider(antiAliasingSlider, antiAliasingText, SliderAntiAliasing, allowWriteBack);
         SyncSlider(lightVolumeIntensitySlider, lightVolumeIntensityText, SliderLightVolumeIntensity, allowWriteBack);
         SyncSlider(alphaCutoffSlider, alphaCutoffText, SliderAlphaCutoff, allowWriteBack);
+        SyncSlider(alphaCullSlider, alphaCullText, SliderAlphaCull, allowWriteBack);
     }
 
     bool SliderValueChanged(float currentValue, float previousValue) { return Mathf.Abs(currentValue - previousValue) > SliderChangeThreshold; }
@@ -542,6 +550,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
             case SliderShBand: return gaussianSplatRenderer.GetCurrentSHBand();
             case SliderAntiAliasing: return gaussianSplatRenderer.GetAntiAliasing();
             case SliderLightVolumeIntensity: return gaussianSplatRenderer.GetLightVolumeIntensity();
+            case SliderAlphaCull: return gaussianSplatRenderer.GetAlphaCull();
             default: return gaussianSplatRenderer.alphaCutoff;
         }
     }
@@ -553,6 +562,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
             case SliderShBand: return _lastShBandSliderValue;
             case SliderAntiAliasing: return _lastAntiAliasingSliderValue;
             case SliderLightVolumeIntensity: return _lastLightVolumeIntensitySliderValue;
+            case SliderAlphaCull: return _lastAlphaCullSliderValue;
             default: return _lastAlphaCutoffSliderValue;
         }
     }
@@ -569,6 +579,9 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
                 return;
             case SliderLightVolumeIntensity:
                 _lastLightVolumeIntensitySliderValue = value;
+                return;
+            case SliderAlphaCull:
+                _lastAlphaCullSliderValue = value;
                 return;
             default:
                 _lastAlphaCutoffSliderValue = value;
@@ -588,6 +601,9 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
                 return;
             case SliderLightVolumeIntensity:
                 gaussianSplatRenderer.SetLightVolumeIntensity(value);
+                return;
+            case SliderAlphaCull:
+                gaussianSplatRenderer.SetAlphaCull(value);
                 return;
             default:
                 gaussianSplatRenderer.SetAlphaCutoff(value);
@@ -612,6 +628,10 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         else if (sliderKind == SliderAlphaCutoff && !Mathf.Approximately(slider.maxValue, MaxAlphaCutoff))
         {
             slider.maxValue = MaxAlphaCutoff;
+        }
+        else if (sliderKind == SliderAlphaCull && !Mathf.Approximately(slider.maxValue, MaxAlphaCull))
+        {
+            slider.maxValue = MaxAlphaCull;
         }
         float currentValue = GetSliderValue(sliderKind);
         float lastValue = GetLastSliderValue(sliderKind);
@@ -719,6 +739,8 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
             SetText(currentSplatText, CurrentSplatNoneLabel() + "\n" + RenderedSplatCountLabel(0));
             SetSliderWithoutNotify(alphaCutoffSlider, DefaultAlphaCutoff);
             SetText(alphaCutoffText, FormatFloat(DefaultAlphaCutoff));
+            SetSliderWithoutNotify(alphaCullSlider, DefaultAlphaCull);
+            SetText(alphaCullText, FormatFloat(DefaultAlphaCull));
             RefreshSplatButtons();
             return;
         }
@@ -733,6 +755,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         }
         SetText(gaussianScaleText, FormatFloat(gaussianSplatRenderer.gaussianScale));
         SetText(alphaCutoffText, FormatFloat(gaussianSplatRenderer.alphaCutoff));
+        SetText(alphaCullText, FormatFloat(gaussianSplatRenderer.alphaCull));
         RefreshSortingControls();
         RefreshMaterialControls();
         RefreshSplatButtons();

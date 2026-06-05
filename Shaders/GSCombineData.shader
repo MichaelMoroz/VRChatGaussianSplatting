@@ -98,29 +98,39 @@ Shader "Hidden/GaussianSplatting/CombineData"
             return GSEvaluateDecodedSHColor(shTexture, shMin, shRange, shLayout, sh0Color, positionObject, cameraPosObject, shBand, id);
         }
 
-        bool GSTryGetCombinedSource(v2f_img input, out GaussianTransformData gaussian, out float4 color)
+        bool GSTrySlot(uint combinedIndex,
+            Texture2D positions, Texture2D scales, Texture2D rotations, Texture2D colors, Texture2D sh,
+            float4 layout, float4 shLayout, float4 decode, float4 shMin, float4 shRange,
+            float4 transformRotation, float4 transformScale, float4x4 localToWorld, float4x4 worldToLocal,
+            inout GaussianTransformData gaussian, inout float4 color)
         {
             uint sourceIndex;
+            if (!GSResolveSourceIndex(combinedIndex, layout, sourceIndex)) return false;
+
+            SplatData source = GSLoadSourceSplat(positions, scales, rotations, colors, layout, decode, sourceIndex);
+            gaussian.position = source.mean;
+            gaussian.rotation = source.quat;
+            gaussian.scale = source.scale;
+            gaussian = GSTransformGaussian(gaussian, localToWorld, transformRotation, transformScale.xyz);
+            float3 cameraPosObject = mul(worldToLocal, float4(_CameraPosWorld, 1.0)).xyz;
+            color = float4(GSEvaluateSourceSHColor(sh, shMin, shRange, shLayout, decode.z, source.id, source.color.rgb, source.mean, cameraPosObject), source.color.a);
+            return true;
+        }
+
+        // Single-line dispatch wrapper so the per-slot body stays in the real GSTrySlot function above.
+        #define GS_TRY_SLOT(slot) if (GSTrySlot(combinedIndex, _GS_SourcePositions##slot, _GS_SourceScales##slot, _GS_SourceRotations##slot, _GS_SourceColors##slot, _GS_SourceSH##slot, _GS_SourceLayout##slot, _GS_SourceShLayout##slot, _GS_SourceDecode##slot, _GS_SourceShMin##slot, _GS_SourceShRange##slot, _GS_SourceTransformRotation##slot, _GS_SourceTransformScale##slot, _GS_SourceLocalToWorld##slot, _GS_SourceWorldToLocal##slot, gaussian, color)) return true;
+
+        bool GSTryGetCombinedSource(v2f_img input, out GaussianTransformData gaussian, out float4 color)
+        {
             uint combinedIndex = GSCombineOutputIndex(uint2(input.pos.xy));
-            #define GS_TRY_SOURCE_SLOT(slot) \
-                if (GSResolveSourceIndex(combinedIndex, _GS_SourceLayout##slot, sourceIndex)) \
-                { \
-                    SplatData source = GSLoadSourceSplat(_GS_SourcePositions##slot, _GS_SourceScales##slot, _GS_SourceRotations##slot, _GS_SourceColors##slot, _GS_SourceLayout##slot, _GS_SourceDecode##slot, sourceIndex); \
-                    gaussian.position = source.mean; \
-                    gaussian.rotation = source.quat; \
-                    gaussian.scale = source.scale; \
-                    gaussian = GSTransformGaussian(gaussian, _GS_SourceLocalToWorld##slot, _GS_SourceTransformRotation##slot, _GS_SourceTransformScale##slot.xyz); \
-                    color = float4(GSEvaluateSourceSHColor(_GS_SourceSH##slot, _GS_SourceShMin##slot, _GS_SourceShRange##slot, _GS_SourceShLayout##slot, _GS_SourceDecode##slot.z, source.id, source.color.rgb, source.mean, mul(_GS_SourceWorldToLocal##slot, float4(_CameraPosWorld, 1.0)).xyz), source.color.a); \
-                    return true; \
-                }
-            GS_SOURCE_SLOT_LIST(GS_TRY_SOURCE_SLOT)
-            #undef GS_TRY_SOURCE_SLOT
             gaussian.position = 0.0;
             gaussian.rotation = float4(0.0, 0.0, 0.0, 1.0);
             gaussian.scale = 0.0;
             color = 0.0;
+            GS_SOURCE_SLOT_LIST(GS_TRY_SLOT)
             return false;
         }
+        #undef GS_TRY_SLOT
 
         float4 fragPositions(v2f_img input) : SV_Target
         {

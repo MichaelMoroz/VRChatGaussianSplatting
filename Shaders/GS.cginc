@@ -178,7 +178,7 @@ void geo(point v2g input[1], inout TriangleStream<g2f> triStream, uint instanceI
     SplatData splat = LoadSplatDataRenderOrder(id);
     #endif
 
-    if (!splat.valid || (splat.color.a < _AlphaCutoff) || any(splat.scale > _ScaleCutoff)) return; 
+    if (!splat.valid || (splat.color.a < _AlphaCutoff) || (splat.color.a < _AlphaCull) || any(splat.scale > _ScaleCutoff)) return; 
 
     float3 splatWorldPos = mul(unity_ObjectToWorld, float4(splat.mean, 1)).xyz;
 

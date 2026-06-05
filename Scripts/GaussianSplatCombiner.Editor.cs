@@ -63,7 +63,7 @@ public partial class GaussianSplatCombiner
 
     void OnValidate()
     {
-        if (EditorUtility.IsPersistent(this))
+        if (EditorUtility.IsPersistent(this) || UnityEditor.SceneManagement.EditorSceneManager.IsPreviewScene(gameObject.scene))
         {
             return;
         }
@@ -279,7 +279,7 @@ public partial class GaussianSplatCombiner
             return false;
         }
 
-        int expectedRenderQueue = 3500;
+        int expectedRenderQueue = combinedStartRenderQueue;
         Material[] parentMaterials = combinedSortedRenderer.sharedMaterials;
 
         if (useSrgb)
@@ -562,7 +562,7 @@ public partial class GaussianSplatCombiner
         combineDataMaterial = PlySplatImporter.CreateOrReplaceAsset(combineMaterial, combinedFolderPath + "/" + assetPrefix + "_CombineData.mat");
         List<Material> generatedMaterials = new List<Material>();
         List<int> generatedRenderQueues = new List<int>();
-        int renderQueue = 3500;
+        int renderQueue = combinedStartRenderQueue;
         if (useSrgb)
         {
             Material toSrgb = PlySplatImporter.CreateMaterialFromTemplate(toSrgbTemplate, "VRChatGaussianSplatting/ToSRGB", assetPrefix + "_CombinedToSRGB");

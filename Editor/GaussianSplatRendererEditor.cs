@@ -23,6 +23,7 @@ namespace GaussianSplatting.Editor
         SerializedProperty _antiAliasing;
         SerializedProperty _log2MinScale;
         SerializedProperty _alphaCutoff;
+        SerializedProperty _alphaCull;
         SerializedProperty _scaleCutoff;
         SerializedProperty _exposure;
         SerializedProperty _opacity;
@@ -46,6 +47,7 @@ namespace GaussianSplatting.Editor
             _antiAliasing = serializedObject.FindProperty("antiAliasing");
             _log2MinScale = serializedObject.FindProperty("log2MinScale");
             _alphaCutoff = serializedObject.FindProperty("alphaCutoff");
+            _alphaCull = serializedObject.FindProperty("alphaCull");
             _scaleCutoff = serializedObject.FindProperty("scaleCutoff");
             _exposure = serializedObject.FindProperty("exposure");
             _opacity = serializedObject.FindProperty("opacity");
@@ -107,6 +109,7 @@ namespace GaussianSplatting.Editor
                 EditorGUILayout.Slider(_antiAliasing, 0.0f, 5.0f, new GUIContent("Anti Aliasing"));
                 EditorGUILayout.Slider(_log2MinScale, -20.0f, 10.0f, new GUIContent("Log2 Minimum Scale"));
                 EditorGUILayout.Slider(_alphaCutoff, 0.0f, 1.0f, new GUIContent("Alpha Cutoff"));
+                EditorGUILayout.Slider(_alphaCull, 0.0f, 1.0f, new GUIContent("Alpha Cull"));
                 EditorGUILayout.Slider(_scaleCutoff, 0.0f, 100.0f, new GUIContent("Scale Cutoff"));
                 EditorGUILayout.Slider(_exposure, 0.0f, 5.0f, new GUIContent("Exposure"));
                 EditorGUILayout.Slider(_opacity, 0.0f, 5.0f, new GUIContent("Opacity"));
