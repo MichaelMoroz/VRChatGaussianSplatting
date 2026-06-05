@@ -19,6 +19,7 @@ public partial class GaussianSplatRenderer : UdonSharpBehaviour
     const int MAX_COMBINED_SPLAT_COUNT = 1 << 24;
     const int SCREEN_CAMERA_ID = 0;
     const int PHOTO_CAMERA_ID = 1;
+    const int DEFAULT_START_RENDER_QUEUE = 4050;
     const float DEFAULT_ALPHA_CUTOFF = 0.04f;
     const float DEFAULT_ALPHA_CULL = 0.04f;
 
@@ -49,6 +50,8 @@ public partial class GaussianSplatRenderer : UdonSharpBehaviour
 
     [Tooltip("If true, the material properties will be overridden with the values set in this script. If false, the material properties will be set to their default values.")]
     [UdonSynced, SerializeField] public bool overrideMaterialProperties;
+    [SerializeField] bool overrideRenderQueue;
+    [SerializeField] int startRenderQueue = DEFAULT_START_RENDER_QUEUE;
     [UdonSynced, Range(0, 3)] [SerializeField] int requestedSHBand = 3;
     [UdonSynced, Range(0.0f, 2.0f)] [SerializeField] public float gaussianScale = 1.0f;
     [Range(0.0f, 1.0f)] [SerializeField] float thinThreshold = 0.005f;

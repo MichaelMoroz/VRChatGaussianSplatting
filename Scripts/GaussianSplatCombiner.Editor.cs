@@ -15,6 +15,69 @@ namespace GaussianSplatting
 // file is excluded from Udon compilation via the preprocessor guard above.
 public partial class GaussianSplatCombiner
 {
+    static bool EnsureGeneratedObjectEditable(GameObject generatedObject)
+    {
+        if (generatedObject == null || generatedObject.hideFlags == HideFlags.None)
+        {
+            return false;
+        }
+        generatedObject.hideFlags = HideFlags.None;
+        EditorUtility.SetDirty(generatedObject);
+        return true;
+    }
+
+    public bool EnsureGeneratedHierarchyState(bool disableRoot)
+    {
+        MeshRenderer meshRenderer = combinedSortedRenderer;
+        GameObject root = meshRenderer != null ? meshRenderer.gameObject : null;
+        if (root == null)
+        {
+            return false;
+        }
+        bool changed = EnsureGeneratedObjectEditable(root);
+        Transform rootTransform = root.transform;
+        if (rootTransform.parent != null)
+        {
+            Undo.SetTransformParent(rootTransform, null, "Reparent Combined Gaussian Splat Renderer");
+            changed = true;
+        }
+        if (rootTransform.localPosition != Vector3.zero || rootTransform.localRotation != Quaternion.identity || rootTransform.localScale != Vector3.one)
+        {
+            Undo.RecordObject(rootTransform, "Reset Combined Gaussian Splat Renderer Transform");
+            rootTransform.localPosition = Vector3.zero;
+            rootTransform.localRotation = Quaternion.identity;
+            rootTransform.localScale = Vector3.one;
+            EditorUtility.SetDirty(rootTransform);
+            changed = true;
+        }
+        if (disableRoot && root.activeSelf)
+        {
+            Undo.RecordObject(root, "Disable Combined Gaussian Splat Renderer");
+            root.SetActive(false);
+            EditorUtility.SetDirty(root);
+            changed = true;
+        }
+        for (int i = 0; i < rootTransform.childCount; i++)
+        {
+            Transform child = rootTransform.GetChild(i);
+            if (!child.name.StartsWith("CombinedChunk"))
+            {
+                continue;
+            }
+            changed |= EnsureGeneratedObjectEditable(child.gameObject);
+            if (child.localPosition != Vector3.zero || child.localRotation != Quaternion.identity || child.localScale != Vector3.one)
+            {
+                Undo.RecordObject(child, "Reset Combined Gaussian Splat Chunk Transform");
+                child.localPosition = Vector3.zero;
+                child.localRotation = Quaternion.identity;
+                child.localScale = Vector3.one;
+                EditorUtility.SetDirty(child);
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
     void CopyPersistentStateFrom(GaussianSplatCombiner source)
     {
         if (source == null || source == this)
@@ -92,12 +155,16 @@ public partial class GaussianSplatCombiner
         if (combinedObject == null)
         {
             combinedObject = new GameObject("CombinedSorted");
-            combinedObject.hideFlags = HideFlags.NotEditable;
+            combinedObject.hideFlags = HideFlags.None;
             Undo.RegisterCreatedObjectUndo(combinedObject, "Create Combined Gaussian Splat Renderer");
             if (scene.IsValid())
             {
                 SceneManager.MoveGameObjectToScene(combinedObject, scene);
             }
+        }
+        else
+        {
+            EnsureGeneratedObjectEditable(combinedObject);
         }
 
         if (combinedObject.GetComponent<MeshFilter>() == null)
@@ -196,7 +263,6 @@ public partial class GaussianSplatCombiner
         }
 
         GaussianSplatCombiner sceneCombiner = CleanupCombinedBehaviours(combinedObject);
-        bool changed = false;
         if (sceneCombiner == null)
         {
             RefreshCombinerProgramAssetLookup();
@@ -206,7 +272,6 @@ public partial class GaussianSplatCombiner
             }
             sceneCombiner = combinedObject.AddUdonSharpComponent<GaussianSplatCombiner>();
             sceneCombiner = CleanupCombinedBehaviours(combinedObject) ?? sceneCombiner;
-            changed = true;
         }
 
         GaussianSplatCombiner staleCombiner = owner.gameObject.GetComponent<GaussianSplatCombiner>();
@@ -215,7 +280,6 @@ public partial class GaussianSplatCombiner
             Undo.RecordObject(sceneCombiner, "Migrate Combined Gaussian Splat Combiner");
             sceneCombiner.CopyPersistentStateFrom(staleCombiner);
             EditorUtility.SetDirty(sceneCombiner);
-            changed = true;
         }
 
         if (sceneCombiner.gaussianSplatRenderer != owner)
@@ -223,7 +287,6 @@ public partial class GaussianSplatCombiner
             Undo.RecordObject(sceneCombiner, "Assign Combined Gaussian Splat Owner");
             sceneCombiner.gaussianSplatRenderer = owner;
             EditorUtility.SetDirty(sceneCombiner);
-            changed = true;
         }
 
         if (sceneCombiner.combinedSortedRenderer != meshRenderer)
@@ -231,13 +294,11 @@ public partial class GaussianSplatCombiner
             Undo.RecordObject(sceneCombiner, "Assign Combined Gaussian Splat Renderer Root");
             sceneCombiner.combinedSortedRenderer = meshRenderer;
             EditorUtility.SetDirty(sceneCombiner);
-            changed = true;
         }
 
         if (sceneCombiner.EnsureCombinedTextureFormatsInitialized())
         {
             EditorUtility.SetDirty(sceneCombiner);
-            changed = true;
         }
 
         if (owner.GetCombiner() != sceneCombiner)
@@ -245,7 +306,6 @@ public partial class GaussianSplatCombiner
             Undo.RecordObject(owner, "Assign Combined Gaussian Splat Combiner");
             owner.SetCombiner(sceneCombiner);
             EditorUtility.SetDirty(owner);
-            changed = true;
         }
 
         if (staleCombiner != null && staleCombiner != sceneCombiner)
@@ -279,7 +339,7 @@ public partial class GaussianSplatCombiner
             return false;
         }
 
-        int expectedRenderQueue = combinedStartRenderQueue;
+        int expectedRenderQueue = GetEffectiveStartRenderQueue();
         Material[] parentMaterials = combinedSortedRenderer.sharedMaterials;
 
         if (useSrgb)
@@ -304,6 +364,11 @@ public partial class GaussianSplatCombiner
 
             MeshRenderer chunkRenderer = chunkTransform.GetComponent<MeshRenderer>();
             if (chunkRenderer == null)
+            {
+                return false;
+            }
+            MeshFilter chunkFilter = chunkTransform.GetComponent<MeshFilter>();
+            if (!ChunkMeshMatchesSplatCount(chunkFilter != null ? chunkFilter.sharedMesh : null, passInfos[passIndex].SplatCount, passInfos[passIndex].HasAlphaMask))
             {
                 return false;
             }
@@ -345,6 +410,15 @@ public partial class GaussianSplatCombiner
         }
 
         return true;
+    }
+
+    static bool ChunkMeshMatchesSplatCount(Mesh mesh, int splatCount, bool hasAlphaMask)
+    {
+        int splatSubMesh = hasAlphaMask ? 1 : 0;
+        return mesh != null
+            && mesh.subMeshCount > splatSubMesh
+            && mesh.GetTopology(splatSubMesh) == MeshTopology.Points
+            && mesh.GetIndexCount(splatSubMesh) == (uint)((splatCount + 31) / 32);
     }
 
     bool CombinedHierarchyMatches(MeshRenderer meshRenderer, Material[] combinedMaterials)
@@ -405,6 +479,11 @@ public partial class GaussianSplatCombiner
             {
                 return false;
             }
+            MeshFilter chunkFilter = chunkTransform.GetComponent<MeshFilter>();
+            if (!ChunkMeshMatchesSplatCount(chunkFilter != null ? chunkFilter.sharedMesh : null, Mathf.Max(0, splatMaterial.GetInt("_SplatCount")), alphaMask != null))
+            {
+                return false;
+            }
             expectedChunkCount++;
         }
         int actualChunkCount = 0;
@@ -437,9 +516,13 @@ public partial class GaussianSplatCombiner
         if (combinedObject == null)
         {
             combinedObject = new GameObject("CombinedSorted");
-            combinedObject.hideFlags = HideFlags.NotEditable;
+            combinedObject.hideFlags = HideFlags.None;
             Undo.RegisterCreatedObjectUndo(combinedObject, "Create Combined Gaussian Splat Renderer");
             SceneManager.MoveGameObjectToScene(combinedObject, gameObject.scene);
+            changed = true;
+        }
+        else if (EnsureGeneratedObjectEditable(combinedObject))
+        {
             changed = true;
         }
         Transform transformToReset = combinedObject.transform;
@@ -497,14 +580,13 @@ public partial class GaussianSplatCombiner
                 changed = true;
             }
         }
-        if (combinedObject.activeSelf != OwnerIsCombinedMode())
-        {
-            Undo.RecordObject(combinedObject, "Toggle Combined Gaussian Splat Renderer");
-            combinedObject.SetActive(OwnerIsCombinedMode());
-            EditorUtility.SetDirty(combinedObject);
-            changed = true;
-        }
         return changed;
+    }
+
+    int GetEffectiveStartRenderQueue()
+    {
+        GaussianSplatRenderer owner = ResolveOwner();
+        return owner != null && owner.TryGetRenderQueueOverride(out int renderQueue) ? renderQueue : combinedStartRenderQueue;
     }
 
     public void UpdateResources(int combinedElementCount, MeshRenderer templateRenderer, Material primaryTemplate, Material alphaMaskTemplate, Material toSrgbTemplate, Material toLinearTemplate)
@@ -543,14 +625,28 @@ public partial class GaussianSplatCombiner
         resourcesChanged |= PlySplatImporter.EnsureSortRenderTexture(ref combinedColorsCamera, combinedFolderPath, assetPrefix + "_CombinedColorsCamera", combinedWidth, combinedHeight, combinedColorsCameraFormat, false, 1);
         bool useSrgb = toSrgbTemplate != null || toLinearTemplate != null;
         PlySplatImporter.PassInfo[] passInfos = PlySplatImporter.CreatePassLayout(combinedElementCount, Mathf.Min(DEFAULT_COMBINED_SPLATS_PER_PASS, combinedElementCount), DEFAULT_COMBINED_MAX_ALPHA_MASK_COUNT, useSrgb);
-        bool sortedRendererSatisfied = combinedSortedRenderer != null && combinedSortedRenderer.gameObject.activeSelf == OwnerIsCombinedMode();
+        bool ownerCombinedMode = OwnerIsCombinedMode();
+        bool hierarchyStateChanged = EnsureGeneratedHierarchyState(false);
+        bool sortedRendererSatisfied = combinedSortedRenderer != null && (ownerCombinedMode || !combinedSortedRenderer.gameObject.activeSelf);
         if (!resourcesChanged
             && builtCombinedElementCount == combinedElementCount
             && combineDataMaterial != null
             && sortedRendererSatisfied
             && CombinedMaterialQueuesMatch(passInfos, useSrgb))
         {
+            if (hierarchyStateChanged)
+            {
+                EditorUtility.SetDirty(this);
+            }
             return;
+        }
+        bool rendererVisibilityChanged = false;
+        if (combinedSortedRenderer != null && combinedSortedRenderer.gameObject.activeSelf)
+        {
+            Undo.RecordObject(combinedSortedRenderer.gameObject, "Disable Combined Gaussian Splat Renderer While Refreshing");
+            combinedSortedRenderer.gameObject.SetActive(false);
+            EditorUtility.SetDirty(combinedSortedRenderer.gameObject);
+            rendererVisibilityChanged = true;
         }
         Shader combineShader = Shader.Find("Hidden/GaussianSplatting/CombineData");
         if (combineShader == null)
@@ -562,7 +658,7 @@ public partial class GaussianSplatCombiner
         combineDataMaterial = PlySplatImporter.CreateOrReplaceAsset(combineMaterial, combinedFolderPath + "/" + assetPrefix + "_CombineData.mat");
         List<Material> generatedMaterials = new List<Material>();
         List<int> generatedRenderQueues = new List<int>();
-        int renderQueue = combinedStartRenderQueue;
+        int renderQueue = GetEffectiveStartRenderQueue();
         if (useSrgb)
         {
             Material toSrgb = PlySplatImporter.CreateMaterialFromTemplate(toSrgbTemplate, "VRChatGaussianSplatting/ToSRGB", assetPrefix + "_CombinedToSRGB");
@@ -650,7 +746,8 @@ public partial class GaussianSplatCombiner
         }
         Material[] combinedMaterials = generatedMaterials.ToArray();
         bool rendererRootChanged = EnsureCombinedRendererRoot(combinedMaterials, templateRenderer);
-        if (rendererRootChanged)
+        bool chunkHierarchyChanged = false;
+        if (owner != null)
         {
             Type builderType = null;
             System.Reflection.Assembly[] assemblies = AppDomain.CurrentDomain.GetAssemblies();
@@ -667,7 +764,8 @@ public partial class GaussianSplatCombiner
                 var ensureChunkHierarchy = builderType.GetMethod("EnsureChunkHierarchy", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
                 if (ensureChunkHierarchy != null)
                 {
-                    ensureChunkHierarchy.Invoke(null, new object[] { owner });
+                    object result = ensureChunkHierarchy.Invoke(null, new object[] { owner });
+                    chunkHierarchyChanged = result is bool hierarchyChanged && hierarchyChanged;
                 }
             }
         }
@@ -679,7 +777,10 @@ public partial class GaussianSplatCombiner
             combineDataMaterial != previousCombineDataMaterial ||
             combinedSortedRenderer != previousCombinedSortedRenderer ||
             builtCombinedElementCount != combinedElementCount ||
-            rendererRootChanged)
+            rendererRootChanged ||
+            chunkHierarchyChanged ||
+            rendererVisibilityChanged ||
+            hierarchyStateChanged)
         {
             builtCombinedElementCount = combinedElementCount;
             EditorUtility.SetDirty(this);

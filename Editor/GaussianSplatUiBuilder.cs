@@ -35,6 +35,39 @@ namespace GaussianSplatting.Editor
         static Type _cachedVrChatUiShapeType;
         static Material _cachedSupersampledUiMaterial;
         static TMP_FontAsset _cachedUiTextMeshProFont;
+        static bool _autoRefreshQueued = true;
+
+        [InitializeOnLoadMethod]
+        static void RegisterAutoRefresh()
+        {
+            EditorApplication.hierarchyChanged -= QueueAutoRefresh;
+            EditorApplication.hierarchyChanged += QueueAutoRefresh;
+            EditorApplication.update -= ProcessAutoRefresh;
+            EditorApplication.update += ProcessAutoRefresh;
+        }
+
+        static void QueueAutoRefresh() { _autoRefreshQueued = true; }
+
+        static void ProcessAutoRefresh()
+        {
+            if (Application.isPlaying || !_autoRefreshQueued) return;
+            _autoRefreshQueued = false;
+            GaussianSplatRenderer[] renderers = Resources.FindObjectsOfTypeAll<GaussianSplatRenderer>();
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                GaussianSplatRenderer renderer = renderers[i];
+                if (renderer == null || renderer != GaussianSplatRenderer.FindExistingSceneRenderer(renderer.gameObject.scene) || EditorUtility.IsPersistent(renderer) || UnityEditor.SceneManagement.EditorSceneManager.IsPreviewScene(renderer.gameObject.scene) || renderer.transform.Find("Gaussian Splat UI") != null) continue;
+                GaussianSplatObject[] splats = Resources.FindObjectsOfTypeAll<GaussianSplatObject>();
+                for (int j = 0; j < splats.Length; j++)
+                {
+                    if (splats[j] != null && !EditorUtility.IsPersistent(splats[j]) && splats[j].gameObject.scene == renderer.gameObject.scene)
+                    {
+                        Generate(renderer, false);
+                        break;
+                    }
+                }
+            }
+        }
 
         static string GetUiTextCharacterSet()
         {
@@ -81,20 +114,7 @@ namespace GaussianSplatting.Editor
             return changed;
         }
 
-        [MenuItem("GameObject/Gaussian Splatting/Gaussian Splat UI", false, 11)]
-        static void CreateGaussianSplatUI(MenuCommand menuCommand)
-        {
-            GaussianSplatRenderer renderer = GaussianSplatRenderer.EnsureSceneRendererExists(default(UnityEngine.SceneManagement.Scene));
-            if (renderer == null)
-            {
-                return;
-            }
-
-            Undo.RecordObject(renderer.transform, "Create Gaussian Splat UI");
-            Generate(renderer);
-        }
-
-        internal static void Generate(GaussianSplatRenderer renderer)
+        internal static void Generate(GaussianSplatRenderer renderer, bool select = true)
         {
             if (renderer == null)
             {
@@ -261,7 +281,7 @@ namespace GaussianSplatting.Editor
                 EditorUtility.SetDirty(generatedUiBacking);
             }
 
-            Selection.activeGameObject = canvasObject;
+            if (select) Selection.activeGameObject = canvasObject;
         }
 
         static Type FindTypeInLoadedAssemblies(string fullTypeName, string shortTypeName)

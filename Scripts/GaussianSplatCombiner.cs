@@ -409,7 +409,6 @@ public partial class GaussianSplatCombiner : UdonSharpBehaviour
         {
             // No photo camera in the editor: mirror the screen colors into the camera texture.
             Blit(combinedColors, combinedColorsCamera, true);
-            SetRendererEnabled(true);
             return true;
         }
 #endif
@@ -432,7 +431,6 @@ public partial class GaussianSplatCombiner : UdonSharpBehaviour
                 break;
             }
         }
-        SetRendererEnabled(true);
         return true;
     }
 

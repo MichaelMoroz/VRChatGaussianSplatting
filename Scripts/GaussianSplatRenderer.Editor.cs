@@ -11,8 +11,43 @@ namespace GaussianSplatting
 // Editor-only scene management, hierarchy bookkeeping, and sorting-resource generation for
 // GaussianSplatRenderer. Kept in a partial file so the runtime behaviour stays small; the whole
 // file is excluded from Udon compilation via the preprocessor guard above.
+public static class GSEditorText
+{
+    static readonly System.Reflection.PropertyInfo EditorLanguageProperty = typeof(UnityEditor.Editor).Assembly
+        .GetType("UnityEditor.LocalizationDatabase")
+        ?.GetProperty("currentEditorLanguage", System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
+
+    public static string T(string english, string japanese)
+    {
+        return GetEditorLanguage() == SystemLanguage.Japanese ? japanese : english;
+    }
+
+    public static GUIContent C(string english, string japanese)
+    {
+        return new GUIContent(T(english, japanese));
+    }
+
+    static SystemLanguage GetEditorLanguage()
+    {
+        try
+        {
+            object language = EditorLanguageProperty != null ? EditorLanguageProperty.GetValue(null) : null;
+            if (language is SystemLanguage systemLanguage)
+            {
+                return systemLanguage;
+            }
+        }
+        catch
+        {
+        }
+        return Application.systemLanguage;
+    }
+}
+
 public partial class GaussianSplatRenderer
 {
+    static readonly HashSet<int> _singleModeMultiSplatWarnedScenes = new HashSet<int>();
+
     static bool ShouldUseEditorScene(Scene scene)
     {
         if (!scene.IsValid() || !scene.isLoaded)
@@ -34,8 +69,8 @@ public partial class GaussianSplatRenderer
             return false;
         }
         GameObject root = component.transform.root != null ? component.transform.root.gameObject : component.gameObject;
-        bool allowHiddenPreviewRenderer = component is GaussianSplatRenderer && root != null && UnityEditor.SceneManagement.EditorSceneManager.IsPreviewScene(root.scene);
-        if (!allowHiddenPreviewRenderer && (component.hideFlags & (HideFlags.HideAndDontSave | HideFlags.NotEditable)) != 0)
+        bool allowHiddenRenderer = component is GaussianSplatRenderer && root != null;
+        if (!allowHiddenRenderer && (component.hideFlags & (HideFlags.HideAndDontSave | HideFlags.NotEditable)) != 0)
         {
             return false;
         }
@@ -87,6 +122,7 @@ public partial class GaussianSplatRenderer
     {
         GaussianSplatObject[] splats = FindSceneObjects<GaussianSplatObject>(scene);
         int visibleIndex = -1;
+        int activeCount = 0;
         if (!combinedMode)
         {
             for (int i = 0; i < splats.Length; i++)
@@ -94,11 +130,27 @@ public partial class GaussianSplatRenderer
                 GaussianSplatObject splat = splats[i];
                 if (splat != null && splat.gameObject.activeInHierarchy)
                 {
-                    visibleIndex = i;
-                    splat.ShowSorted();
-                    break;
+                    if (visibleIndex < 0)
+                    {
+                        visibleIndex = i;
+                        splat.ShowSorted();
+                    }
+                    activeCount++;
                 }
             }
+        }
+        if (!combinedMode && activeCount > 1)
+        {
+            if (_singleModeMultiSplatWarnedScenes.Add(scene.handle))
+            {
+                Debug.LogWarning(GSEditorText.T(
+                    $"Multiple Gaussian splats are active in {scene.path}, but Rendering Mode is Single Splat. Only one splat will be rendered. Enable Combined rendering to render multiple active splats.",
+                    $"{scene.path} で複数の Gaussian Splat が有効ですが、表示モードは単体です。描画されるのは 1 つだけです。複数を描画するには統合表示を有効にしてください。"));
+            }
+        }
+        else
+        {
+            _singleModeMultiSplatWarnedScenes.Remove(scene.handle);
         }
         for (int i = 0; i < splats.Length; i++)
         {
@@ -140,15 +192,14 @@ public partial class GaussianSplatRenderer
             GaussianSplatRenderer renderer = GetPrimarySceneRenderer(scene);
             if (renderer == null)
             {
-                ApplyEditorVisibility(scene, false);
-                continue;
+                if (FindSceneObjects<GaussianSplatObject>(scene).Length == 0)
+                {
+                    ApplyEditorVisibility(scene, false);
+                    continue;
+                }
+                renderer = EnsureSceneRendererExists(scene);
             }
-            if (renderer.RefreshCachedSceneSplatObjects())
-            {
-                EditorUtility.SetDirty(renderer);
-            }
-            renderer.UpdateSortingResourceTextures();
-            ApplyEditorVisibility(scene, renderer.IsCombinedRenderingMode());
+            renderer.RefreshEditorResourcesAndVisibility();
         }
     }
 
@@ -205,16 +256,6 @@ public partial class GaussianSplatRenderer
         return true;
     }
 
-    [MenuItem("GameObject/Gaussian Splatting/Gaussian Splat Renderer", false, 10)]
-    static void CreateGaussianSplatRenderer(MenuCommand menuCommand)
-    {
-        GaussianSplatRenderer renderer = EnsureSceneRendererExists(default(Scene));
-        if (renderer != null)
-        {
-            Selection.activeGameObject = renderer.gameObject;
-        }
-    }
-
     public static GaussianSplatRenderer FindExistingSceneRenderer(Scene scene)
     {
         return GetPrimarySceneRenderer(scene);
@@ -227,7 +268,7 @@ public partial class GaussianSplatRenderer
         {
             bool isPreviewScene = UnityEditor.SceneManagement.EditorSceneManager.IsPreviewScene(scene);
             GameObject rendererObject = new GameObject("GaussianSplatRenderer");
-            rendererObject.hideFlags = isPreviewScene ? HideFlags.HideAndDontSave : HideFlags.NotEditable;
+            rendererObject.hideFlags = isPreviewScene ? HideFlags.HideAndDontSave : HideFlags.None;
             if (!isPreviewScene)
             {
                 Undo.RegisterCreatedObjectUndo(rendererObject, "Create Gaussian Splat Renderer");
@@ -244,6 +285,13 @@ public partial class GaussianSplatRenderer
             EditorUtility.SetDirty(primaryRenderer);
             EditorUtility.SetDirty(radixSort);
         }
+        else if (!UnityEditor.SceneManagement.EditorSceneManager.IsPreviewScene(primaryRenderer.gameObject.scene) && (primaryRenderer.gameObject.hideFlags != HideFlags.None || primaryRenderer.hideFlags != HideFlags.None))
+        {
+            primaryRenderer.gameObject.hideFlags = HideFlags.None;
+            primaryRenderer.hideFlags = HideFlags.None;
+            EditorUtility.SetDirty(primaryRenderer.gameObject);
+            EditorUtility.SetDirty(primaryRenderer);
+        }
         GaussianSplatRenderer[] renderers = FindSceneObjects<GaussianSplatRenderer>(scene);
         for (int i = 0; i < renderers.Length; i++)
         {
@@ -254,13 +302,40 @@ public partial class GaussianSplatRenderer
                 EditorUtility.SetDirty(renderer);
             }
         }
-        if (primaryRenderer.RefreshCachedSceneSplatObjects())
-        {
-            EditorUtility.SetDirty(primaryRenderer);
-        }
-        primaryRenderer.UpdateSortingResourceTextures();
-        ApplyEditorVisibility(primaryRenderer.gameObject.scene, primaryRenderer.IsCombinedRenderingMode());
+        primaryRenderer.RefreshEditorResourcesAndVisibility();
         return primaryRenderer;
+    }
+
+    public void RefreshEditorResourcesAndVisibility()
+    {
+        if (EditorUtility.IsPersistent(this) || !ShouldUseEditorScene(gameObject.scene))
+        {
+            return;
+        }
+        if (RefreshCachedSceneSplatObjects())
+        {
+            EditorUtility.SetDirty(this);
+        }
+        UpdateSortingResourceTextures();
+        GaussianSplatCombiner sceneCombiner = GetCombiner();
+        if (sceneCombiner != null && sceneCombiner.EnsureGeneratedHierarchyState(!IsCombinedRenderingMode()))
+        {
+            EditorUtility.SetDirty(sceneCombiner);
+        }
+        if (IsCombinedRenderingMode())
+        {
+            Vector3 cameraPosition = GetEditorSortCameraPosition();
+            SortCameraViews(cameraPosition, cameraPosition, false, true);
+        }
+        ApplyEditorVisibility(gameObject.scene, IsCombinedRenderingMode());
+        GaussianSplatRendererUI.RequestEditorRefresh();
+    }
+
+    static Vector3 GetEditorSortCameraPosition()
+    {
+        SceneView sceneView = SceneView.lastActiveSceneView;
+        Camera camera = sceneView != null ? sceneView.camera : null;
+        return camera != null ? camera.transform.position : Vector3.zero;
     }
 
     void OnValidate()
@@ -277,22 +352,16 @@ public partial class GaussianSplatRenderer
                 enabled = false;
                 EditorUtility.SetDirty(this);
             }
-            GaussianSplatRendererUI.RequestEditorRefresh();
+            QueueEditorRefresh();
             return;
-        }
-        bool changed = RefreshCachedSceneSplatObjects();
-        if (changed)
-        {
-            EditorUtility.SetDirty(this);
         }
         RadixSort radixSort = GetComponent<RadixSort>();
         if (radixSort != null && radixSort.SetPipelinedPassesPerFrame(sortPassesPerFrame))
         {
             EditorUtility.SetDirty(radixSort);
         }
-        UpdateSortingResourceTextures();
-        ApplyEditorVisibility(gameObject.scene, IsCombinedRenderingMode());
-        GaussianSplatRendererUI.RequestEditorRefresh();
+        startRenderQueue = Mathf.Clamp(startRenderQueue, 2000, 5000);
+        QueueEditorRefresh();
     }
 
     bool EnsureSortRenderTexture(ref RenderTexture targetTexture, string folderPath, string assetName, int width, int height, RenderTextureFormat format, bool useMipMap, int volumeDepth)
@@ -407,6 +476,7 @@ public partial class GaussianSplatRenderer
             EditorUtility.SetDirty(radixSort);
             EditorUtility.SetDirty(this);
         }
+        ApplyEditorRenderQueueOverride();
         if (UnityEditor.SceneManagement.EditorSceneManager.IsPreviewScene(gameObject.scene) && !IsCombinedRenderingMode())
         {
             ResetRuntimeCache();
@@ -417,11 +487,8 @@ public partial class GaussianSplatRenderer
         {
             return;
         }
-        if (IsCombinedRenderingMode())
-        {
-            combiner.UpdateResources(safeCombinedCount, templateRenderer, primaryTemplate, alphaMaskTemplate, toSrgbTemplate, toLinearTemplate);
-        }
-        else
+        combiner.UpdateResources(safeCombinedCount, templateRenderer, primaryTemplate, alphaMaskTemplate, toSrgbTemplate, toLinearTemplate);
+        if (!IsCombinedRenderingMode())
         {
             MeshRenderer combinedSortedRenderer = combiner.GetCombinedSortedRenderer();
             if (combinedSortedRenderer != null && combinedSortedRenderer.gameObject.activeSelf)
@@ -432,6 +499,37 @@ public partial class GaussianSplatRenderer
             }
         }
         ResetRuntimeCache();
+    }
+
+    public bool TryGetRenderQueueOverride(out int renderQueue)
+    {
+        renderQueue = Mathf.Clamp(startRenderQueue, 2000, 5000);
+        return overrideRenderQueue;
+    }
+
+    void ApplyEditorRenderQueueOverride()
+    {
+        if (!overrideRenderQueue)
+        {
+            return;
+        }
+        int renderQueue = Mathf.Clamp(startRenderQueue, 2000, 5000);
+        for (int i = 0; cachedSceneSplatObjects != null && i < cachedSceneSplatObjects.Length; i++)
+        {
+            GaussianSplatObject splat = cachedSceneSplatObjects[i] != null ? cachedSceneSplatObjects[i].GetComponent<GaussianSplatObject>() : null;
+            MeshRenderer renderer = splat != null ? splat.GetSortedRenderer() : null;
+            Material[] materials = renderer != null ? renderer.sharedMaterials : null;
+            for (int materialIndex = 0; materials != null && materialIndex < materials.Length; materialIndex++)
+            {
+                Material material = materials[materialIndex];
+                if (material == null || material.renderQueue == renderQueue + materialIndex)
+                {
+                    continue;
+                }
+                material.renderQueue = renderQueue + materialIndex;
+                EditorUtility.SetDirty(material);
+            }
+        }
     }
 }
 

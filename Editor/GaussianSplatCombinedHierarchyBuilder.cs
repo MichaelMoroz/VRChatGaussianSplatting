@@ -21,17 +21,7 @@ namespace GaussianSplatting.Editor
             {
                 return false;
             }
-            if (!renderer.IsCombinedRenderingMode())
-            {
-                if (parentRenderer.gameObject.activeSelf)
-                {
-                    Undo.RecordObject(parentRenderer.gameObject, "Disable Combined Gaussian Splat Renderer");
-                    parentRenderer.gameObject.SetActive(false);
-                    EditorUtility.SetDirty(parentRenderer.gameObject);
-                    EditorUtility.SetDirty(renderer);
-                }
-                return false;
-            }
+            bool combinedMode = renderer.IsCombinedRenderingMode();
             GameObject combinedObject = parentRenderer.gameObject;
             Material[] combinedMaterials = parentRenderer.sharedMaterials;
             if (combinedMaterials == null || combinedMaterials.Length == 0)
@@ -88,6 +78,12 @@ namespace GaussianSplatting.Editor
             }
             if (cursor >= end)
             {
+                changed = SetCombinedActive(combinedObject, combinedMode, changed);
+                if (changed)
+                {
+                    EditorUtility.SetDirty(parentRenderer);
+                    EditorUtility.SetDirty(renderer);
+                }
                 return changed;
             }
             int chunkCount = 0;
@@ -116,8 +112,14 @@ namespace GaussianSplatting.Editor
                 if (chunkObject == null)
                 {
                     chunkObject = new GameObject(chunkName);
-                    chunkObject.hideFlags = HideFlags.NotEditable;
+                    chunkObject.hideFlags = HideFlags.None;
                     Undo.RegisterCreatedObjectUndo(chunkObject, "Create Combined Gaussian Splat Chunk");
+                    changed = true;
+                }
+                else if (chunkObject.hideFlags != HideFlags.None)
+                {
+                    chunkObject.hideFlags = HideFlags.None;
+                    EditorUtility.SetDirty(chunkObject);
                     changed = true;
                 }
                 Transform chunkTransform = chunkObject.transform;
@@ -155,12 +157,18 @@ namespace GaussianSplatting.Editor
                 chunkRenderer.allowOcclusionWhenDynamic = parentRenderer.allowOcclusionWhenDynamic;
                 int splatCount = Mathf.Max(0, splatMaterial.GetInt("_SplatCount"));
                 string chunkMeshPath = combinedFolderPath + "/" + assetPrefix + (chunkCount > 0 ? $"_CombinedPass{chunkCount}" : "_CombinedMain") + "_Mesh.asset";
+                bool chunkMeshMatches = ChunkMeshMatches(chunkFilter.sharedMesh, splatCount, alphaMask != null);
+                if (!chunkMeshMatches && AssetDatabase.LoadAssetAtPath<Mesh>(chunkMeshPath) != null)
+                {
+                    AssetDatabase.DeleteAsset(chunkMeshPath);
+                }
                 Mesh chunkMesh = PlySplatImporter.CreateOrReplaceAsset(CreateMesh(0, splatCount, combinedBounds, alphaMask != null), chunkMeshPath);
-                if (chunkFilter.sharedMesh != chunkMesh)
+                if (chunkFilter.sharedMesh != chunkMesh || !chunkMeshMatches)
                 {
                     Undo.RecordObject(chunkFilter, "Update Combined Gaussian Splat Chunk Mesh");
                     chunkFilter.sharedMesh = chunkMesh;
                     EditorUtility.SetDirty(chunkFilter);
+                    EditorUtility.SetDirty(chunkMesh);
                     changed = true;
                 }
                 Material[] chunkMaterials = alphaMask != null ? new[] { alphaMask, splatMaterial } : new[] { splatMaterial };
@@ -196,16 +204,36 @@ namespace GaussianSplatting.Editor
                     childIndex--;
                 }
             }
+            changed = SetCombinedActive(combinedObject, combinedMode, changed);
             if (changed)
             {
                 EditorUtility.SetDirty(parentRenderer);
                 EditorUtility.SetDirty(renderer);
             }
-            return true;
+            return changed;
+        }
+        static bool SetCombinedActive(GameObject combinedObject, bool active, bool changed)
+        {
+            if (combinedObject != null && !active && combinedObject.activeSelf)
+            {
+                Undo.RecordObject(combinedObject, "Toggle Combined Gaussian Splat Renderer");
+                combinedObject.SetActive(false);
+                EditorUtility.SetDirty(combinedObject);
+                changed = true;
+            }
+            return changed;
         }
         static bool IsShader(Material material, string shaderName)
         {
             return material != null && material.shader != null && material.shader.name == shaderName;
+        }
+        static bool ChunkMeshMatches(Mesh mesh, int splatCount, bool hasAlphaMask)
+        {
+            int splatSubMesh = hasAlphaMask ? 1 : 0;
+            return mesh != null
+                && mesh.subMeshCount > splatSubMesh
+                && mesh.GetTopology(splatSubMesh) == MeshTopology.Points
+                && mesh.GetIndexCount(splatSubMesh) == (uint)((splatCount + 31) / 32);
         }
         static Mesh CreateMesh(int conversionPassCount, int splatCount, Bounds bounds, bool hasAlphaMask = false)
         {
