@@ -1,4 +1,4 @@
-Shader "VRChatGaussianSplatting/GaussianSplattingStochastic"
+Shader "VRChatGaussianSplatting/GaussianSplattingNoGeom"
 {
     Properties
     {
@@ -46,17 +46,19 @@ Shader "VRChatGaussianSplatting/GaussianSplattingStochastic"
     }
     SubShader
     {
-        Tags { "RenderQueue"="AlphaTest" "RenderType"="TransparentCutout" }
-        Cull Off
+        Tags { "RenderType"="Transparent" "Queue"="Transparent+500" }
 
         Pass
         {
-            Tags { "LightMode"="ForwardBase" }
-            Blend Off
-            ZWrite On
+            Blend OneMinusDstAlpha One
+            Cull Off
+            ZWrite Off
+            Stencil {
+                Ref 1
+                Comp NotEqual
+            }
             CGPROGRAM
-            #define _LEGACY_RANDOMIZED_ORDER
-            #define _FAKE_SRGB
+            #define GS_NO_GEOM
             #include "GS.cginc"
             ENDCG
         }
