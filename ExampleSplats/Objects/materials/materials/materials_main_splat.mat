@@ -1,0 +1,96 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!21 &2100000
+Material:
+  serializedVersion: 8
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_Name: materials_main_splat
+  m_Shader: {fileID: 4800000, guid: f531a645849e0b067b8b09de4f72f60d, type: 3}
+  m_Parent: {fileID: 0}
+  m_ModifiedSerializedProperties: 0
+  m_ValidKeywords: []
+  m_InvalidKeywords: []
+  m_LightmapFlags: 4
+  m_EnableInstancingVariants: 0
+  m_DoubleSidedGI: 0
+  m_CustomRenderQueue: 3501
+  stringTagMap: {}
+  disabledShaderPasses: []
+  m_LockedProperties: 
+  m_SavedProperties:
+    serializedVersion: 3
+    m_TexEnvs:
+    - _GS_Colors:
+        m_Texture: {fileID: 2800000, guid: 537ec32b611c3384c8ec556600bf593f, type: 2}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _GS_ColorsCamera:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _GS_Positions:
+        m_Texture: {fileID: 2800000, guid: 17e175c7afed14a459d9ef10af32e2cb, type: 2}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _GS_RenderOrder:
+        m_Texture: {fileID: 8400000, guid: 60f24e71166cb4749acb210dd85a20a8, type: 2}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _GS_RenderOrderMirror:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _GS_RenderOrderPrecomputed:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _GS_Rotations:
+        m_Texture: {fileID: 2800000, guid: dd17dbf4dc1b498498270ba5f22f6d87, type: 2}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _GS_SH:
+        m_Texture: {fileID: 2800000, guid: d8c4ad7f1d5cac043a4428f3a5771112, type: 2}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _GS_Scales:
+        m_Texture: {fileID: 2800000, guid: 8264909d942adac4eba33b9465a8c31a, type: 2}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    m_Ints:
+    - _PRECOMPUTED_SORTING: 0
+    - _VRC_LIGHT_VOLUMES: 0
+    m_Floats:
+    - _ActualSplatCount: 100000
+    - _AlphaCull: 0.04
+    - _AlphaCutoff: 0.03
+    - _AntiAliasing: 1
+    - _Exposure: 1
+    - _GS_CameraColorArray: 0
+    - _GS_Positions_CoordMask: 63
+    - _GS_Positions_CoordShift: 6
+    - _GS_RenderOrderPrecomputed_CoordMask: 0
+    - _GS_RenderOrderPrecomputed_CoordShift: 0
+    - _GS_SH_CoeffCount: 15
+    - _GS_SH_CoeffStride: 100000
+    - _GS_SH_CoordMask: 255
+    - _GS_SH_CoordShift: 8
+    - _Gamma: 1
+    - _GaussianMul: 1
+    - _LODCull: 0
+    - _LightVolumeIntensity: 1
+    - _Log2MinScale: -15
+    - _Opacity: 1
+    - _SHBand: 3
+    - _ScaleCutoff: 100
+    - _SplatCount: 100000
+    - _SplatOffset: 0
+    - _ThinThreshold: 0.005
+    m_Colors:
+    - _GS_SH_Min: {r: -0.7304247, g: -0.7198889, b: -0.78047985, a: 0}
+    - _GS_SH_Range: {r: 1.5010916, g: 1.4629341, b: 1.563348, a: 0}
+    - _MirrorCameraPos: {r: 0, g: 0, b: 0, a: 0}
+    - _OKLCHShift: {r: 0, g: 0, b: 0, a: 0}
+  m_BuildTextureStacks: []

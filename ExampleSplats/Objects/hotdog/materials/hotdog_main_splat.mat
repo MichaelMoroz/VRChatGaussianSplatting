@@ -1,0 +1,96 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!21 &2100000
+Material:
+  serializedVersion: 8
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_Name: hotdog_main_splat
+  m_Shader: {fileID: 4800000, guid: f531a645849e0b067b8b09de4f72f60d, type: 3}
+  m_Parent: {fileID: 0}
+  m_ModifiedSerializedProperties: 0
+  m_ValidKeywords: []
+  m_InvalidKeywords: []
+  m_LightmapFlags: 4
+  m_EnableInstancingVariants: 0
+  m_DoubleSidedGI: 0
+  m_CustomRenderQueue: 3501
+  stringTagMap: {}
+  disabledShaderPasses: []
+  m_LockedProperties: 
+  m_SavedProperties:
+    serializedVersion: 3
+    m_TexEnvs:
+    - _GS_Colors:
+        m_Texture: {fileID: 2800000, guid: f9c614e7f56ab95478a528a05513df58, type: 2}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _GS_ColorsCamera:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _GS_Positions:
+        m_Texture: {fileID: 2800000, guid: 800ab5282caa4694d9d789a842d38766, type: 2}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _GS_RenderOrder:
+        m_Texture: {fileID: 8400000, guid: 60f24e71166cb4749acb210dd85a20a8, type: 2}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _GS_RenderOrderMirror:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _GS_RenderOrderPrecomputed:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _GS_Rotations:
+        m_Texture: {fileID: 2800000, guid: 1f0f2608bc069534badb7ae45d9b4b0c, type: 2}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _GS_SH:
+        m_Texture: {fileID: 2800000, guid: 1ad86d9c3123de64e9b7e0fc1186ac56, type: 2}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _GS_Scales:
+        m_Texture: {fileID: 2800000, guid: 26bf86353941ecd4b9d602cff2940f0d, type: 2}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    m_Ints:
+    - _PRECOMPUTED_SORTING: 0
+    - _VRC_LIGHT_VOLUMES: 0
+    m_Floats:
+    - _ActualSplatCount: 140364
+    - _AlphaCull: 0.04
+    - _AlphaCutoff: 0.03
+    - _AntiAliasing: 1
+    - _Exposure: 1
+    - _GS_CameraColorArray: 0
+    - _GS_Positions_CoordMask: 127
+    - _GS_Positions_CoordShift: 7
+    - _GS_RenderOrderPrecomputed_CoordMask: 0
+    - _GS_RenderOrderPrecomputed_CoordShift: 0
+    - _GS_SH_CoeffCount: 15
+    - _GS_SH_CoeffStride: 140364
+    - _GS_SH_CoordMask: 255
+    - _GS_SH_CoordShift: 8
+    - _Gamma: 1
+    - _GaussianMul: 1
+    - _LODCull: 0
+    - _LightVolumeIntensity: 1
+    - _Log2MinScale: -15
+    - _Opacity: 1
+    - _SHBand: 3
+    - _ScaleCutoff: 100
+    - _SplatCount: 140364
+    - _SplatOffset: 0
+    - _ThinThreshold: 0.005
+    m_Colors:
+    - _GS_SH_Min: {r: -0.60864, g: -0.56572545, b: -0.58358604, a: 0}
+    - _GS_SH_Range: {r: 1.1871431, g: 1.254688, b: 1.2511834, a: 0}
+    - _MirrorCameraPos: {r: 0, g: 0, b: 0, a: 0}
+    - _OKLCHShift: {r: 0, g: 0, b: 0, a: 0}
+  m_BuildTextureStacks: []
