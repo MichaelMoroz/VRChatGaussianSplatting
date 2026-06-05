@@ -107,7 +107,7 @@ public partial class GaussianSplatCombiner
     void SetDefaultCombinedTextureFormats()
     {
         combinedPositionsFormat = RenderTextureFormat.ARGBFloat;
-        combinedRotationsFormat = RenderTextureFormat.ARGBHalf;
+        combinedRotationsFormat = RenderTextureFormat.ARGB32;
         combinedScalesFormat = RenderTextureFormat.ARGBHalf;
         combinedColorsFormat = RenderTextureFormat.ARGB32;
         combinedColorsCameraFormat = RenderTextureFormat.ARGB32;
@@ -615,10 +615,8 @@ public partial class GaussianSplatCombiner
         MeshRenderer previousCombinedSortedRenderer = combinedSortedRenderer;
         bool resourcesChanged = false;
         resourcesChanged |= PlySplatImporter.EnsureSortRenderTexture(ref combinedPositions, combinedFolderPath, assetPrefix + "_CombinedPositions", combinedWidth, combinedHeight, combinedPositionsFormat, false, 1);
-        // Quaternions are baked into the combined texture here. ARGB32 (8-bit/channel)
-        // re-quantizes the rotation to 256 levels per component, which the single-splat
-        // path never does, producing visible scale/rotation drift. ARGBHalf matches the
-        // scales texture precision and removes that error.
+        // Quaternions are baked into the combined texture here; the format is user-configurable
+        // because precision and memory tradeoffs depend on the scene.
         resourcesChanged |= PlySplatImporter.EnsureSortRenderTexture(ref combinedRotations, combinedFolderPath, assetPrefix + "_CombinedRotations", combinedWidth, combinedHeight, combinedRotationsFormat, false, 1);
         resourcesChanged |= PlySplatImporter.EnsureSortRenderTexture(ref combinedScales, combinedFolderPath, assetPrefix + "_CombinedScales", combinedWidth, combinedHeight, combinedScalesFormat, false, 1);
         resourcesChanged |= PlySplatImporter.EnsureSortRenderTexture(ref combinedColors, combinedFolderPath, assetPrefix + "_CombinedColors", combinedWidth, combinedHeight, combinedColorsFormat, false, 1);
