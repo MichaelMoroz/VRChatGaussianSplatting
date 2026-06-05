@@ -60,12 +60,14 @@ namespace GaussianSplatting.Editor
 
             serializedObject.Update();
 
-            DrawSettingsGroup("References", DrawReferenceFields);
+            DrawSettingsGroup(GSEditorText.T("References", "参照"), DrawReferenceFields);
 
             if (serializedObject.isEditingMultipleObjects)
             {
                 EditorGUILayout.Space();
-                EditorGUILayout.HelpBox("General info is shown for a single selected splat object.", MessageType.Info);
+                EditorGUILayout.HelpBox(GSEditorText.T(
+                    "General info is shown for a single selected splat object.",
+                    "一般情報は、単一の Splat オブジェクトを選択した場合に表示されます。"), MessageType.Info);
             }
             else
             {
@@ -86,30 +88,32 @@ namespace GaussianSplatting.Editor
 
         void DrawReferenceFields()
         {
-            EditorGUILayout.PropertyField(_gaussianSplatRenderer, new GUIContent("Gaussian Splat Renderer"));
-            EditorGUILayout.PropertyField(_sortedObject, new GUIContent("Sorted Object"));
-            EditorGUILayout.PropertyField(_sortedRenderer, new GUIContent("Sorted Renderer"));
+            EditorGUILayout.PropertyField(_gaussianSplatRenderer, GSEditorText.C("Gaussian Splat Renderer", "Gaussian Splat レンダラー"));
+            EditorGUILayout.PropertyField(_sortedObject, GSEditorText.C("Sorted Object", "ソート済みオブジェクト"));
+            EditorGUILayout.PropertyField(_sortedRenderer, GSEditorText.C("Sorted Renderer", "ソート済みレンダラー"));
         }
 
         static void DrawGeneralInfo(InspectorStats stats)
         {
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-            EditorGUILayout.LabelField("General Info", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField(GSEditorText.T("General Info", "一般情報"), EditorStyles.boldLabel);
 
             if (stats.sortedRenderer == null)
             {
-                EditorGUILayout.HelpBox("No sorted renderer was found for this splat object.", MessageType.Info);
+                EditorGUILayout.HelpBox(GSEditorText.T(
+                    "No sorted renderer was found for this splat object.",
+                    "この Splat オブジェクトにソート済みレンダラーが見つかりません。"), MessageType.Info);
             }
             else
             {
-                DrawInfoRow("Sorted Renderer", stats.sortedRenderer.name);
-                DrawInfoRow("Material Count", stats.materialCount.ToString());
-                DrawInfoRow("Splat Materials", stats.splatMaterialCount.ToString());
-                DrawInfoRow("Actual Splats", stats.actualSplatCount > 0 ? stats.actualSplatCount.ToString("N0") : "Unknown");
-                DrawInfoRow("Max SH Band", stats.maxShBand.ToString());
-                DrawInfoRow("Data Resolution", string.IsNullOrEmpty(stats.dataResolution) ? "Unknown" : stats.dataResolution);
-                DrawInfoRow("Precomputed Sorting", stats.usesPrecomputedSorting ? "Yes" : "No");
-                DrawInfoRow("Unique Textures", stats.textures.Count.ToString());
+                DrawInfoRow(GSEditorText.T("Sorted Renderer", "ソート済みレンダラー"), stats.sortedRenderer.name);
+                DrawInfoRow(GSEditorText.T("Material Count", "マテリアル数"), stats.materialCount.ToString());
+                DrawInfoRow(GSEditorText.T("Splat Materials", "Splat マテリアル"), stats.splatMaterialCount.ToString());
+                DrawInfoRow(GSEditorText.T("Actual Splats", "実 Splat 数"), stats.actualSplatCount > 0 ? stats.actualSplatCount.ToString("N0") : GSEditorText.T("Unknown", "不明"));
+                DrawInfoRow(GSEditorText.T("Max SH Band", "最大 SH バンド"), stats.maxShBand.ToString());
+                DrawInfoRow(GSEditorText.T("Data Resolution", "データ解像度"), string.IsNullOrEmpty(stats.dataResolution) ? GSEditorText.T("Unknown", "不明") : stats.dataResolution);
+                DrawInfoRow(GSEditorText.T("Precomputed Sorting", "事前計算ソート"), stats.usesPrecomputedSorting ? GSEditorText.T("Yes", "はい") : GSEditorText.T("No", "いいえ"));
+                DrawInfoRow(GSEditorText.T("Unique Textures", "ユニークテクスチャ"), stats.textures.Count.ToString());
             }
 
             EditorGUILayout.EndVertical();
@@ -118,29 +122,31 @@ namespace GaussianSplatting.Editor
         static void DrawTextureInfo(InspectorStats stats)
         {
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-            EditorGUILayout.LabelField("Texture Footprint", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField(GSEditorText.T("Texture Footprint", "テクスチャ使用量"), EditorStyles.boldLabel);
 
             if (stats.textures.Count == 0)
             {
-                EditorGUILayout.HelpBox("No textures were found on the shared materials for this splat object.", MessageType.Info);
+                EditorGUILayout.HelpBox(GSEditorText.T(
+                    "No textures were found on the shared materials for this splat object.",
+                    "この Splat オブジェクトの共有マテリアルにテクスチャが見つかりません。"), MessageType.Info);
                 EditorGUILayout.EndVertical();
                 return;
             }
 
-            DrawInfoRow("Estimated GPU Memory", EditorUtility.FormatBytes(stats.totalGpuBytes));
-            DrawInfoRow("Runtime Memory", EditorUtility.FormatBytes(stats.totalRuntimeBytes));
-            DrawInfoRow("Asset Size", EditorUtility.FormatBytes(stats.totalAssetBytes));
+            DrawInfoRow(GSEditorText.T("Estimated GPU Memory", "推定 GPU メモリ"), EditorUtility.FormatBytes(stats.totalGpuBytes));
+            DrawInfoRow(GSEditorText.T("Runtime Memory", "ランタイムメモリ"), EditorUtility.FormatBytes(stats.totalRuntimeBytes));
+            DrawInfoRow(GSEditorText.T("Asset Size", "アセットサイズ"), EditorUtility.FormatBytes(stats.totalAssetBytes));
 
             for (int i = 0; i < stats.textures.Count; ++i)
             {
                 TextureStats texture = stats.textures[i];
                 EditorGUILayout.Space(3f);
                 EditorGUILayout.LabelField($"{texture.propertyName} ({texture.textureName})", EditorStyles.boldLabel);
-                DrawInfoRow("Dimensions", texture.dimensions);
-                DrawInfoRow("Format", texture.format);
-                DrawInfoRow("Estimated GPU Memory", EditorUtility.FormatBytes(texture.gpuBytes));
-                DrawInfoRow("Runtime Memory", EditorUtility.FormatBytes(texture.runtimeBytes));
-                DrawInfoRow("Asset Size", EditorUtility.FormatBytes(texture.assetBytes));
+                DrawInfoRow(GSEditorText.T("Dimensions", "寸法"), texture.dimensions);
+                DrawInfoRow(GSEditorText.T("Format", "形式"), texture.format);
+                DrawInfoRow(GSEditorText.T("Estimated GPU Memory", "推定 GPU メモリ"), EditorUtility.FormatBytes(texture.gpuBytes));
+                DrawInfoRow(GSEditorText.T("Runtime Memory", "ランタイムメモリ"), EditorUtility.FormatBytes(texture.runtimeBytes));
+                DrawInfoRow(GSEditorText.T("Asset Size", "アセットサイズ"), EditorUtility.FormatBytes(texture.assetBytes));
             }
 
             EditorGUILayout.EndVertical();

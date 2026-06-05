@@ -1049,7 +1049,7 @@ namespace GaussianSplatting.Editor.Importers
         public static PlyImportWizard OpenWithPly(string plyPath)
         {
             PlyImportWizard window = GetWindow<PlyImportWizard>();
-            window.titleContent = new GUIContent("PLY Import");
+            window.titleContent = GSEditorText.C("PLY Import", "PLY インポート");
             window.Show();
             window.Focus();
 
@@ -1087,13 +1087,15 @@ namespace GaussianSplatting.Editor.Importers
         [MenuItem("Gaussian Splatting/Import PLY Splats…")]
         static void Init()
         {
-            GetWindow<PlyImportWizard>().Show();
+            PlyImportWizard window = GetWindow<PlyImportWizard>();
+            window.titleContent = GSEditorText.C("PLY Import", "PLY インポート");
+            window.Show();
         }
 
         void OnGUI()
         {
-            EditorGUILayout.LabelField("PLY files", EditorStyles.boldLabel);
-            if (GUILayout.Button("Clear All PLYs"))
+            EditorGUILayout.LabelField(GSEditorText.T("PLY files", "PLY ファイル"), EditorStyles.boldLabel);
+            if (GUILayout.Button(GSEditorText.T("Clear All PLYs", "すべての PLY をクリア")))
             {
                 _plyPaths.Clear();
             }
@@ -1103,7 +1105,7 @@ namespace GaussianSplatting.Editor.Importers
                 EditorGUILayout.BeginHorizontal();
                 _plyPaths[i] = EditorGUILayout.TextField(_plyPaths[i]);
                 if (GUILayout.Button("…", GUILayout.Width(30)))
-                    _plyPaths[i] = EditorUtility.OpenFilePanel("Select PLY file", Application.dataPath, "ply");
+                    _plyPaths[i] = EditorUtility.OpenFilePanel(GSEditorText.T("Select PLY file", "PLY ファイルを選択"), Application.dataPath, "ply");
                 if (GUILayout.Button("–", GUILayout.Width(20)))
                 {
                     _plyPaths.RemoveAt(i);
@@ -1112,10 +1114,10 @@ namespace GaussianSplatting.Editor.Importers
                 EditorGUILayout.EndHorizontal();
             }
             GUILayout.EndScrollView();
-            if (GUILayout.Button("+ Add PLY file")) _plyPaths.Add(string.Empty);
-            if (GUILayout.Button("Add All PLYs in Folder"))
+            if (GUILayout.Button(GSEditorText.T("+ Add PLY file", "+ PLY ファイルを追加"))) _plyPaths.Add(string.Empty);
+            if (GUILayout.Button(GSEditorText.T("Add All PLYs in Folder", "フォルダ内の PLY をすべて追加")))
             {
-                string folder = EditorUtility.OpenFolderPanel("Select Folder with PLY files", Application.dataPath, "");
+                string folder = EditorUtility.OpenFolderPanel(GSEditorText.T("Select Folder with PLY files", "PLY ファイルのあるフォルダを選択"), Application.dataPath, "");
                 if (!string.IsNullOrEmpty(folder))
                 {
                     string[] files = Directory.GetFiles(folder, "*.ply");
@@ -1126,73 +1128,93 @@ namespace GaussianSplatting.Editor.Importers
                 }
             }
             
-            EditorGUILayout.HelpBox("Large imports still depend on available RAM, but the PLY importer now streams vertex data so file size is no longer capped by a 2GB raw read buffer. SH import memory still scales with the selected SH band.", MessageType.Info);
+            EditorGUILayout.HelpBox(GSEditorText.T(
+                "Large imports still depend on available RAM, but the PLY importer now streams vertex data so file size is no longer capped by a 2GB raw read buffer. SH import memory still scales with the selected SH band.",
+                "大きなインポートは引き続き使用可能な RAM に依存しますが、PLY インポーターは頂点データをストリーミングするため、ファイルサイズは 2GB の生読み込みバッファに制限されなくなりました。SH インポートのメモリ使用量は選択した SH バンドに応じて増えます。"), MessageType.Info);
 
             EditorGUILayout.Space(10);
-            EditorGUILayout.LabelField("Output Folder", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField(GSEditorText.T("Output Folder", "出力フォルダ"), EditorStyles.boldLabel);
             _outputFolder = EditorGUILayout.TextField(_outputFolder);
             if (GUILayout.Button("…", GUILayout.Width(30)))
-                _outputFolder = EditorUtility.OpenFolderPanel("Select Output Folder", _outputFolder, "");
+                _outputFolder = EditorUtility.OpenFolderPanel(GSEditorText.T("Select Output Folder", "出力フォルダを選択"), _outputFolder, "");
 
             EditorGUILayout.Space(15);
-            EditorGUILayout.LabelField("Splat settings", EditorStyles.boldLabel);
-            _computeBoundingBox   = EditorGUILayout.Toggle("Compute Bounding Box", _computeBoundingBox);
-            _useSRGB = EditorGUILayout.Toggle("sRGB Color Correction", _useSRGB);
-            _importSphericalHarmonics = EditorGUILayout.Toggle("Import Spherical Harmonics", _importSphericalHarmonics);
+            EditorGUILayout.LabelField(GSEditorText.T("Splat settings", "Splat 設定"), EditorStyles.boldLabel);
+            _computeBoundingBox   = EditorGUILayout.Toggle(GSEditorText.T("Compute Bounding Box", "バウンディングボックスを計算"), _computeBoundingBox);
+            _useSRGB = EditorGUILayout.Toggle(GSEditorText.T("sRGB Color Correction", "sRGB 色補正"), _useSRGB);
+            _importSphericalHarmonics = EditorGUILayout.Toggle(GSEditorText.T("Import Spherical Harmonics", "球面調和をインポート"), _importSphericalHarmonics);
             EditorGUILayout.Space(5f);
-            EditorGUILayout.LabelField("BC7 Compression", EditorStyles.boldLabel);
-            _compressColorAlphaToBC7 = EditorGUILayout.Toggle("ColorAlpha", _compressColorAlphaToBC7);
+            EditorGUILayout.LabelField(GSEditorText.T("BC7 Compression", "BC7 圧縮"), EditorStyles.boldLabel);
+            _compressColorAlphaToBC7 = EditorGUILayout.Toggle(GSEditorText.T("ColorAlpha", "色アルファ"), _compressColorAlphaToBC7);
             _compressSHToBC7 = EditorGUILayout.Toggle("SH1+", _compressSHToBC7);
             if (_compressColorAlphaToBC7 || _compressSHToBC7)
             {
-                EditorGUILayout.HelpBox("The importer always packs generated splat textures into 4x4-aligned blocks. BC7 compression applies only to the selected generated textures; position, scale, and sorting textures stay uncompressed.", MessageType.Info);
+                EditorGUILayout.HelpBox(GSEditorText.T(
+                    "The importer always packs generated splat textures into 4x4-aligned blocks. BC7 compression applies only to the selected generated textures; position, scale, and sorting textures stay uncompressed.",
+                    "インポーターは生成される Splat テクスチャを常に 4x4 境界に合わせたブロックに詰めます。BC7 圧縮は選択した生成テクスチャにのみ適用され、位置・スケール・ソートテクスチャは非圧縮のままです。"), MessageType.Info);
                 if (!_importSphericalHarmonics && _compressSHToBC7)
                 {
-                    EditorGUILayout.HelpBox("SH1+ compression has no effect while Import Spherical Harmonics is disabled.", MessageType.Info);
+                    EditorGUILayout.HelpBox(GSEditorText.T(
+                        "SH1+ compression has no effect while Import Spherical Harmonics is disabled.",
+                        "球面調和のインポートが無効な場合、SH1+ 圧縮は効果がありません。"), MessageType.Info);
                 }
             }
             if (_importSphericalHarmonics)
             {
-                _defaultSHBand = (SHBand)EditorGUILayout.EnumPopup("Max imported SH Band", _defaultSHBand);
-                EditorGUILayout.HelpBox("Imports higher-order SH coefficient textures only up to the selected max band and sets the imported material to that band. If the selected band has no non-zero coefficients in the file, the importer falls back to the highest lower non-zero band.", MessageType.Info);
+                _defaultSHBand = (SHBand)EditorGUILayout.EnumPopup(GSEditorText.T("Max imported SH Band", "インポート最大 SH バンド"), _defaultSHBand);
+                EditorGUILayout.HelpBox(GSEditorText.T(
+                    "Imports higher-order SH coefficient textures only up to the selected max band and sets the imported material to that band. If the selected band has no non-zero coefficients in the file, the importer falls back to the highest lower non-zero band.",
+                    "選択した最大バンドまでの高次 SH 係数テクスチャだけをインポートし、インポートされたマテリアルをそのバンドに設定します。選択したバンドに非ゼロ係数がない場合は、より低い非ゼロの最大バンドにフォールバックします。"), MessageType.Info);
             }
             else
             {
-                EditorGUILayout.HelpBox("Skips SH coefficient texture generation and forces imported materials to SH0 only.", MessageType.Info);
+                EditorGUILayout.HelpBox(GSEditorText.T(
+                    "Skips SH coefficient texture generation and forces imported materials to SH0 only.",
+                    "SH 係数テクスチャの生成をスキップし、インポートされたマテリアルを SH0 のみにします。"), MessageType.Info);
             }
-            EditorGUILayout.HelpBox("Color correction requires 2 additional grab passes, for small splats you might want to disable this. Without this enabled back to front rendering will be used, which makes multi-pass rendering not work. sRGB color correction only works correctly if the world has HDR camera render targets.", MessageType.Info);
+            EditorGUILayout.HelpBox(GSEditorText.T(
+                "Color correction requires 2 additional grab passes, for small splats you might want to disable this. Without this enabled back to front rendering will be used, which makes multi-pass rendering not work. sRGB color correction only works correctly if the world has HDR camera render targets.",
+                "色補正には追加で 2 回の Grab パスが必要です。小さな Splat では無効にした方がよい場合があります。これを有効にしない場合は後ろから前への描画になり、マルチパス描画は機能しません。sRGB 色補正は、ワールドのカメラレンダーターゲットが HDR の場合にのみ正しく動作します。"), MessageType.Info);
             if(_useSRGB) {
-                _multiPassRendering   = EditorGUILayout.Toggle("Multi-Pass Rendering", _multiPassRendering);
+                _multiPassRendering   = EditorGUILayout.Toggle(GSEditorText.T("Multi-Pass Rendering", "マルチパス描画"), _multiPassRendering);
                 if (_multiPassRendering)
                 {
-                    _splatsPerPass = EditorGUILayout.IntField("Splat Count Per Pass", _splatsPerPass);
-                    EditorGUILayout.HelpBox("The rendering of the splat is split into multiple sequential chunks, can help with VR rendering performance.", MessageType.Info);
+                    _splatsPerPass = EditorGUILayout.IntField(GSEditorText.T("Splat Count Per Pass", "パスごとの Splat 数"), _splatsPerPass);
+                    EditorGUILayout.HelpBox(GSEditorText.T(
+                        "The rendering of the splat is split into multiple sequential chunks, can help with VR rendering performance.",
+                        "Splat の描画を複数の連続チャンクに分割します。VR 描画性能の改善に役立つ場合があります。"), MessageType.Info);
                     _splatsPerPass = Mathf.Clamp(_splatsPerPass, 128 * 1024, 8 * 1024 * 1024);
-                    _maxAlphaMaskCount = EditorGUILayout.IntField("Max Alpha Mask Count", _maxAlphaMaskCount);
-                    EditorGUILayout.HelpBox("After each chunk is rendered an optional alpha mask pass is added using a grab pass and stencil. This will occlude the following chunks if they are behind opaque objects. This can help performance, but grab pass can be expensive, so use it with care. If you have more than 4M splats you might want to have more than 1 alpha mask pass.", MessageType.Info);
+                    _maxAlphaMaskCount = EditorGUILayout.IntField(GSEditorText.T("Max Alpha Mask Count", "最大アルファマスク数"), _maxAlphaMaskCount);
+                    EditorGUILayout.HelpBox(GSEditorText.T(
+                        "After each chunk is rendered an optional alpha mask pass is added using a grab pass and stencil. This will occlude the following chunks if they are behind opaque objects. This can help performance, but grab pass can be expensive, so use it with care. If you have more than 4M splats you might want to have more than 1 alpha mask pass.",
+                        "各チャンクの描画後に、Grab パスとステンシルを使った任意のアルファマスクパスを追加します。不透明オブジェクトの背後にある後続チャンクを遮蔽できます。性能改善に役立つ場合がありますが、Grab パスは高コストなので注意してください。400 万を超える Splat では、アルファマスクパスを 2 つ以上にした方がよい場合があります。"), MessageType.Info);
                 }
                 else
                 {
                     _splatsPerPass = 0; // disable multi-pass rendering
                 }
             }
-            _precomputeSorting = EditorGUILayout.Toggle("Precompute Sorting", _precomputeSorting);
+            _precomputeSorting = EditorGUILayout.Toggle(GSEditorText.T("Precompute Sorting", "ソートを事前計算"), _precomputeSorting);
             if (_precomputeSorting)
             {
-                EditorGUILayout.HelpBox("Precomputing sorting for octahedral directions, makes the gaussian splatting work standalone, without the GaussianSplatRenderer. However this takes way more texture memory and might have rendering artifacts. THIS WILL NO LONGER WORK WITH GaussianSplatRenderer", MessageType.Warning);
+                EditorGUILayout.HelpBox(GSEditorText.T(
+                    "Precomputing sorting for octahedral directions, makes the gaussian splatting work standalone, without the GaussianSplatRenderer. However this takes way more texture memory and might have rendering artifacts. THIS WILL NO LONGER WORK WITH GaussianSplatRenderer",
+                    "八面体方向のソートを事前計算すると、GaussianSplatRenderer なしで Gaussian Splatting を単独動作させられます。ただし、テクスチャメモリを大幅に多く使用し、描画アーティファクトが出る場合があります。これは GaussianSplatRenderer では今後動作しません。"), MessageType.Warning);
             }
           
             EditorGUILayout.Space(5f);
-            _startRenderQueue = EditorGUILayout.IntField("Start Render Queue", _startRenderQueue);
-            EditorGUILayout.HelpBox("Starting render queue for the generated splat materials. Each generated material is assigned a sequential queue from this value.", MessageType.Info);
+            _startRenderQueue = EditorGUILayout.IntField(GSEditorText.T("Start Render Queue", "開始レンダーキュー"), _startRenderQueue);
+            EditorGUILayout.HelpBox(GSEditorText.T(
+                "Starting render queue for the generated splat materials. Each generated material is assigned a sequential queue from this value.",
+                "生成される Splat マテリアルの開始レンダーキューです。各マテリアルにはこの値から順番にキューが割り当てられます。"), MessageType.Info);
             _startRenderQueue = Mathf.Clamp(_startRenderQueue, 2000, 5000);
             GUILayout.FlexibleSpace();
 
-            if (GUILayout.Button("Import All PLYs"))
+            if (GUILayout.Button(GSEditorText.T("Import All PLYs", "すべての PLY をインポート")))
             {
                 if (!_plyPaths.Any(p => !string.IsNullOrEmpty(p)))
                 {
-                    EditorUtility.DisplayDialog("PLY Import", "Add at least one PLY path.", "OK");
+                    EditorUtility.DisplayDialog(GSEditorText.T("PLY Import", "PLY インポート"), GSEditorText.T("Add at least one PLY path.", "PLY パスを少なくとも 1 つ追加してください。"), "OK");
                     return;
                 }
 
@@ -1207,7 +1229,7 @@ namespace GaussianSplatting.Editor.Importers
                 }
                 AssetDatabase.SaveAssets();
                 AssetDatabase.Refresh();
-                EditorUtility.DisplayDialog("PLY Import", "All imports completed.", "OK");
+                EditorUtility.DisplayDialog(GSEditorText.T("PLY Import", "PLY インポート"), GSEditorText.T("All imports completed.", "すべてのインポートが完了しました。"), "OK");
             }
         }
 
@@ -1215,13 +1237,13 @@ namespace GaussianSplatting.Editor.Importers
         {
             try
             {
-                EditorUtility.DisplayProgressBar("PLY Import",
-                    $"Importing {Path.GetFileName(plyPath)}", 0f);
+                EditorUtility.DisplayProgressBar(GSEditorText.T("PLY Import", "PLY インポート"),
+                    GSEditorText.T($"Importing {Path.GetFileName(plyPath)}", $"{Path.GetFileName(plyPath)} をインポート中"), 0f);
                 PlySplatImporter.Import(plyPath, prefabPath, _computeBoundingBox, _splatsPerPass, _precomputeSorting, _maxAlphaMaskCount, _useSRGB, _importSphericalHarmonics, _defaultSHBand, _compressColorAlphaToBC7, _compressSHToBC7, _startRenderQueue);
             }
             catch (Exception e)
             {
-                EditorUtility.DisplayDialog("PLY Import Failed", e.Message, "OK");
+                EditorUtility.DisplayDialog(GSEditorText.T("PLY Import Failed", "PLY インポート失敗"), e.Message, "OK");
                 Debug.LogException(e);
             }
             finally

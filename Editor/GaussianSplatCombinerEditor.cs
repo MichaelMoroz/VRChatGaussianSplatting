@@ -38,19 +38,23 @@ namespace GaussianSplatting.Editor
             EditorGUI.BeginChangeCheck();
 
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-            EditorGUILayout.LabelField("Combined Texture Formats", EditorStyles.boldLabel);
-            EditorGUILayout.HelpBox("Changing these formats recreates the generated combined RenderTexture assets on the next editor refresh.", MessageType.Info);
-            EditorGUILayout.PropertyField(_combinedPositionsFormat, new GUIContent("Positions"));
-            EditorGUILayout.PropertyField(_combinedRotationsFormat, new GUIContent("Rotations"));
-            EditorGUILayout.PropertyField(_combinedScalesFormat, new GUIContent("Scales"));
-            EditorGUILayout.PropertyField(_combinedColorsFormat, new GUIContent("Colors"));
-            EditorGUILayout.PropertyField(_combinedColorsCameraFormat, new GUIContent("Camera Colors"));
+            EditorGUILayout.LabelField(GSEditorText.T("Combined Texture Formats", "統合テクスチャ形式"), EditorStyles.boldLabel);
+            EditorGUILayout.HelpBox(GSEditorText.T(
+                "Changing these formats recreates the generated combined RenderTexture assets on the next editor refresh.",
+                "これらの形式を変更すると、次のエディタ更新時に生成済みの統合 RenderTexture アセットが再作成されます。"), MessageType.Info);
+            EditorGUILayout.PropertyField(_combinedPositionsFormat, GSEditorText.C("Positions", "位置"));
+            EditorGUILayout.PropertyField(_combinedRotationsFormat, GSEditorText.C("Rotations", "回転"));
+            EditorGUILayout.PropertyField(_combinedScalesFormat, GSEditorText.C("Scales", "スケール"));
+            EditorGUILayout.PropertyField(_combinedColorsFormat, GSEditorText.C("Colors", "色"));
+            EditorGUILayout.PropertyField(_combinedColorsCameraFormat, GSEditorText.C("Camera Colors", "カメラ色"));
             EditorGUILayout.EndVertical();
 
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-            EditorGUILayout.LabelField("Render Queue", EditorStyles.boldLabel);
-            EditorGUILayout.HelpBox("Starting render queue for the generated combined materials. Materials are assigned sequential queues from this value on the next editor refresh.", MessageType.Info);
-            EditorGUILayout.PropertyField(_combinedStartRenderQueue, new GUIContent("Start Render Queue"));
+            EditorGUILayout.LabelField(GSEditorText.T("Render Queue", "レンダーキュー"), EditorStyles.boldLabel);
+            EditorGUILayout.HelpBox(GSEditorText.T(
+                "Starting render queue for the generated combined materials. Materials are assigned sequential queues from this value on the next editor refresh.",
+                "生成される統合マテリアルの開始レンダーキューです。次のエディタ更新時に、この値から順番にキューが割り当てられます。"), MessageType.Info);
+            EditorGUILayout.PropertyField(_combinedStartRenderQueue, GSEditorText.C("Start Render Queue", "開始レンダーキュー"));
             EditorGUILayout.EndVertical();
 
             bool formatChanged = EditorGUI.EndChangeCheck();
@@ -60,7 +64,7 @@ namespace GaussianSplatting.Editor
             }
 
             bool changed = serializedObject.ApplyModifiedProperties();
-            bool rebuildPressed = GUILayout.Button("Rebuild Combined Resources");
+            bool rebuildPressed = GUILayout.Button(GSEditorText.T("Rebuild Combined Resources", "統合リソースを再構築"));
             if (changed || rebuildPressed)
             {
                 RefreshCombinedResources();
