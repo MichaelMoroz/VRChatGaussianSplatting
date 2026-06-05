@@ -170,7 +170,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
     }
 
     string Localize(string english, string japanese) { return selectedLanguage == LanguageJapanese ? japanese : english; }
-    string FormatFloat(float value) { return (Mathf.Round(value * 100.0f) * 0.01f).ToString(); }
+        string FormatFloat(float value) { return (Mathf.Round(value * 10000.0f) * 0.0001f).ToString("0.####"); }
     string ToggleLabel(bool enabled) { return Localize(enabled ? "On" : "Off", enabled ? "オン" : "オフ"); }
     string ScrollLabel(bool up) { return Localize(up ? "Up" : "Down", up ? "上へ" : "下へ"); }
     string CurrentSplatNoneLabel() { return Localize("Current Splat: None", "現在のスプラット: なし"); }
