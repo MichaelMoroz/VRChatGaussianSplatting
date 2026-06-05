@@ -182,9 +182,6 @@ namespace GaussianSplatting.Editor
             CreateTextElement("Title", settingsColumn.transform, "VRChatGaussianSplatting", 22, TextAnchor.MiddleLeft);
             CreateTextElement("Subtitle", settingsColumn.transform, "Github: https://github.com/MichaelMoroz/VRChatGaussianSplatting\nDeveloped by misha_m", 12, TextAnchor.MiddleLeft);
             generatedUi.currentSplatText = CreateTextElement("Current Splat", settingsColumn.transform, "Rendering Mode: Single\nCurrent Splat: None\nRendered Splats: 0", 16, TextAnchor.MiddleLeft);
-            generatedUi.sortingSectionText = CreateTextElement("Sorting Section", settingsColumn.transform, "Sorting Settings", 18, TextAnchor.MiddleLeft);
-            CreateStepperSetting("Camera Resort Move", "Camera move amount to trigger resort", "0.1", nameof(GaussianSplatRendererUI.DecreaseCameraQuantization), nameof(GaussianSplatRendererUI.IncreaseCameraQuantization), out generatedUi.cameraQuantizationLabelText, out generatedUi.cameraQuantizationText);
-            CreateToggleSetting("Sort Every Frame", "Sort every frame", "Off", nameof(GaussianSplatRendererUI.ToggleAlwaysUpdate), out generatedUi.alwaysUpdateLabelText, out generatedUi.alwaysUpdateButton);
             generatedUi.materialSectionText = CreateTextElement("Settings Section", settingsColumn.transform, "Material Settings", 18, TextAnchor.MiddleLeft);
             CreateSliderSetting("SH Band", "SH Band (global)", 0.0f, 3.0f, true, "3", 0.0f, out generatedUi.shBandLabelText, out generatedUi.shBandSlider, out generatedUi.shBandText);
             CreateToggleSetting("VRC Light Volumes", "VRC Light Volumes (global)", "Off", nameof(GaussianSplatRendererUI.ToggleVrcLightVolumes), out generatedUi.vrcLightVolumesLabelText, out generatedUi.vrcLightVolumesButton);

@@ -177,6 +177,11 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
     void SetText(TextMeshProUGUI text, string value) { if (text != null && text.text != value) text.text = value; }
     void SetLocalizedText(TextMeshProUGUI text, string english, string japanese) { SetText(text, Localize(english, japanese)); }
     void SetActive(Component component, bool active) { if (component != null && component.gameObject.activeSelf != active) component.gameObject.SetActive(active); }
+        void SetParentActive(Component component, bool active)
+        {
+            Transform parent = component != null ? component.transform.parent : null;
+            if (parent != null && parent.gameObject.activeSelf != active) parent.gameObject.SetActive(active);
+        }
     void SetInteractable(Selectable selectable, bool interactable) { if (selectable != null && selectable.interactable != interactable) selectable.interactable = interactable; }
     void SetSliderWithoutNotify(Slider slider, float value) { if (slider != null && !Mathf.Approximately(slider.value, value)) slider.SetValueWithoutNotify(value); }
     TextMeshProUGUI ResolveSubtitleText()
@@ -212,6 +217,13 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
     {
         if (englishLanguageButton != null) { SetInteractable(englishLanguageButton, true); ApplyButtonVisual(englishLanguageButton, "English", selectedLanguage == LanguageEnglish ? _selectedSplatColor : _defaultSplatColor); }
         if (japaneseLanguageButton != null) { SetInteractable(japaneseLanguageButton, true); ApplyButtonVisual(japaneseLanguageButton, "日本語", selectedLanguage == LanguageJapanese ? _selectedSplatColor : _defaultSplatColor); }
+    }
+
+    void RefreshSortingVisibility()
+    {
+        SetActive(sortingSectionText, false);
+        SetParentActive(cameraQuantizationLabelText, false);
+        SetParentActive(alwaysUpdateLabelText, false);
     }
 
     void FindRenderer()
@@ -772,6 +784,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         FindRenderer();
         RefreshSceneSplatObjects();
         RefreshLocalizedLabels();
+        RefreshSortingVisibility();
         bool combinedMode = gaussianSplatRenderer != null && gaussianSplatRenderer.IsCombinedRenderingMode();
         RefreshRenderingModeLayout(combinedMode);
         if (gaussianSplatRenderer == null)
@@ -799,7 +812,6 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         SetText(alphaCutoffText, FormatFloat(gaussianSplatRenderer.alphaCutoff));
         SetText(alphaCullText, FormatFloat(gaussianSplatRenderer.alphaCull));
         SetText(lodCullText, FormatFloat(gaussianSplatRenderer.lodCull));
-        RefreshSortingControls();
         RefreshMaterialControls();
         RefreshSplatButtons();
         _sliderValuesInitialized = true;
