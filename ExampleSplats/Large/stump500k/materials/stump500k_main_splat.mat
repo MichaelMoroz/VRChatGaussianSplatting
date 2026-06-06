@@ -36,11 +36,15 @@ Material:
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
     - _GS_RenderOrder:
-        m_Texture: {fileID: 8400000, guid: 8e405cfbf3802b8489e1dfef5bb8c57d, type: 2}
+        m_Texture: {fileID: 8400000, guid: 0a163baac6cb8354ea09c953edf77918, type: 2}
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
     - _GS_RenderOrderMirror:
         m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
+    - _GS_RenderOrderPhoto:
+        m_Texture: {fileID: 8400000, guid: 10903fa430046194b9541d57fac5ef7c, type: 2}
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
     - _GS_RenderOrderPrecomputed:
@@ -64,6 +68,7 @@ Material:
     - _VRC_LIGHT_VOLUMES: 0
     m_Floats:
     - _ActualSplatCount: 500000
+    - _AlphaCull: 0.04
     - _AlphaCutoff: 0.03
     - _AntiAliasing: 1
     - _Exposure: 1
@@ -78,6 +83,7 @@ Material:
     - _GS_SH_CoordShift: 9
     - _Gamma: 1
     - _GaussianMul: 1
+    - _LODCull: 0
     - _LightVolumeIntensity: 1
     - _Log2MinScale: -15
     - _Opacity: 1
