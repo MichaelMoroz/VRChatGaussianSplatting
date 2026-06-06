@@ -1,4 +1,4 @@
-#define UNITY_SHADER_NO_UPGRADE 1 
+#define UNITY_SHADER_NO_UPGRADE 1
 #ifdef GS_NO_GEOM
 #pragma target 3.5
 #else
@@ -32,10 +32,8 @@ float _LightVolumeIntensity;
 #define GS_MAX_VERTEX_COUNT 4
 #endif
 
-#ifdef GS_USE_ELLIPSOID_HIT_DEPTH
 #define GS_RAY_DEPTH_ABS_LIMIT 1e6
 #define GS_RAY_DEPTH_SQ_LIMIT 1e12
-#endif
 
 struct appdata {
     float4 position : POSITION;
@@ -72,7 +70,6 @@ v2g vert(appdata v) {
 }
 #endif
 
-#ifdef GS_USE_ELLIPSOID_HIT_DEPTH
 float4x4 GSCreateClipToViewMatrix()
 {
     float4x4 flipZ = float4x4(1, 0, 0, 0,
@@ -101,12 +98,6 @@ float3 GSClipToWorld(float2 clipPos, float depth, float4x4 clipToView)
     float4 viewPos = mul(clipToView, float4(clipPos, depth, 1.0));
     float invViewW = safe_divide(1.0, viewPos.w);
     return mul(UNITY_MATRIX_I_V, float4(viewPos.xyz * invViewW, 1.0)).xyz;
-}
-
-float2 GSClipNdcToScreenUV(float2 clipNdc)
-{
-    float4 screenPos = ComputeScreenPos(float4(clipNdc, 0.0, 1.0));
-    return screenPos.xy / screenPos.w;
 }
 
 bool GSTryGetRaySplatDepth(float3 splatPos, float3 splatScale, float4 splatRotation, float2 clipPos, float4x4 clipToView, out float projectedDepth)
@@ -163,176 +154,235 @@ bool GSTryGetRaySplatDepth(float3 splatPos, float3 splatScale, float4 splatRotat
     projectedDepth = hitClipPos.z / hitClipPos.w;
     return abs(projectedDepth) < SAFE_NDC_LIMIT;
 }
+
+#ifdef GS_NO_GEOM
+g2f vert(appdata v) {
+#else
+[maxvertexcount(GS_MAX_VERTEX_COUNT)]
+[instance(32)]
+void geo(point v2g input[1], inout TriangleStream<g2f> triStream, uint instanceID : SV_GSInstanceID, uint geoPrimID : SV_PrimitiveID) {
+#endif
+    g2f o;
+#ifdef GS_NO_GEOM
+    UNITY_SETUP_INSTANCE_ID(v);
+    UNITY_INITIALIZE_OUTPUT(g2f, o);
+    UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(o);
+#else
+    UNITY_SETUP_INSTANCE_ID(input[0]);
+    UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input[0]);
+    UNITY_INITIALIZE_OUTPUT(g2f, o);
+    UNITY_TRANSFER_VERTEX_OUTPUT_STEREO(input[0], o);
 #endif
 
-struct GSProjectedSplat
-{
-    Ellipse ell;
-    float4 color;
-    float gaussianExp;
-    float3 mean;
-    float3 support;
-    float4 quat;
-    float centerDepth;
-};
-
-float2 GSQuadPos(uint vtxID)
-{
-    return float2(vtxID & 1u, (vtxID >> 1u) & 1u) * 2.0 - 1.0;
-}
-
-bool GSTryResolveSplatID(uint localSplatID, out uint id)
-{
     uint splatCount = (uint)max(_SplatCount, 0);
     uint splatOffset = (uint)max(_SplatOffset, 0);
     uint actualSplatCount = (uint)max(_ActualSplatCount, 0);
-
-    id = localSplatID;
-    if (id >= splatCount) return false;
+#ifdef GS_NO_GEOM
+    uint id = v.vertexID >> 2u;
+    if (id >= splatCount) {
+        o.position = float4(0.0, 0.0, 0.0, 1.0);
+        o.quadPos = float2(2.0, 2.0);
+        o.color = 0.0;
+        o.gaussianExp = 0.0;
+        return o;
+    }
     id += splatOffset;
-    if (id >= actualSplatCount) return false;
-#ifdef _BACK_TO_FRONT
-    id = actualSplatCount - id - 1u;
+    if (id >= actualSplatCount) {
+        o.position = float4(0.0, 0.0, 0.0, 1.0);
+        o.quadPos = float2(2.0, 2.0);
+        o.color = 0.0;
+        o.gaussianExp = 0.0;
+        return o;
+    }
+#else
+    uint id = geoPrimID * 32 + instanceID;
+    if (id >= splatCount) return; // check if id is within bounds
+    id += splatOffset; // offset for the current batch
+    if (id >= actualSplatCount) return;
 #endif
-    return true;
-}
+    #ifdef _BACK_TO_FRONT
+        id = actualSplatCount - id - 1u; // flip the order for back-to-front rendering
+    #endif
 
-SplatData GSLoadSplatForDrawID(uint id)
-{
 #if defined(DEBUG_PROJECTED_POINTS) || defined(DEBUG_RAW_SPLAT_ORDER)
     SplatData splat = LoadSplatData(id);
     splat.id = id;
     splat.valid = true;
-#elif defined(_PRECOMPUTED_SORTING_ON)
-    float3 cam_dir = mul(transpose(UNITY_MATRIX_IT_MV), float4(0, 0, 1, 0)).xyz;
+    #elif defined(_PRECOMPUTED_SORTING_ON)
+    float3 cam_dir = mul(transpose(UNITY_MATRIX_IT_MV), float4(0, 0, 1, 0)).xyz; // camera direction in object space
     SplatData splat = LoadSplatDataPrecomputedOrder(id, cam_dir);
-#else
+    #else
     SplatData splat = LoadSplatDataRenderOrder(id);
+    #endif
+
+#ifdef GS_NO_GEOM
+    if (!splat.valid || (splat.color.a < _AlphaCutoff) || (splat.color.a < _AlphaCull) || any(splat.scale > _ScaleCutoff)) {
+        o.position = float4(0.0, 0.0, 0.0, 1.0);
+        o.quadPos = float2(2.0, 2.0);
+        o.color = 0.0;
+        o.gaussianExp = 0.0;
+        return o;
+    }
+#else
+    if (!splat.valid || (splat.color.a < _AlphaCutoff) || (splat.color.a < _AlphaCull) || any(splat.scale > _ScaleCutoff)) return;
 #endif
-    return splat;
-}
 
-bool GSTryPrepareProjectedSplat(uint localSplatID, out GSProjectedSplat projected)
-{
-    UNITY_INITIALIZE_OUTPUT(GSProjectedSplat, projected);
+    float3 splatWorldPos = mul(unity_ObjectToWorld, float4(splat.mean, 1)).xyz;
 
-    uint id;
-    if (!GSTryResolveSplatID(localSplatID, id)) return false;
-
-    SplatData splat = GSLoadSplatForDrawID(id);
-    if (!splat.valid || (splat.color.a < _AlphaCutoff) || (splat.color.a < _AlphaCull) || any(splat.scale > _ScaleCutoff)) return false;
-
-    float3 splatWorldPos = mul(unity_ObjectToWorld, float4(splat.mean, 1.0)).xyz;
     float3 camToSplat = splatWorldPos - _WorldSpaceCameraPos;
     float lodMaxScale = max(splat.scale.x, max(splat.scale.y, splat.scale.z));
-    if (lodMaxScale * lodMaxScale < (_LODCull * _LODCull) * dot(camToSplat, camToSplat)) return false;
-
-    float4 splatClipPos = mul(UNITY_MATRIX_VP, float4(splatWorldPos, 1.0));
-    if (splatClipPos.w <= 0.0) return false;
-    splatClipPos.xyz /= splatClipPos.w;
-    if (all(splatClipPos.xy < -1.0) || all(splatClipPos.xy > 1.0)) return false;
-
-    float peakAlpha = splat.color.a;
-    float cutoffSigmaRadius = sqrt(max(-2.0 * log(_AlphaCutoff / peakAlpha), 0.0));
-    float scaleMax = max(splat.scale.x, max(splat.scale.y, splat.scale.z));
-    float3 clampedScale = clamp(splat.scale, scaleMax * _ThinThreshold, scaleMax);
-    float3 projectionScale = max(clampedScale, scaleMax / PROJECTION_MAX_ANISOTROPY);
-    projected.support = _GaussianMul * cutoffSigmaRadius * projectionScale;
-    projected.ell = GetProjectedEllipsoid(splat.mean, projected.support, splat.quat);
-
-    if (!valid_ellipse(projected.ell) || any(projected.ell.size > 1.75)) return false;
-
-    projected.color = splat.color;
-    float3 cameraPosObject = mul(unity_WorldToObject, float4(_WorldSpaceCameraPos, 1.0)).xyz;
-    projected.color.rgb = EvaluateSplatSHColor(splat.id, splat.color.rgb, splat.mean, cameraPosObject);
-    projected.color.rgb = shift_color(projected.color.rgb) * _Exposure;
-#ifdef _FAKE_SRGB
-    projected.color.rgb = GammaToLinearSpace(projected.color.rgb);
+#ifdef GS_NO_GEOM
+    if (lodMaxScale * lodMaxScale < (_LODCull * _LODCull) * dot(camToSplat, camToSplat)) {
+        o.position = float4(0.0, 0.0, 0.0, 1.0);
+        o.quadPos = float2(2.0, 2.0);
+        o.color = 0.0;
+        o.gaussianExp = 0.0;
+        return o;
+    }
+#else
+    if (lodMaxScale * lodMaxScale < (_LODCull * _LODCull) * dot(camToSplat, camToSplat)) return; // distance-based LOD cull (no projection)
 #endif
 
-    float area = projected.ell.size.x * projected.ell.size.y;
-    projected.ell.size = max(projected.ell.size * _ScreenParams.xy, 1.75 * _AntiAliasing) / _ScreenParams.xy;
-    float areaPost = projected.ell.size.x * projected.ell.size.y;
-    projected.color.a *= area / areaPost;
-    projected.gaussianExp = 0.5 * cutoffSigmaRadius * cutoffSigmaRadius;
-    projected.mean = splat.mean;
-    projected.quat = splat.quat;
-    projected.centerDepth = splatClipPos.z;
+    float4 splatClipPos = mul(UNITY_MATRIX_VP, float4(splatWorldPos, 1));
+#ifdef GS_NO_GEOM
+    if (splatClipPos.w <= 0) {
+        o.position = float4(0.0, 0.0, 0.0, 1.0);
+        o.quadPos = float2(2.0, 2.0);
+        o.color = 0.0;
+        o.gaussianExp = 0.0;
+        return o;
+    }
+#else
+    if (splatClipPos.w <= 0) return; // behind camera
+#endif
+    splatClipPos.xyz /= splatClipPos.w; // perspective divide
+#ifdef GS_NO_GEOM
+    if (all(splatClipPos.xy < -1.0) || all(splatClipPos.xy > 1.0)) {
+        o.position = float4(0.0, 0.0, 0.0, 1.0);
+        o.quadPos = float2(2.0, 2.0);
+        o.color = 0.0;
+        o.gaussianExp = 0.0;
+        return o;
+    }
+#else
+    if (all(splatClipPos.xy < -1.0) || all(splatClipPos.xy > 1.0)) return; // outside of view frustum
+#endif
+
+    o.color = splat.color;
+    float peakAlpha = o.color.a;
+    float cutoffSigmaRadius = sqrt(max(-2.0 * log(_AlphaCutoff / peakAlpha), 0.0));
+    float scale_max = max(splat.scale.x, max(splat.scale.y, splat.scale.z));
+    float3 clamped_scale = clamp(splat.scale, scale_max * _ThinThreshold, scale_max);
+    float3 projection_scale = max(clamped_scale, scale_max / PROJECTION_MAX_ANISOTROPY);
+    float supportScale = _GaussianMul * cutoffSigmaRadius;
+    float3 splatSupport = supportScale * projection_scale;
+
+    if (o.color.a < _AlphaCutoff) {
+#ifdef GS_NO_GEOM
+        o.position = float4(0.0, 0.0, 0.0, 1.0);
+        o.quadPos = float2(2.0, 2.0);
+        o.color = 0.0;
+        o.gaussianExp = 0.0;
+        return o;
+#else
+        return; // skip splats with too small area or invalid alpha
+#endif
+    }
+
+#ifdef DEBUG_PROJECTED_POINTS
+#ifdef GS_NO_GEOM
+    o.position = float4(0.0, 0.0, 0.0, 1.0);
+    o.quadPos = float2(2.0, 2.0);
+    o.color = 0.0;
+    o.gaussianExp = 0.0;
+    return o;
+#else
+    float2 centerNdc;
+    float2 projectedPoints[5];
+    GetProjectedEllipsoidOutline(splat.mean, splatSupport, splat.quat, projectedPoints, centerNdc);
+
+    o.color = float4(1.0, 0.1, 0.0, 1.0);
+    o.gaussianExp = 0.0;
+    float2 debugHalfSize = 4.0 / _ScreenParams.xy;
+
+    [unroll] for (uint pointID = 0; pointID < 5; pointID++)
+    {
+        [unroll] for (uint vtxID = 0; vtxID < 4; vtxID++)
+        {
+            o.quadPos = float2(vtxID & 1, (vtxID >> 1) & 1) * 2.0 - 1.0;
+            float2 ndc = projectedPoints[pointID] + o.quadPos * debugHalfSize;
+            o.position = float4(ndc, splatClipPos.z, 1.0);
+            triStream.Append(o);
+        }
+        triStream.RestartStrip();
+    }
+    return;
+#endif
+#endif
+
+    // Project the ellipsoid onto the screen
+    Ellipse ell = GetProjectedEllipsoid(splat.mean, splatSupport, splat.quat);
+
+    if(!valid_ellipse(ell) || any(ell.size > 1.75)) {
+#ifdef GS_NO_GEOM
+        o.position = float4(0.0, 0.0, 0.0, 1.0);
+        o.quadPos = float2(2.0, 2.0);
+        o.color = 0.0;
+        o.gaussianExp = 0.0;
+        return o;
+#else
+        return;
+#endif
+    }
+
+    float4x4 clipToView = GSCreateClipToViewMatrix();
+
+    float3 cameraPosObject = mul(unity_WorldToObject, float4(_WorldSpaceCameraPos, 1.0)).xyz;
+    o.color.rgb = EvaluateSplatSHColor(splat.id, splat.color.rgb, splat.mean, cameraPosObject);
+    o.color.rgb = shift_color(o.color.rgb) * _Exposure;
+    #ifdef _FAKE_SRGB
+        o.color.rgb = GammaToLinearSpace(o.color.rgb);
+    #endif
+
+    float area = ell.size.x * ell.size.y;
+    ell.size = max(ell.size * _ScreenParams, 1.75 * _AntiAliasing) / _ScreenParams; // ensure minimum size
+    float areaPost = ell.size.x * ell.size.y;
+    float areaScale = area / areaPost;
+    o.color.a *= areaScale; // scale alpha by area ratio
+    o.gaussianExp = 0.5 * cutoffSigmaRadius * cutoffSigmaRadius;
 
 #ifdef _VRC_LIGHT_VOLUMES_ON
     if (LightVolumesEnabled())
     {
         float3 L0, L1r, L1g, L1b;
         LightVolumeSH(splatWorldPos, L0, L1r, L1g, L1b);
-        float3 emissivePart = max(projected.color.rgb - 1.0, 0.0);
-        float3 albedoPart = min(projected.color.rgb, 1.0);
-        projected.color.rgb = albedoPart * LinearToGammaSpace(abs(L0)) * _LightVolumeIntensity + emissivePart;
+        float3 emissivePart = max(o.color.rgb - 1.0, 0.0);
+        float3 albedoPart = min(o.color.rgb, 1.0);
+        o.color.rgb = albedoPart * LinearToGammaSpace(abs(L0)) * _LightVolumeIntensity + emissivePart;
     }
 #endif
-
-    return true;
-}
-
-void GSSetInvalidVertex(inout g2f o)
-{
-    o.position = float4(0.0, 0.0, 0.0, 1.0);
-    o.quadPos = float2(2.0, 2.0);
-    o.color = 0.0;
-    o.gaussianExp = 0.0;
-}
-
-void GSFillProjectedSplatVertex(GSProjectedSplat projected, uint vtxID, inout g2f o)
-{
-    o.quadPos = GSQuadPos(vtxID);
-    o.color = projected.color;
-    o.gaussianExp = projected.gaussianExp;
-
-    float2x2 rot = float2x2(projected.ell.axis.x, -projected.ell.axis.y, projected.ell.axis.y, projected.ell.axis.x);
-    float2 ndc = projected.ell.center + mul(rot, o.quadPos * projected.ell.size);
-    float depth = projected.centerDepth;
-#ifdef GS_USE_ELLIPSOID_HIT_DEPTH
-    GSTryGetRaySplatDepth(projected.mean, projected.support, projected.quat, ndc, GSCreateClipToViewMatrix(), depth);
-#endif
-    o.position = float4(ndc, depth, 1.0);
-}
 
 #ifdef GS_NO_GEOM
-g2f vert(appdata v)
-{
-    g2f o;
-    UNITY_SETUP_INSTANCE_ID(v);
-    UNITY_INITIALIZE_OUTPUT(g2f, o);
-    UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(o);
-
-    GSProjectedSplat projected;
-    if (!GSTryPrepareProjectedSplat(v.vertexID >> 2u, projected))
-    {
-        GSSetInvalidVertex(o);
-        return o;
-    }
-
-    GSFillProjectedSplatVertex(projected, v.vertexID & 3u, o);
+    o.quadPos = float2(v.vertexID & 1u, (v.vertexID >> 1u) & 1u) * 2.0 - 1.0;
+    float2x2 rot = float2x2(ell.axis.x, -ell.axis.y, ell.axis.y, ell.axis.x);
+    float2 ndc = ell.center + mul(rot, o.quadPos * ell.size);
+    float cornerDepth = splatClipPos.z;
+    GSTryGetRaySplatDepth(splat.mean, splatSupport, splat.quat, ndc, clipToView, cornerDepth);
+    o.position = float4(ndc, cornerDepth, 1.0);
     return o;
-}
 #else
-[maxvertexcount(GS_MAX_VERTEX_COUNT)]
-[instance(32)]
-void geo(point v2g input[1], inout TriangleStream<g2f> triStream, uint instanceID : SV_GSInstanceID, uint geoPrimID : SV_PrimitiveID) {
-    g2f o;
-    UNITY_SETUP_INSTANCE_ID(input[0]);
-    UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input[0]);
-    UNITY_INITIALIZE_OUTPUT(g2f, o);
-    UNITY_TRANSFER_VERTEX_OUTPUT_STEREO(input[0], o);
-
-    GSProjectedSplat projected;
-    if (!GSTryPrepareProjectedSplat(geoPrimID * 32u + instanceID, projected)) return;
     [unroll] for (uint vtxID = 0; vtxID < 4; vtxID ++)
     {
-        GSFillProjectedSplatVertex(projected, vtxID, o);
+        o.quadPos = float2(vtxID & 1, (vtxID >> 1) & 1) * 2.0 - 1.0;
+        float2x2 rot = float2x2(ell.axis.x, -ell.axis.y, ell.axis.y, ell.axis.x);
+        float2 ndc = ell.center + mul(rot, o.quadPos * ell.size);
+        float cornerDepth = splatClipPos.z;
+        GSTryGetRaySplatDepth(splat.mean, splatSupport, splat.quat, ndc, clipToView, cornerDepth);
+        o.position = float4(ndc, cornerDepth, 1.0);
         triStream.Append(o);
     }
-}
 #endif
+}
 
 //#define DEBUG_OUTLINES
 
@@ -343,12 +393,12 @@ float4 frag(g2f input) : SV_Target {
     return input.color;
 #endif
 #ifdef DEBUG_OUTLINES
-    return (dist2 < 1.0) ? float4(1, 0, 0, 1) : float4(0, 0, 0, 1); // red outline for debugging
+    return (dist2 < 1.0) ? float4(1, 0, 0, 1) : float4(0, 0, 0, 1);
 #endif
     if (dist2 > 1.0)
     {
         discard;
-    }  // skip outside of the cutoff ellipse
+    }
     float rho = input.color.a * exp(-input.gaussianExp * dist2);
     return float4(input.color.rgb * rho, rho);
 }
