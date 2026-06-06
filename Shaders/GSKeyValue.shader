@@ -23,26 +23,20 @@ Shader "VRChatGaussianSplatting/ComputeKeyValue" {
 
             float3 _CameraPos;
 
-            uint float_to_ordered_uint(float value)
-            {
-                uint bits = asuint(value);
-                return (bits & 0x80000000u) != 0u ? ~bits : (bits | 0x80000000u);
-            }
-
-            uint ComputeD(uint id) {
+            float ComputeD(uint id) {
                 SplatData splat = LoadSplatData(id);
                 float dist = length(_CameraPos - splat.mean);
                 if(isnan(dist) || isinf(dist)) {
-                    return 0xFFFFFFFFu;
+                    return 1e20;
                 }
-                return float_to_ordered_uint(dist); // Front to back sorting
+                return dist; // Front to back sorting. Positive float bit order matches numeric order.
             }
 
             float2 frag (v2f i) : SV_Target {
                 uint2 pixel = floor(i.pos.xy);
                 uint index = UVToIndex(pixel);
                 if (index >= _ElementCount) discard;
-                return float2(ASFLOAT_NO_DENORM(index), asfloat(ComputeD(index)));
+                return float2((float)index, ComputeD(index));
             }
             ENDCG
         }

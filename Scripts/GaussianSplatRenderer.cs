@@ -45,8 +45,10 @@ public partial class GaussianSplatRenderer : UdonSharpBehaviour
     [SerializeField] bool alwaysUpdate;
     [Tooltip("Number of radix sort passes to process per game frame while the screen-camera sort is pipelined.")]
     [SerializeField] int sortPassesPerFrame = 2;
-    [Tooltip("Render texture array used to store sorted splat render order. Slice 0 is screen, slice 1 is photo.")]
+    [Tooltip("2D render texture used to store sorted splat render order for the screen camera.")]
     public RenderTexture splatRenderOrder;
+    [Tooltip("2D render texture used to store sorted splat render order for the photo camera.")]
+    public RenderTexture splatRenderOrderPhoto;
 
     [Tooltip("If true, the material properties will be overridden with the values set in this script. If false, the material properties will be set to their default values.")]
     [UdonSynced, SerializeField] public bool overrideMaterialProperties;
@@ -648,12 +650,13 @@ public partial class GaussianSplatRenderer : UdonSharpBehaviour
         {
             keyValueMat = _radixSort.computeKeyValues;
         }
-        if (splatRenderOrder == null)
+        if (splatRenderOrder == null || splatRenderOrderPhoto == null)
         {
-            Debug.LogError("Splat Render Order texture is not assigned. Please assign a RenderTexture.");
+            Debug.LogError("Splat Render Order textures are not assigned. Please assign RenderTextures.");
             return false;
         }
         if (!EnsureRenderTextureCreated(splatRenderOrder, "Splat render order")
+            || !EnsureRenderTextureCreated(splatRenderOrderPhoto, "Splat render order photo")
             || !EnsureRenderTextureCreated(_radixSort.keyValues0, "RadixSort keyValues0")
             || !EnsureRenderTextureCreated(_radixSort.keyValues1, "RadixSort keyValues1")
             || !EnsureRenderTextureCreated(_radixSort.prefixSums, "RadixSort prefixSums")
@@ -699,6 +702,7 @@ public partial class GaussianSplatRenderer : UdonSharpBehaviour
                 continue;
             }
             if (material.HasProperty("_GS_RenderOrder")) material.SetTexture("_GS_RenderOrder", splatRenderOrder);
+            if (material.HasProperty("_GS_RenderOrderPhoto")) material.SetTexture("_GS_RenderOrderPhoto", splatRenderOrderPhoto);
             if (material.HasProperty("_ActualSplatCount")) material.SetInt("_ActualSplatCount", actualCount);
         }
     }
@@ -735,7 +739,7 @@ public partial class GaussianSplatRenderer : UdonSharpBehaviour
     {
         _sortedRenderer = null;
         GaussianSplatCombiner combined = ResolveCombiner();
-        if (combined == null || !combined.BindRenderOrder(splatRenderOrder, out _sortedRenderer, out Material primaryMaterial, out Texture positions, out int count))
+        if (combined == null || !combined.BindRenderOrder(splatRenderOrder, splatRenderOrderPhoto, out _sortedRenderer, out Material primaryMaterial, out Texture positions, out int count))
         {
             return false;
         }
@@ -808,7 +812,7 @@ public partial class GaussianSplatRenderer : UdonSharpBehaviour
             SetSortCameraPos(screenCamPos);
             _radixSort.RunFullSortForEditor(splatRenderOrder, SCREEN_CAMERA_ID);
             SetSortCameraPos(photoCamPos);
-            _radixSort.RunFullSortForEditor(splatRenderOrder, PHOTO_CAMERA_ID);
+            _radixSort.RunFullSortForEditor(splatRenderOrderPhoto, PHOTO_CAMERA_ID);
             OnScreenSortPublished();
             return;
         }
@@ -837,7 +841,7 @@ public partial class GaussianSplatRenderer : UdonSharpBehaviour
             if (SortNeeded(PHOTO_CAMERA_ID, quantizedPhotoPos, false))
             {
                 SetSortCameraPos(photoCamPos);
-                _radixSort.RunFullSort(splatRenderOrder, PHOTO_CAMERA_ID);
+                _radixSort.RunFullSort(splatRenderOrderPhoto, PHOTO_CAMERA_ID);
                 _completedCameraPos[PHOTO_CAMERA_ID] = quantizedPhotoPos;
                 _hasCompletedSort[PHOTO_CAMERA_ID] = true;
             }

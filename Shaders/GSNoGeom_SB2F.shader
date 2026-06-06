@@ -1,4 +1,4 @@
-Shader "VRChatGaussianSplatting/GaussianSplatting"
+Shader "VRChatGaussianSplatting/GaussianSplattingNoGeomSimpleBackToFront"
 {
     Properties
     {
@@ -40,8 +40,8 @@ Shader "VRChatGaussianSplatting/GaussianSplatting"
         _ScaleCutoff ("Scale Cutoff", Range(0, 100)) = 100.0
         _Exposure ("Exposure", Range(0, 5)) = 1.0
         _Opacity ("Opacity", Range(0, 5)) = 1.0
-        _OKLCHShift ("OKLCH Color Shift", Vector) = (0, 0, 0, 0) // Shift for OKLCH color space
-        _Gamma ("Gamma", Float) = 1.0 
+        _OKLCHShift ("OKLCH Color Shift", Vector) = (0, 0, 0, 0)
+        _Gamma ("Gamma", Float) = 1.0
         [Toggle] _VRC_LIGHT_VOLUMES ("Use VRC Light Volumes", Integer) = 0
         _LightVolumeIntensity ("Light Volume Intensity", Range(0, 10)) = 1.0
     }
@@ -51,19 +51,15 @@ Shader "VRChatGaussianSplatting/GaussianSplatting"
 
         Pass
         {
-            //Blend One OneMinusSrcAlpha //Back to front blending
-            Blend OneMinusDstAlpha One //Front to back blending
+            Blend One OneMinusSrcAlpha
             Cull Off
             ZWrite Off
-            Stencil {
-                Ref 1
-                Comp NotEqual  // skip pixels where alpha mask pass wrote 1
-            }
             CGPROGRAM
-            #define GS_USE_ELLIPSOID_HIT_DEPTH
+            #define GS_NO_GEOM
+            #define _BACK_TO_FRONT
+            #define _FAKE_SRGB
             #include "GS.cginc"
             ENDCG
         }
     }
-    CustomEditor "GaussianSplatting.Editor.GaussianSplatShaderGUI"
 }

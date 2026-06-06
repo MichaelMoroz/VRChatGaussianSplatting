@@ -281,6 +281,7 @@ public partial class GaussianSplatRenderer
             RadixSort radixSort = rendererObject.AddUdonSharpComponent<RadixSort>();
             radixSort.computeKeyValues = AssetDatabase.LoadAssetAtPath<Material>("Assets/VRChatGaussianSplatting/Resources/Materials/VRChatGaussianSplatting_ComputeKeyValue.mat");
             radixSort.radixSort = AssetDatabase.LoadAssetAtPath<Material>("Assets/VRChatGaussianSplatting/RadixSort/Materials/Misha_RadixSort.mat");
+            radixSort.copySortedOrder = AssetDatabase.LoadAssetAtPath<Material>("Assets/VRChatGaussianSplatting/Resources/Materials/VRChatGaussianSplatting_CopyRenderOrder.mat");
             radixSort.SetPipelinedPassesPerFrame(primaryRenderer.sortPassesPerFrame);
             EditorUtility.SetDirty(primaryRenderer);
             EditorUtility.SetDirty(radixSort);
@@ -316,6 +317,7 @@ public partial class GaussianSplatRenderer
         {
             EditorUtility.SetDirty(this);
         }
+        EnsureRadixSortMaterials();
         UpdateSortingResourceTextures();
         GaussianSplatCombiner sceneCombiner = GetCombiner();
         if (sceneCombiner != null && sceneCombiner.EnsureGeneratedHierarchyState(!IsCombinedRenderingMode()))
@@ -362,6 +364,21 @@ public partial class GaussianSplatRenderer
         }
         startRenderQueue = Mathf.Clamp(startRenderQueue, 2000, 5000);
         QueueEditorRefresh();
+    }
+
+    void EnsureRadixSortMaterials()
+    {
+        RadixSort radixSort = GetComponent<RadixSort>();
+        if (radixSort == null)
+        {
+            return;
+        }
+        Material copyMaterial = AssetDatabase.LoadAssetAtPath<Material>("Assets/VRChatGaussianSplatting/Resources/Materials/VRChatGaussianSplatting_CopyRenderOrder.mat");
+        if (copyMaterial != null && radixSort.copySortedOrder != copyMaterial)
+        {
+            radixSort.copySortedOrder = copyMaterial;
+            EditorUtility.SetDirty(radixSort);
+        }
     }
 
     bool EnsureSortRenderTexture(ref RenderTexture targetTexture, string folderPath, string assetName, int width, int height, RenderTextureFormat format, bool useMipMap, int volumeDepth)
@@ -470,7 +487,8 @@ public partial class GaussianSplatRenderer
         resourcesChanged |= EnsureSortRenderTexture(ref radixSort.keyValues0, resourceFolderPath, assetPrefix + "_KeyValues0", requiredWidth, requiredHeight, RenderTextureFormat.RGFloat, false, 1);
         resourcesChanged |= EnsureSortRenderTexture(ref radixSort.keyValues1, resourceFolderPath, assetPrefix + "_KeyValues1", requiredWidth, requiredHeight, RenderTextureFormat.RGFloat, false, 1);
         resourcesChanged |= EnsureSortRenderTexture(ref radixSort.prefixSums, resourceFolderPath, assetPrefix + "_PrefixSums", requiredWidth, requiredHeight, RenderTextureFormat.RFloat, true, 1);
-        resourcesChanged |= EnsureSortRenderTexture(ref splatRenderOrder, resourceFolderPath, assetPrefix + "_SplatRenderOrder", requiredWidth, requiredHeight, RenderTextureFormat.RFloat, false, 2);
+        resourcesChanged |= EnsureSortRenderTexture(ref splatRenderOrder, resourceFolderPath, assetPrefix + "_SplatRenderOrderScreen", requiredWidth, requiredHeight, RenderTextureFormat.RFloat, false, 1);
+        resourcesChanged |= EnsureSortRenderTexture(ref splatRenderOrderPhoto, resourceFolderPath, assetPrefix + "_SplatRenderOrderPhoto", requiredWidth, requiredHeight, RenderTextureFormat.RFloat, false, 1);
         if (resourcesChanged)
         {
             EditorUtility.SetDirty(radixSort);

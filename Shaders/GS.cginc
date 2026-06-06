@@ -1,6 +1,6 @@
 #define UNITY_SHADER_NO_UPGRADE 1 
 #ifdef GS_NO_GEOM
-#pragma target 4.5
+#pragma target 3.5
 #else
 #pragma target 5.0
 #pragma exclude_renderers gles
@@ -32,8 +32,10 @@ float _LightVolumeIntensity;
 #define GS_MAX_VERTEX_COUNT 4
 #endif
 
+#ifdef GS_USE_ELLIPSOID_HIT_DEPTH
 #define GS_RAY_DEPTH_ABS_LIMIT 1e6
 #define GS_RAY_DEPTH_SQ_LIMIT 1e12
+#endif
 
 struct appdata {
     float4 position : POSITION;
@@ -70,6 +72,7 @@ v2g vert(appdata v) {
 }
 #endif
 
+#ifdef GS_USE_ELLIPSOID_HIT_DEPTH
 float4x4 GSCreateClipToViewMatrix()
 {
     float4x4 flipZ = float4x4(1, 0, 0, 0,
@@ -160,6 +163,7 @@ bool GSTryGetRaySplatDepth(float3 splatPos, float3 splatScale, float4 splatRotat
     projectedDepth = hitClipPos.z / hitClipPos.w;
     return abs(projectedDepth) < SAFE_NDC_LIMIT;
 }
+#endif
 
 struct GSProjectedSplat
 {
@@ -277,7 +281,7 @@ void GSSetInvalidVertex(inout g2f o)
     o.gaussianExp = 0.0;
 }
 
-void GSFillProjectedSplatVertex(GSProjectedSplat projected, uint vtxID, float4x4 clipToView, inout g2f o)
+void GSFillProjectedSplatVertex(GSProjectedSplat projected, uint vtxID, inout g2f o)
 {
     o.quadPos = GSQuadPos(vtxID);
     o.color = projected.color;
@@ -285,9 +289,11 @@ void GSFillProjectedSplatVertex(GSProjectedSplat projected, uint vtxID, float4x4
 
     float2x2 rot = float2x2(projected.ell.axis.x, -projected.ell.axis.y, projected.ell.axis.y, projected.ell.axis.x);
     float2 ndc = projected.ell.center + mul(rot, o.quadPos * projected.ell.size);
-    float cornerDepth = projected.centerDepth;
-    GSTryGetRaySplatDepth(projected.mean, projected.support, projected.quat, ndc, clipToView, cornerDepth);
-    o.position = float4(ndc, cornerDepth, 1.0);
+    float depth = projected.centerDepth;
+#ifdef GS_USE_ELLIPSOID_HIT_DEPTH
+    GSTryGetRaySplatDepth(projected.mean, projected.support, projected.quat, ndc, GSCreateClipToViewMatrix(), depth);
+#endif
+    o.position = float4(ndc, depth, 1.0);
 }
 
 #ifdef GS_NO_GEOM
@@ -305,7 +311,7 @@ g2f vert(appdata v)
         return o;
     }
 
-    GSFillProjectedSplatVertex(projected, v.vertexID & 3u, GSCreateClipToViewMatrix(), o);
+    GSFillProjectedSplatVertex(projected, v.vertexID & 3u, o);
     return o;
 }
 #else
@@ -320,11 +326,9 @@ void geo(point v2g input[1], inout TriangleStream<g2f> triStream, uint instanceI
 
     GSProjectedSplat projected;
     if (!GSTryPrepareProjectedSplat(geoPrimID * 32u + instanceID, projected)) return;
-    float4x4 clipToView = GSCreateClipToViewMatrix();
-
     [unroll] for (uint vtxID = 0; vtxID < 4; vtxID ++)
     {
-        GSFillProjectedSplatVertex(projected, vtxID, clipToView, o);
+        GSFillProjectedSplatVertex(projected, vtxID, o);
         triStream.Append(o);
     }
 }

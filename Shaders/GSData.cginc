@@ -4,7 +4,8 @@ Texture2D _GS_Positions, _GS_Scales, _GS_Rotations, _GS_Colors, _GS_SH;
 Texture2D _GS_ColorsCamera;
 float4 _GS_SH_Min;
 float4 _GS_SH_Range;
-Texture2DArray<float> _GS_RenderOrder;
+Texture2D<float> _GS_RenderOrder;
+Texture2D<float> _GS_RenderOrderPhoto;
 Texture2DArray<float> _GS_RenderOrderPrecomputed;
 Texture2D<float> _GS_RenderOrderMirror;
 float4 _GS_Positions_TexelSize;
@@ -276,8 +277,16 @@ SplatData LoadSplatDataRenderOrder(uint id) {
             valid = false;
             //reordered_id = _GS_RenderOrderMirror[coord1];
         } else {
-            uint slice = _VRChatCameraMode > 0.5 ? 1u : 0u;
-            reordered_id = ASUINT_NO_DENORM(_GS_RenderOrder[uint3(coord1, slice)]);
+            float orderValue;
+            if (_VRChatCameraMode > 0.5)
+            {
+                orderValue = _GS_RenderOrderPhoto[coord1];
+            }
+            else
+            {
+                orderValue = _GS_RenderOrder[coord1];
+            }
+            reordered_id = (uint)round(max(orderValue, 0.0));
         }
     } else {
         reordered_id = pcg(reordered_id) % actualSplatCount; // randomize order for alpha blending to somewhat work

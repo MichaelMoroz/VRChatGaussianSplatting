@@ -1,4 +1,4 @@
-﻿using UdonSharp;
+using UdonSharp;
 using UnityEngine;
 using VRC.SDKBase;
 using VRC.Udon;
@@ -13,6 +13,7 @@ public class RadixSort : UdonSharpBehaviour
 {
     [SerializeField] public Material computeKeyValues;
     [SerializeField] public Material radixSort;
+    [SerializeField] public Material copySortedOrder;
 
     [SerializeField] public RenderTexture keyValues0;
     [SerializeField] public RenderTexture keyValues1;
@@ -262,18 +263,15 @@ public class RadixSort : UdonSharpBehaviour
                 return;
             }
 
-            copyMaterial.SetTexture("_MainTex", keyValues0);
+            copyMaterial.SetTexture("_KeyValues", keyValues0);
 
-            RenderTexture active = RenderTexture.active;
-            Graphics.SetRenderTarget(target, 0, CubemapFace.Unknown, slice);
-            GL.Clear(false, true, Color.clear);
-            DrawFullscreenQuad(copyMaterial);
-            RenderTexture.active = active;
+            Graphics.Blit(null, target, copyMaterial, 0);
             return;
         }
 #endif
 
-        VRCGraphics.Blit(keyValues0, target, 0, slice);
+        copySortedOrder.SetTexture("_KeyValues", keyValues0);
+        VRCGraphics.Blit(null, target, copySortedOrder, 0);
     }
 
     private void setStaticUniforms()

@@ -22,7 +22,8 @@ namespace GaussianSplatting
 [UdonBehaviourSyncMode(BehaviourSyncMode.None)]
 public partial class GaussianSplatCombiner : UdonSharpBehaviour
 {
-    const int COMBINED_SOURCE_BATCH_SIZE = 8;
+    const int COMBINED_SOURCE_BATCH_SIZE_DESKTOP = 8;
+    const int COMBINED_SOURCE_BATCH_SIZE_GLES = 1;
     const int MAX_COMBINED_SPLAT_COUNT = 1 << 24;
     const int DEFAULT_COMBINED_SPLATS_PER_PASS = 3 * 256 * 1024;
     const int DEFAULT_COMBINED_MAX_ALPHA_MASK_COUNT = 1;
@@ -172,6 +173,20 @@ public partial class GaussianSplatCombiner : UdonSharpBehaviour
         return index >= 0 && index < _sceneSplats.Length && _sceneSplats[index] != null && _sceneSplats[index].gameObject.activeInHierarchy;
     }
 
+    int GetCombinedSourceBatchSize()
+    {
+#if UNITY_EDITOR && !COMPILER_UDONSHARP
+        UnityEngine.Rendering.GraphicsDeviceType graphicsDevice = SystemInfo.graphicsDeviceType;
+        return graphicsDevice == UnityEngine.Rendering.GraphicsDeviceType.OpenGLES2 || graphicsDevice == UnityEngine.Rendering.GraphicsDeviceType.OpenGLES3
+            ? COMBINED_SOURCE_BATCH_SIZE_GLES
+            : COMBINED_SOURCE_BATCH_SIZE_DESKTOP;
+#elif UNITY_ANDROID
+        return COMBINED_SOURCE_BATCH_SIZE_GLES;
+#else
+        return COMBINED_SOURCE_BATCH_SIZE_DESKTOP;
+#endif
+    }
+
     void Blit(Texture source, RenderTexture target, bool useEditorOps)
     {
 #if UNITY_EDITOR && !COMPILER_UDONSHARP
@@ -196,7 +211,7 @@ public partial class GaussianSplatCombiner : UdonSharpBehaviour
         VRCGraphics.Blit(null, target, material, pass);
     }
 
-    void SetRenderOrderOnMaterials(Material[] materials, int actualCount, RenderTexture splatRenderOrder)
+    void SetRenderOrderOnMaterials(Material[] materials, int actualCount, RenderTexture splatRenderOrder, RenderTexture splatRenderOrderPhoto)
     {
         for (int i = 0; i < materials.Length; i++)
         {
@@ -206,6 +221,7 @@ public partial class GaussianSplatCombiner : UdonSharpBehaviour
                 continue;
             }
             if (material.HasProperty("_GS_RenderOrder")) material.SetTexture("_GS_RenderOrder", splatRenderOrder);
+            if (material.HasProperty("_GS_RenderOrderPhoto")) material.SetTexture("_GS_RenderOrderPhoto", splatRenderOrderPhoto);
             if (material.HasProperty("_ActualSplatCount")) material.SetInt("_ActualSplatCount", actualCount);
         }
     }
@@ -309,7 +325,8 @@ public partial class GaussianSplatCombiner : UdonSharpBehaviour
         Material ignoredMaterial;
         Texture ignoredPositions;
         int boundCount = 0;
-        for (int slot = 0; slot < COMBINED_SOURCE_BATCH_SIZE; slot++)
+        int batchSize = GetCombinedSourceBatchSize();
+        for (int slot = 0; slot < batchSize; slot++)
         {
             while (sourceCursor < _sceneSplats.Length && !IsSourceActive(sourceCursor))
             {
@@ -440,7 +457,7 @@ public partial class GaussianSplatCombiner : UdonSharpBehaviour
     /// renderer to bind sort keys against. Returns false (and disables the combined object) when the
     /// combined resources are not ready.
     /// </summary>
-    public bool BindRenderOrder(RenderTexture splatRenderOrder, out MeshRenderer sortedRenderer, out Material primaryMaterial, out Texture positions, out int count)
+    public bool BindRenderOrder(RenderTexture splatRenderOrder, RenderTexture splatRenderOrderPhoto, out MeshRenderer sortedRenderer, out Material primaryMaterial, out Texture positions, out int count)
     {
         sortedRenderer = null;
         primaryMaterial = null;
@@ -452,7 +469,7 @@ public partial class GaussianSplatCombiner : UdonSharpBehaviour
             return false;
         }
         Transform combinedRoot = combinedSortedRenderer.transform;
-        SetRenderOrderOnMaterials(GetRendererMaterialsForWrite(combinedSortedRenderer), _combinedActualSplatCount, splatRenderOrder);
+        SetRenderOrderOnMaterials(GetRendererMaterialsForWrite(combinedSortedRenderer), _combinedActualSplatCount, splatRenderOrder, splatRenderOrderPhoto);
         for (int i = 0; i < combinedRoot.childCount; i++)
         {
             if (!TryGetCombinedChunkBinding(combinedRoot.GetChild(i), out MeshRenderer chunkRenderer, out int offset))
@@ -468,7 +485,7 @@ public partial class GaussianSplatCombiner : UdonSharpBehaviour
             {
                 chunkRenderer.enabled = shouldRender;
             }
-            SetRenderOrderOnMaterials(GetRendererMaterialsForWrite(chunkRenderer), _combinedActualSplatCount, splatRenderOrder);
+            SetRenderOrderOnMaterials(GetRendererMaterialsForWrite(chunkRenderer), _combinedActualSplatCount, splatRenderOrder, splatRenderOrderPhoto);
             if (shouldRender && sortedRenderer == null)
             {
                 sortedRenderer = chunkRenderer;

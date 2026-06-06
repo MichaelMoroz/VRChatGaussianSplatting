@@ -12,15 +12,20 @@ Shader "Hidden/GaussianSplatting/CombineData"
         #include "GaussianTransform.cginc"
         #include "GaussianSplatShared.cginc"
 
-        #define GS_SOURCE_SLOT_LIST(APPLY) \
-            APPLY(0) \
-            APPLY(1) \
-            APPLY(2) \
-            APPLY(3) \
-            APPLY(4) \
-            APPLY(5) \
-            APPLY(6) \
-            APPLY(7)
+        #if defined(SHADER_API_GLES) || defined(SHADER_API_GLES3)
+            #define GS_SOURCE_SLOT_LIST(APPLY) \
+                APPLY(0)
+        #else
+            #define GS_SOURCE_SLOT_LIST(APPLY) \
+                APPLY(0) \
+                APPLY(1) \
+                APPLY(2) \
+                APPLY(3) \
+                APPLY(4) \
+                APPLY(5) \
+                APPLY(6) \
+                APPLY(7)
+        #endif
 
         #define GS_DECLARE_SOURCE_TEXTURES(slot) Texture2D _GS_SourcePositions##slot, _GS_SourceScales##slot, _GS_SourceRotations##slot, _GS_SourceColors##slot, _GS_SourceSH##slot;
         GS_SOURCE_SLOT_LIST(GS_DECLARE_SOURCE_TEXTURES)
@@ -172,7 +177,7 @@ Shader "Hidden/GaussianSplatting/CombineData"
         Pass
         {
             CGPROGRAM
-            #pragma target 5.0
+            #pragma target 3.5
             #pragma vertex vert_img
             #pragma fragment fragPositions
             ENDCG
@@ -181,7 +186,7 @@ Shader "Hidden/GaussianSplatting/CombineData"
         Pass
         {
             CGPROGRAM
-            #pragma target 5.0
+            #pragma target 3.5
             #pragma vertex vert_img
             #pragma fragment fragRotations
             ENDCG
@@ -190,7 +195,7 @@ Shader "Hidden/GaussianSplatting/CombineData"
         Pass
         {
             CGPROGRAM
-            #pragma target 5.0
+            #pragma target 3.5
             #pragma vertex vert_img
             #pragma fragment fragScales
             ENDCG
@@ -199,7 +204,7 @@ Shader "Hidden/GaussianSplatting/CombineData"
         Pass
         {
             CGPROGRAM
-            #pragma target 5.0
+            #pragma target 3.5
             #pragma vertex vert_img
             #pragma fragment fragColors
             ENDCG

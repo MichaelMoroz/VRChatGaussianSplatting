@@ -15,11 +15,11 @@ Shader "Hidden/GaussianSplatting/CopyRenderOrder"
 
             #include "UnityCG.cginc"
 
-            sampler2D _MainTex;
+            Texture2D<float2> _KeyValues;
 
             float frag(v2f_img input) : SV_Target
             {
-                return tex2D(_MainTex, input.uv).r;
+                return _KeyValues.Load(int3((int2)floor(input.pos.xy), 0)).r;
             }
             ENDCG
         }

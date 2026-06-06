@@ -10,7 +10,8 @@ Shader "VRChatGaussianSplatting/GaussianSplattingSimpleBackToFront"
         [HideInInspector] _GS_SH ("SH", 2D) = "" {}
         [HideInInspector] _GS_SH_Min ("SH Min", Vector) = (0, 0, 0, 0)
         [HideInInspector] _GS_SH_Range ("SH Range", Vector) = (1, 1, 1, 0)
-        [HideInInspector] _GS_RenderOrder ("Rendering Orders", 2DArray) = "" {}
+        [HideInInspector] _GS_RenderOrder ("Rendering Orders", 2D) = "" {}
+        [HideInInspector] _GS_RenderOrderPhoto ("Photo Rendering Orders", 2D) = "" {}
         [HideInInspector] _GS_RenderOrderMirror ("Rendering Order Mirror", 2D) = "" {}
         [HideInInspector] _MirrorCameraPos ("Mirror Camera Position", Vector) = (0, 0, 0, 0)
         [HideInInspector] _SplatCount ("Splat Count", Int) = 0
@@ -54,10 +55,12 @@ Shader "VRChatGaussianSplatting/GaussianSplattingSimpleBackToFront"
             Cull Off
             ZWrite Off
             CGPROGRAM
+            #define GS_USE_ELLIPSOID_HIT_DEPTH
             #define _BACK_TO_FRONT
             #define _FAKE_SRGB
-        	#include "GS.cginc"
+            #include "GS.cginc"
             ENDCG
         }
     }
+    CustomEditor "GaussianSplatting.Editor.GaussianSplatShaderGUI"
 }

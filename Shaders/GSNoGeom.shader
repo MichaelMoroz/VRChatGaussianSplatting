@@ -10,7 +10,8 @@ Shader "VRChatGaussianSplatting/GaussianSplattingNoGeom"
         [HideInInspector] _GS_SH ("SH", 2D) = "" {}
         [HideInInspector] _GS_SH_Min ("SH Min", Vector) = (0, 0, 0, 0)
         [HideInInspector] _GS_SH_Range ("SH Range", Vector) = (1, 1, 1, 0)
-        [HideInInspector] _GS_RenderOrder ("Rendering Orders", 2DArray) = "" {}
+        [HideInInspector] _GS_RenderOrder ("Rendering Orders", 2D) = "" {}
+        [HideInInspector] _GS_RenderOrderPhoto ("Photo Rendering Orders", 2D) = "" {}
         [HideInInspector] _GS_RenderOrderMirror ("Rendering Order Mirror", 2D) = "" {}
         [HideInInspector] _MirrorCameraPos ("Mirror Camera Position", Vector) = (0, 0, 0, 0)
         [HideInInspector] _SplatCount ("Splat Count", Int) = 0

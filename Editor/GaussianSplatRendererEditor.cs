@@ -14,6 +14,7 @@ namespace GaussianSplatting.Editor
         SerializedProperty _alwaysUpdate;
         SerializedProperty _sortPassesPerFrame;
         SerializedProperty _splatRenderOrder;
+        SerializedProperty _splatRenderOrderPhoto;
         SerializedProperty _renderingMode;
 
         SerializedProperty _overrideMaterialProperties;
@@ -41,6 +42,7 @@ namespace GaussianSplatting.Editor
             _alwaysUpdate = serializedObject.FindProperty("alwaysUpdate");
             _sortPassesPerFrame = serializedObject.FindProperty("sortPassesPerFrame");
             _splatRenderOrder = serializedObject.FindProperty("splatRenderOrder");
+            _splatRenderOrderPhoto = serializedObject.FindProperty("splatRenderOrderPhoto");
             _renderingMode = serializedObject.FindProperty("renderingMode");
 
             _overrideMaterialProperties = serializedObject.FindProperty("overrideMaterialProperties");
@@ -147,6 +149,7 @@ namespace GaussianSplatting.Editor
             EditorGUILayout.PropertyField(_alwaysUpdate, GSEditorText.C("Always Update", "常に更新"));
             EditorGUILayout.IntSlider(_sortPassesPerFrame, 1, RadixSort.TotalSortPasses, GSEditorText.C("Sort Passes Per Frame", "フレーム毎のソートパス数"));
             EditorGUILayout.PropertyField(_splatRenderOrder, GSEditorText.C("Splat Render Order", "スプラット描画順"));
+            EditorGUILayout.PropertyField(_splatRenderOrderPhoto, GSEditorText.C("Photo Splat Render Order", "写真スプラット描画順"));
         }
 
         void DrawMaterialSettings()
