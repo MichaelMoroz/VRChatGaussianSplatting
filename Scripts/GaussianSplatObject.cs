@@ -12,12 +12,19 @@ namespace GaussianSplatting
         [SerializeField] public GaussianSplatRenderer gaussianSplatRenderer;
         [SerializeField] public GameObject sortedObject;
         [SerializeField] public MeshRenderer sortedRenderer;
+        [SerializeField] public string splatName;
+        [TextArea(1, 2)] [SerializeField] public string description;
         [SerializeField] int maxShBand = -1;
 
 #if UNITY_EDITOR && !COMPILER_UDONSHARP
         void Reset()
         {
             EnsureSceneRenderer(false);
+        }
+
+        void OnValidate()
+        {
+            GaussianSplatRendererUI.RequestEditorRefresh();
         }
 
         void EnsureSceneRenderer(bool createIfMissing)
@@ -214,6 +221,16 @@ namespace GaussianSplatting
         public void SetMaxSHBand(int value)
         {
             maxShBand = Mathf.Clamp(value, 0, 3);
+        }
+
+        public string GetDisplayName()
+        {
+            return !string.IsNullOrEmpty(splatName) ? splatName : gameObject.name;
+        }
+
+        public string GetDescription()
+        {
+            return description;
         }
 
         public void ShowSorted()

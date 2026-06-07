@@ -35,8 +35,18 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
     const float CombinedPanelWidth = 560.0f;
     const float BackgroundPadding = 24.0f;
     const float SliderChangeThreshold = 0.0001f;
+    public const string DefaultSubtitleEnglish = "Github: https://github.com/MichaelMoroz/VRChatGaussianSplatting\nDeveloped by misha_m";
+    public const string DefaultSubtitleJapanese = "Github: https://github.com/MichaelMoroz/VRChatGaussianSplatting\n開発: misha_m";
+    public const float SubtitleFontSize = 10.0f;
+    public const float SubtitlePreferredHeight = 36.0f;
+    public const float CustomSubtitlePreferredHeight = 28.0f;
 
     public GaussianSplatRenderer gaussianSplatRenderer;
+    [Header("Custom Subtitle")]
+    [TextArea(1, 3)] public string customSubtitleEnglish;
+    [TextArea(1, 3)] public string customSubtitleJapanese;
+    [Header("UI References")]
+    public TextMeshProUGUI subtitleText, customSubtitleText;
     public TextMeshProUGUI currentSplatText, sortingSectionText, cameraQuantizationLabelText, cameraQuantizationText;
     public TextMeshProUGUI alwaysUpdateLabelText, materialSectionText, shBandLabelText, shBandText, vrcLightVolumesLabelText, antiAliasingLabelText, antiAliasingText;
     public TextMeshProUGUI lightVolumeIntensityLabelText, lightVolumeIntensityText, gaussianScaleLabelText, gaussianScaleText, alphaCutoffLabelText, alphaCutoffText;
@@ -153,10 +163,159 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
             return false;
         }
         GaussianSplatRenderer previousRenderer = gaussianSplatRenderer;
+        TextMeshProUGUI previousSubtitleText = subtitleText;
+        TextMeshProUGUI previousCustomSubtitleText = customSubtitleText;
         GaussianSplatObject[] previousCachedSceneSplatObjects = cachedSceneSplatObjects;
         FindRenderer();
+        if (subtitleText == null)
+        {
+            subtitleText = FindSubtitleText();
+        }
+        if (customSubtitleText == null)
+        {
+            customSubtitleText = FindCustomSubtitleText();
+            if (customSubtitleText == null)
+            {
+                customSubtitleText = CreateCustomSubtitleText();
+            }
+        }
+        bool subtitleLayoutChanged = ApplySubtitleLayoutDefaults();
+        bool splatButtonTextChanged = EnsureSplatButtonRichText();
         RefreshSceneSplatObjects();
-        return gaussianSplatRenderer != previousRenderer || !SplatObjectArraysMatch(previousCachedSceneSplatObjects, cachedSceneSplatObjects);
+        return gaussianSplatRenderer != previousRenderer || subtitleText != previousSubtitleText || customSubtitleText != previousCustomSubtitleText || subtitleLayoutChanged || splatButtonTextChanged || !SplatObjectArraysMatch(previousCachedSceneSplatObjects, cachedSceneSplatObjects);
+    }
+
+    bool ApplySubtitleLayoutDefaults()
+    {
+        TextMeshProUGUI subtitle = ResolveSubtitleText();
+        if (subtitle == null)
+        {
+            return false;
+        }
+
+        bool changed = false;
+        if (!Mathf.Approximately(subtitle.fontSize, SubtitleFontSize))
+        {
+            subtitle.fontSize = SubtitleFontSize;
+            changed = true;
+        }
+        if (subtitle.alignment != TextAlignmentOptions.TopLeft)
+        {
+            subtitle.alignment = TextAlignmentOptions.TopLeft;
+            changed = true;
+        }
+
+        LayoutElement layoutElement = subtitle.GetComponent<LayoutElement>();
+        if (layoutElement != null)
+        {
+            bool layoutChanged = false;
+            if (!Mathf.Approximately(layoutElement.minHeight, SubtitlePreferredHeight))
+            {
+                layoutElement.minHeight = SubtitlePreferredHeight;
+                layoutChanged = true;
+            }
+            if (!Mathf.Approximately(layoutElement.preferredHeight, SubtitlePreferredHeight))
+            {
+                layoutElement.preferredHeight = SubtitlePreferredHeight;
+                layoutChanged = true;
+            }
+            if (layoutChanged)
+            {
+                EditorUtility.SetDirty(layoutElement);
+                changed = true;
+            }
+        }
+
+        if (changed)
+        {
+            EditorUtility.SetDirty(subtitle);
+        }
+        TextMeshProUGUI customSubtitle = ResolveCustomSubtitleText();
+        if (customSubtitle != null)
+        {
+            bool customChanged = false;
+            if (!Mathf.Approximately(customSubtitle.fontSize, SubtitleFontSize))
+            {
+                customSubtitle.fontSize = SubtitleFontSize;
+                customChanged = true;
+            }
+            if (customSubtitle.alignment != TextAlignmentOptions.TopLeft)
+            {
+                customSubtitle.alignment = TextAlignmentOptions.TopLeft;
+                customChanged = true;
+            }
+            LayoutElement customLayoutElement = customSubtitle.GetComponent<LayoutElement>();
+            if (customLayoutElement != null && !Mathf.Approximately(customLayoutElement.preferredHeight, CustomSubtitlePreferredHeight))
+            {
+                customLayoutElement.minHeight = customLayoutElement.preferredHeight = CustomSubtitlePreferredHeight;
+                EditorUtility.SetDirty(customLayoutElement);
+                customChanged = true;
+            }
+            if (customChanged)
+            {
+                EditorUtility.SetDirty(customSubtitle);
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
+    bool EnsureSplatButtonRichText()
+    {
+        if (splatButtons == null)
+        {
+            return false;
+        }
+        bool changed = false;
+        for (int i = 0; i < splatButtons.Length; i++)
+        {
+            Button button = splatButtons[i];
+            TextMeshProUGUI label = button != null ? button.GetComponentInChildren<TextMeshProUGUI>() : null;
+            if (label != null && !label.richText)
+            {
+                label.richText = true;
+                EditorUtility.SetDirty(label);
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
+    TextMeshProUGUI CreateCustomSubtitleText()
+    {
+        Transform settingsColumn = transform.Find("Panel/Body Row/Settings Column");
+        if (settingsColumn == null)
+        {
+            return null;
+        }
+
+        TextMeshProUGUI subtitle = FindSubtitleText();
+        GameObject subtitleObject = new GameObject("Custom Subtitle", typeof(RectTransform), typeof(TextMeshProUGUI), typeof(LayoutElement));
+        Undo.RegisterCreatedObjectUndo(subtitleObject, "Create Custom Subtitle");
+        subtitleObject.transform.SetParent(settingsColumn, false);
+        if (subtitle != null)
+        {
+            subtitleObject.transform.SetSiblingIndex(subtitle.transform.GetSiblingIndex() + 1);
+        }
+
+        TextMeshProUGUI text = subtitleObject.GetComponent<TextMeshProUGUI>();
+        text.font = subtitle != null ? subtitle.font : text.font;
+        text.color = Color.white;
+        text.fontSize = SubtitleFontSize;
+        text.fontStyle = FontStyles.Bold;
+        text.fontWeight = FontWeight.Bold;
+        text.alignment = TextAlignmentOptions.TopLeft;
+        text.enableWordWrapping = true;
+        text.overflowMode = TextOverflowModes.Overflow;
+        text.raycastTarget = false;
+
+        LayoutElement layoutElement = subtitleObject.GetComponent<LayoutElement>();
+        layoutElement.minHeight = layoutElement.preferredHeight = CustomSubtitlePreferredHeight;
+        layoutElement.flexibleHeight = 0.0f;
+        subtitleObject.SetActive(false);
+        EditorUtility.SetDirty(text);
+        EditorUtility.SetDirty(layoutElement);
+        return text;
     }
 #endif
 
@@ -236,17 +395,28 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         }
     }
 
-    TextMeshProUGUI ResolveSubtitleText()
+    TextMeshProUGUI FindSubtitleText()
     {
         Transform subtitleTransform = transform.Find("Panel/Body Row/Settings Column/Subtitle");
         return subtitleTransform != null ? subtitleTransform.GetComponent<TextMeshProUGUI>() : null;
     }
 
+    TextMeshProUGUI FindCustomSubtitleText()
+    {
+        Transform subtitleTransform = transform.Find("Panel/Body Row/Settings Column/Custom Subtitle");
+        return subtitleTransform != null ? subtitleTransform.GetComponent<TextMeshProUGUI>() : null;
+    }
+
+    TextMeshProUGUI ResolveSubtitleText() { return subtitleText != null ? subtitleText : FindSubtitleText(); }
+    TextMeshProUGUI ResolveCustomSubtitleText() { return customSubtitleText != null ? customSubtitleText : FindCustomSubtitleText(); }
+
     void RefreshLocalizedLabels()
     {
-        SetText(ResolveSubtitleText(), Localize(
-            "Github: https://github.com/MichaelMoroz/VRChatGaussianSplatting\nDeveloped by misha_m",
-            "Github: https://github.com/MichaelMoroz/VRChatGaussianSplatting\n開発: misha_m"));
+        SetText(ResolveSubtitleText(), Localize(DefaultSubtitleEnglish, DefaultSubtitleJapanese));
+        TextMeshProUGUI customSubtitle = ResolveCustomSubtitleText();
+        string customSubtitleValue = Localize(customSubtitleEnglish, customSubtitleJapanese);
+        SetText(customSubtitle, customSubtitleValue);
+        SetActive(customSubtitle, !string.IsNullOrEmpty(customSubtitleValue));
         SetLocalizedText(sortingSectionText, "Sorting Settings", "ソート設定");
         SetLocalizedText(cameraQuantizationLabelText, "Camera move amount to trigger resort", "再ソートするカメラ移動量");
         SetLocalizedText(alwaysUpdateLabelText, "Sort every frame", "毎フレームソート");
@@ -297,6 +467,28 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         return true;
     }
 
+#if UNITY_EDITOR && !COMPILER_UDONSHARP
+    static string GetHierarchySortKey(Transform transform)
+    {
+        string key = string.Empty;
+        while (transform != null)
+        {
+            key = transform.GetSiblingIndex().ToString("D6") + "/" + key;
+            transform = transform.parent;
+        }
+        return key;
+    }
+
+    static int CompareSceneSplatObjects(GaussianSplatObject left, GaussianSplatObject right)
+    {
+        if (left == right) return 0;
+        if (left == null) return 1;
+        if (right == null) return -1;
+        int hierarchyCompare = string.CompareOrdinal(GetHierarchySortKey(left.transform), GetHierarchySortKey(right.transform));
+        return hierarchyCompare != 0 ? hierarchyCompare : left.GetInstanceID().CompareTo(right.GetInstanceID());
+    }
+#endif
+
     void RefreshSceneSplatObjects()
     {
 #if UNITY_EDITOR && !COMPILER_UDONSHARP
@@ -311,6 +503,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
             }
             sceneObjects.Add(currentObject);
         }
+        sceneObjects.Sort(CompareSceneSplatObjects);
         _sceneSplatObjects = sceneObjects.ToArray();
         if (!SplatObjectArraysMatch(cachedSceneSplatObjects, _sceneSplatObjects))
         {
@@ -422,6 +615,22 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         }
         TextMeshProUGUI label = button.GetComponentInChildren<TextMeshProUGUI>();
         SetText(label, labelText);
+    }
+
+    string SanitizeRichText(string value)
+    {
+        return string.IsNullOrEmpty(value) ? string.Empty : value.Replace("<", "[").Replace(">", "]");
+    }
+
+    string GetSplatButtonLabel(GaussianSplatObject splatObject, bool isRendered, string renderingSuffix)
+    {
+        string label = SanitizeRichText(splatObject.GetDisplayName());
+        if (isRendered)
+        {
+            label += renderingSuffix;
+        }
+        string splatDescription = splatObject.GetDescription();
+        return string.IsNullOrEmpty(splatDescription) ? label : label + "\n<size=10>" + SanitizeRichText(splatDescription) + "</size>";
     }
 
     void SetButton(Button button, bool enabled, string label, Color enabledColor, Color disabledColor)
@@ -560,11 +769,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
                 continue;
             }
             bool isRendered = currentSplatObject == splatObject.gameObject;
-            string label = splatObject.gameObject.name;
-            if (isRendered)
-            {
-                label += renderingSuffix;
-            }
+            string label = GetSplatButtonLabel(splatObject, isRendered, renderingSuffix);
             SetButton(slotButton, true, label, isRendered ? _selectedSplatColor : _defaultSplatColor, _scrollDisabledColor);
         }
         SetButton(splatScrollUpButton, _splatListStartIndex > 0, ScrollLabel(true), _scrollEnabledColor, _scrollDisabledColor);

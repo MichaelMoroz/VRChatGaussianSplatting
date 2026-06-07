@@ -46,12 +46,16 @@ namespace GaussianSplatting.Editor
         SerializedProperty _gaussianSplatRenderer;
         SerializedProperty _sortedObject;
         SerializedProperty _sortedRenderer;
+        SerializedProperty _splatName;
+        SerializedProperty _description;
 
         void OnEnable()
         {
             _gaussianSplatRenderer = serializedObject.FindProperty("gaussianSplatRenderer");
             _sortedObject = serializedObject.FindProperty("sortedObject");
             _sortedRenderer = serializedObject.FindProperty("sortedRenderer");
+            _splatName = serializedObject.FindProperty("splatName");
+            _description = serializedObject.FindProperty("description");
         }
 
         public override void OnInspectorGUI()
@@ -61,6 +65,7 @@ namespace GaussianSplatting.Editor
             serializedObject.Update();
 
             DrawSettingsGroup(GSEditorText.T("References", "参照"), DrawReferenceFields);
+            DrawSettingsGroup(GSEditorText.T("UI", "UI"), DrawUiFields);
 
             if (serializedObject.isEditingMultipleObjects)
             {
@@ -91,6 +96,12 @@ namespace GaussianSplatting.Editor
             EditorGUILayout.PropertyField(_gaussianSplatRenderer, GSEditorText.C("Gaussian Splat Renderer", "Gaussian Splat レンダラー"));
             EditorGUILayout.PropertyField(_sortedObject, GSEditorText.C("Sorted Object", "ソート済みオブジェクト"));
             EditorGUILayout.PropertyField(_sortedRenderer, GSEditorText.C("Sorted Renderer", "ソート済みレンダラー"));
+        }
+
+        void DrawUiFields()
+        {
+            EditorGUILayout.PropertyField(_splatName, GSEditorText.C("Name", "名前"));
+            EditorGUILayout.PropertyField(_description, GSEditorText.C("Description", "説明"));
         }
 
         static void DrawGeneralInfo(InspectorStats stats)

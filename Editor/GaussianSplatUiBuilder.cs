@@ -200,7 +200,11 @@ namespace GaussianSplatting.Editor
                 SetPreferredWidth(value.gameObject, 72.0f, 0.0f);
             }
             CreateTextElement("Title", settingsColumn.transform, "VRChatGaussianSplatting", 22, TextAnchor.MiddleLeft);
-            CreateTextElement("Subtitle", settingsColumn.transform, "Github: https://github.com/MichaelMoroz/VRChatGaussianSplatting\nDeveloped by misha_m", 12, TextAnchor.MiddleLeft);
+            generatedUi.subtitleText = CreateTextElement("Subtitle", settingsColumn.transform, GaussianSplatRendererUI.DefaultSubtitleEnglish, (int)GaussianSplatRendererUI.SubtitleFontSize, TextAnchor.UpperLeft);
+            SetPreferredHeight(generatedUi.subtitleText.gameObject, GaussianSplatRendererUI.SubtitlePreferredHeight, 0.0f);
+            generatedUi.customSubtitleText = CreateTextElement("Custom Subtitle", settingsColumn.transform, "", (int)GaussianSplatRendererUI.SubtitleFontSize, TextAnchor.UpperLeft);
+            SetPreferredHeight(generatedUi.customSubtitleText.gameObject, GaussianSplatRendererUI.CustomSubtitlePreferredHeight, 0.0f);
+            generatedUi.customSubtitleText.gameObject.SetActive(false);
             generatedUi.currentSplatText = CreateTextElement("Current Splat", settingsColumn.transform, "Rendering Mode: Single\nCurrent Splat: None\nRendered Splats: 0", 16, TextAnchor.MiddleLeft);
             generatedUi.materialSectionText = CreateTextElement("Settings Section", settingsColumn.transform, "Material Settings", 18, TextAnchor.MiddleLeft);
             CreateSliderSetting("SH Band", "SH Band (global)", 0.0f, 3.0f, true, "3", 0.0f, out generatedUi.shBandLabelText, out generatedUi.shBandSlider, out generatedUi.shBandText);
@@ -626,6 +630,7 @@ namespace GaussianSplatting.Editor
             text.fontWeight = FontWeight.Bold;
             text.alignment = ConvertTextAlignment(alignment);
             text.text = textValue;
+            text.richText = true;
             text.enableWordWrapping = true;
             text.overflowMode = TextOverflowModes.Overflow;
             text.raycastTarget = false;

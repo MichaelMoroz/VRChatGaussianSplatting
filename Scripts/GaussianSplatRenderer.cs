@@ -472,7 +472,7 @@ public partial class GaussianSplatRenderer : UdonSharpBehaviour
             return combined != null ? combined.GetCombinedObjectName() : "Combined";
         }
         GaussianSplatObject splat = EnsureCurrentSourceSelected() ? GetCurrentSplat() : null;
-        return splat != null ? splat.name : "None";
+        return splat != null ? splat.GetDisplayName() : "None";
     }
 
     public GameObject GetCurrentSplatObject()

@@ -88,7 +88,28 @@ public partial class GaussianSplatRenderer
                 filteredObjects.Add(sceneObjects[i]);
             }
         }
+        filteredObjects.Sort(CompareSceneObjects);
         return filteredObjects.ToArray();
+    }
+
+    static string GetHierarchySortKey(Transform transform)
+    {
+        string key = string.Empty;
+        while (transform != null)
+        {
+            key = transform.GetSiblingIndex().ToString("D6") + "/" + key;
+            transform = transform.parent;
+        }
+        return key;
+    }
+
+    static int CompareSceneObjects(Component left, Component right)
+    {
+        if (left == right) return 0;
+        if (left == null) return 1;
+        if (right == null) return -1;
+        int hierarchyCompare = string.CompareOrdinal(GetHierarchySortKey(left.transform), GetHierarchySortKey(right.transform));
+        return hierarchyCompare != 0 ? hierarchyCompare : left.GetInstanceID().CompareTo(right.GetInstanceID());
     }
 
     static void QueueEditorRefresh()
