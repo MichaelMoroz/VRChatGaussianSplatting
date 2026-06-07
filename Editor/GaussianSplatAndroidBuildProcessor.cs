@@ -23,8 +23,7 @@ namespace GaussianSplatting.Editor
 
         public void OnProcessScene(Scene scene, BuildReport report)
         {
-            BuildTarget buildTarget = report != null ? report.summary.platform : EditorUserBuildSettings.activeBuildTarget;
-            if (buildTarget != BuildTarget.Android)
+            if (!BuildPipeline.isBuildingPlayer || report == null || report.summary.platform != BuildTarget.Android)
             {
                 return;
             }
@@ -39,6 +38,7 @@ namespace GaussianSplatting.Editor
             {
                 GaussianSplatRenderer renderer = GaussianSplatRenderer.EnsureSceneRendererExists(scene);
                 ApplyAndroidLowQuality(scene);
+                DisableAndroidCameraHdr(scene);
             }
 
             int convertedCount = 0;
@@ -72,6 +72,19 @@ namespace GaussianSplatting.Editor
                     GaussianSplatRenderer renderer = renderers[rendererIndex];
                     renderer.SetQualityLow();
                     UdonSharpEditorUtility.CopyProxyToUdon(renderer);
+                }
+            }
+        }
+
+        static void DisableAndroidCameraHdr(Scene scene)
+        {
+            GameObject[] roots = scene.GetRootGameObjects();
+            for (int i = 0; i < roots.Length; i++)
+            {
+                Camera[] cameras = roots[i].GetComponentsInChildren<Camera>(true);
+                for (int cameraIndex = 0; cameraIndex < cameras.Length; cameraIndex++)
+                {
+                    cameras[cameraIndex].allowHDR = false;
                 }
             }
         }
