@@ -13,7 +13,7 @@ struct appdata
 struct v2f
 {
     float4 pos : SV_POSITION;
-    float2 uv : TEXCOORD0;
+    float4 uv : TEXCOORD0;
     UNITY_VERTEX_OUTPUT_STEREO
 };
 
@@ -29,6 +29,12 @@ v2f vert (appdata v) {
     } else {
         o.pos = float4(-1, 3, 1, 1);
     } 
-    o.uv = ComputeScreenPos(o.pos).xy;
+    o.uv = ComputeGrabScreenPos(o.pos);
     return o;
 }
+
+#if (defined(UNITY_STEREO_INSTANCING_ENABLED) || defined(UNITY_STEREO_MULTIVIEW_ENABLED)) && !SHADER_TARGET_SURFACE_ANALYSIS
+    #define GS_SAMPLE_GRABPASS_TEXTURE(tex, t) UNITY_SAMPLE_SCREENSPACE_TEXTURE(tex, (t).xy / (t).w)
+#else
+    #define GS_SAMPLE_GRABPASS_TEXTURE(tex, t) tex2Dproj(tex, UNITY_PROJ_COORD(t))
+#endif

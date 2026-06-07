@@ -19,7 +19,7 @@ Shader "VRChatGaussianSplatting/ToSRGB"
             UNITY_DECLARE_SCREENSPACE_TEXTURE(_LinearBackground); 
             float4 frag(v2f i) : SV_Target {
                 UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(i);
-                fixed4 col = UNITY_SAMPLE_SCREENSPACE_TEXTURE(_LinearBackground, i.uv.xy); 
+                fixed4 col = GS_SAMPLE_GRABPASS_TEXTURE(_LinearBackground, i.uv); 
                 return fixed4(LinearToGammaSpace(col.rgb), 0.0);
             }
             ENDCG
