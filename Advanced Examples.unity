@@ -3062,6 +3062,8 @@ MonoBehaviour:
   alwaysUpdate: 0
   sortPassesPerFrame: 2
   splatRenderOrder: {fileID: 8400000, guid: 77aeee4051b2e164cac02337caf5d341, type: 2}
+  splatRenderOrderPhoto: {fileID: 8400000, guid: 7be33d2193dbab140ac9884e26cd697e,
+    type: 2}
   overrideMaterialProperties: 1
   requestedSHBand: 3
   gaussianScale: 1
@@ -3173,6 +3175,7 @@ MonoBehaviour:
   _udonSharpBackingUdonBehaviour: {fileID: 258407250}
   computeKeyValues: {fileID: 2100000, guid: 0f320cd4349a6fd468d11aefebddabd2, type: 2}
   radixSort: {fileID: 2100000, guid: f7cf9fca282d3d240907704845e3678e, type: 2}
+  copySortedOrder: {fileID: 2100000, guid: a6d1ff407ca1ce7469ccaf488f17cb16, type: 2}
   keyValues0: {fileID: 8400000, guid: 406997458fbb3f449ace853783726687, type: 2}
   keyValues1: {fileID: 8400000, guid: 2685775a89a7faf43b069b0cab1a9a8a, type: 2}
   prefixSums: {fileID: 8400000, guid: a3fbf84a4ae91b349a01246372e6b33e, type: 2}

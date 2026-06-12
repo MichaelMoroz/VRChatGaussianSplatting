@@ -18,19 +18,18 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
     const int LanguageEnglish = 0;
     const int LanguageJapanese = 1;
     const float MinAlphaCutoff = 0.005f;
-    const float MinPositiveLodCull = 0.0001f;
+    const float MinPositiveLodSplatCap = 10000.0f;
     const int SliderShBand = 0;
     const int SliderAntiAliasing = 1;
     const int SliderLightVolumeIntensity = 2;
     const int SliderAlphaCutoff = 3;
     const int SliderAlphaCull = 4;
-    const int SliderLODCull = 5;
+    const int SliderLODSplatCap = 5;
     const float DefaultAlphaCutoff = 0.04f;
     const float MaxAlphaCutoff = 0.3f;
     const float DefaultAlphaCull = 0.04f;
     const float MaxAlphaCull = 0.3f;
-    const float DefaultLODCull = 0.0f;
-    const float MaxLODCull = 0.1f;
+    const int DefaultLODSplatCap = 3000000;
     const float DefaultPanelWidth = 1120.0f;
     const float CombinedPanelWidth = 560.0f;
     const float BackgroundPadding = 24.0f;
@@ -80,7 +79,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
     float _lastLightVolumeIntensitySliderValue;
     float _lastAlphaCutoffSliderValue;
     float _lastAlphaCullSliderValue;
-    float _lastLODCullSliderValue;
+    float _lastLODSplatCapSliderValue;
     float _defaultCanvasWidth;
     float _defaultPanelWidth;
     GaussianSplatObject[] _sceneSplatObjects;
@@ -179,10 +178,29 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
                 customSubtitleText = CreateCustomSubtitleText();
             }
         }
+        bool backgroundMaterialChanged = EnsureBackgroundMaterial();
         bool subtitleLayoutChanged = ApplySubtitleLayoutDefaults();
         bool splatButtonTextChanged = EnsureSplatButtonRichText();
         RefreshSceneSplatObjects();
-        return gaussianSplatRenderer != previousRenderer || subtitleText != previousSubtitleText || customSubtitleText != previousCustomSubtitleText || subtitleLayoutChanged || splatButtonTextChanged || !SplatObjectArraysMatch(previousCachedSceneSplatObjects, cachedSceneSplatObjects);
+        return gaussianSplatRenderer != previousRenderer || subtitleText != previousSubtitleText || customSubtitleText != previousCustomSubtitleText || backgroundMaterialChanged || subtitleLayoutChanged || splatButtonTextChanged || !SplatObjectArraysMatch(previousCachedSceneSplatObjects, cachedSceneSplatObjects);
+    }
+
+    bool EnsureBackgroundMaterial()
+    {
+        Transform background = transform.Find("Background");
+        MeshRenderer backgroundRenderer = background != null ? background.GetComponent<MeshRenderer>() : null;
+        if (backgroundRenderer == null || backgroundRenderer.sharedMaterial != null)
+        {
+            return false;
+        }
+        Material backgroundMaterial = AssetDatabase.LoadAssetAtPath<Material>("Assets/VRChatGaussianSplatting/Resources/Materials/GaussianSplatUIBackground.mat");
+        if (backgroundMaterial == null)
+        {
+            return false;
+        }
+        backgroundRenderer.sharedMaterial = backgroundMaterial;
+        EditorUtility.SetDirty(backgroundRenderer);
+        return true;
     }
 
     bool ApplySubtitleLayoutDefaults()
@@ -334,6 +352,9 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
     string ScrollLabel(bool up) { return Localize(up ? "Up" : "Down", up ? "上へ" : "下へ"); }
     string CurrentSplatNoneLabel() { return Localize("Current Splat: None", "現在のスプラット: なし"); }
     string RenderedSplatCountLabel(int count) { return Localize("Rendered Splats: ", "描画スプラット数: ") + count; }
+    bool CanChangeGlobalVariables() { return gaussianSplatRenderer == null || gaussianSplatRenderer.CanLocalPlayerModifyGlobalState(); }
+    bool SliderCanWriteBack(int sliderKind, bool allowWriteBack) { return allowWriteBack && (sliderKind != SliderShBand || CanChangeGlobalVariables()); }
+    bool ShouldShowLODControls() { return gaussianSplatRenderer != null && gaussianSplatRenderer.HasActiveLODObjects(); }
 
     void SetText(TextMeshProUGUI text, string value) { if (text != null && text.text != value) text.text = value; }
     void SetLocalizedText(TextMeshProUGUI text, string english, string japanese) { SetText(text, Localize(english, japanese)); }
@@ -375,12 +396,17 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         return FromLogSliderValue(sliderValue, minPositiveValue, maxValue);
     }
 
+    float GetLodSplatCapSliderMax()
+    {
+        return Mathf.Max(MinPositiveLodSplatCap, gaussianSplatRenderer != null ? gaussianSplatRenderer.GetCombinedLodSplatBudgetSliderMax() : DefaultLODSplatCap * 2);
+    }
+
     float GetSliderDisplayValue(int sliderKind, float actualValue)
     {
         switch (sliderKind)
         {
             case SliderAlphaCutoff: return ToLogSliderValue(actualValue, MinAlphaCutoff, MaxAlphaCutoff);
-            case SliderLODCull: return ToZeroLogSliderValue(actualValue, MinPositiveLodCull, MaxLODCull);
+            case SliderLODSplatCap: return ToZeroLogSliderValue(actualValue, MinPositiveLodSplatCap, GetLodSplatCapSliderMax());
             default: return actualValue;
         }
     }
@@ -390,7 +416,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         switch (sliderKind)
         {
             case SliderAlphaCutoff: return FromLogSliderValue(sliderValue, MinAlphaCutoff, MaxAlphaCutoff);
-            case SliderLODCull: return FromZeroLogSliderValue(sliderValue, MinPositiveLodCull, MaxLODCull);
+            case SliderLODSplatCap: return FromZeroLogSliderValue(sliderValue, MinPositiveLodSplatCap, GetLodSplatCapSliderMax());
             default: return sliderValue;
         }
     }
@@ -428,7 +454,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         SetLocalizedText(gaussianScaleLabelText, "Gaussian Scale (global)", "ガウススケール (共有)");
         SetLocalizedText(alphaCutoffLabelText, "Alpha Cutoff\n(lower = better quality)", "アルファカットオフ\n(低いほど高品質)");
         SetLocalizedText(alphaCullLabelText, "Alpha Cull\n(higher = fewer splats)", "アルファカリング\n(高いほどスプラット減少)");
-        SetLocalizedText(lodCullLabelText, "LOD Cull\n(higher = fewer splats)", "距離カリング\n(高いほどスプラット減少)");
+        SetLocalizedText(lodCullLabelText, "LOD Splat Cap", "LOD スプラット上限");
         SetLocalizedText(qualitySectionText, "Quality", "品質");
         SetLocalizedText(languageSectionText, "Language", "言語");
         SetLocalizedText(splatSectionText, "Splat Object (global)", "スプラットオブジェクト (共有)");
@@ -577,6 +603,10 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
 
     void SelectSplatObject(GaussianSplatObject selectedSplatObject)
     {
+        if (!CanChangeGlobalVariables())
+        {
+            return;
+        }
         RefreshSceneSplatObjects();
         int selectedIndex = FindSceneSplatObjectIndex(selectedSplatObject);
         if (selectedIndex < 0)
@@ -770,7 +800,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
             }
             bool isRendered = currentSplatObject == splatObject.gameObject;
             string label = GetSplatButtonLabel(splatObject, isRendered, renderingSuffix);
-            SetButton(slotButton, true, label, isRendered ? _selectedSplatColor : _defaultSplatColor, _scrollDisabledColor);
+            SetButton(slotButton, CanChangeGlobalVariables(), label, isRendered ? _selectedSplatColor : _defaultSplatColor, _scrollDisabledColor);
         }
         SetButton(splatScrollUpButton, _splatListStartIndex > 0, ScrollLabel(true), _scrollEnabledColor, _scrollDisabledColor);
         SetButton(splatScrollDownButton, _splatListStartIndex < maxStartIndex, ScrollLabel(false), _scrollEnabledColor, _scrollDisabledColor);
@@ -797,14 +827,20 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         if (vrcLightVolumesButton != null)
         {
             bool enabled = gaussianSplatRenderer.GetUseVrcLightVolumes();
+            SetInteractable(vrcLightVolumesButton, CanChangeGlobalVariables());
             ApplyButtonVisual(vrcLightVolumesButton, ToggleLabel(enabled), enabled ? _toggleEnabledColor : _toggleDisabledColor);
         }
-        SyncSlider(shBandSlider, shBandText, SliderShBand, allowWriteBack);
+        SyncSlider(shBandSlider, shBandText, SliderShBand, SliderCanWriteBack(SliderShBand, allowWriteBack));
         SyncSlider(antiAliasingSlider, antiAliasingText, SliderAntiAliasing, allowWriteBack);
         SyncSlider(lightVolumeIntensitySlider, lightVolumeIntensityText, SliderLightVolumeIntensity, allowWriteBack);
         SyncSlider(alphaCutoffSlider, alphaCutoffText, SliderAlphaCutoff, allowWriteBack);
         SyncSlider(alphaCullSlider, alphaCullText, SliderAlphaCull, allowWriteBack);
-        SyncSlider(lodCullSlider, lodCullText, SliderLODCull, allowWriteBack);
+        bool showLODControls = ShouldShowLODControls();
+        SetParentActive(lodCullLabelText, showLODControls);
+        if (showLODControls)
+        {
+            SyncSlider(lodCullSlider, lodCullText, SliderLODSplatCap, allowWriteBack);
+        }
         RefreshQualityButtons();
     }
 
@@ -836,7 +872,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
             case SliderAntiAliasing: return gaussianSplatRenderer.GetAntiAliasing();
             case SliderLightVolumeIntensity: return gaussianSplatRenderer.GetLightVolumeIntensity();
             case SliderAlphaCull: return gaussianSplatRenderer.GetAlphaCull();
-            case SliderLODCull: return gaussianSplatRenderer.GetLODCull();
+            case SliderLODSplatCap: return gaussianSplatRenderer.GetEffectiveCombinedLodSplatBudget();
             default: return gaussianSplatRenderer.alphaCutoff;
         }
     }
@@ -849,7 +885,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
             case SliderAntiAliasing: return _lastAntiAliasingSliderValue;
             case SliderLightVolumeIntensity: return _lastLightVolumeIntensitySliderValue;
             case SliderAlphaCull: return _lastAlphaCullSliderValue;
-            case SliderLODCull: return _lastLODCullSliderValue;
+            case SliderLODSplatCap: return _lastLODSplatCapSliderValue;
             default: return _lastAlphaCutoffSliderValue;
         }
     }
@@ -870,8 +906,8 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
             case SliderAlphaCull:
                 _lastAlphaCullSliderValue = value;
                 return;
-            case SliderLODCull:
-                _lastLODCullSliderValue = value;
+            case SliderLODSplatCap:
+                _lastLODSplatCapSliderValue = value;
                 return;
             default:
                 _lastAlphaCutoffSliderValue = value;
@@ -895,8 +931,8 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
             case SliderAlphaCull:
                 gaussianSplatRenderer.SetAlphaCull(value);
                 return;
-            case SliderLODCull:
-                gaussianSplatRenderer.SetLODCull(value);
+            case SliderLODSplatCap:
+                gaussianSplatRenderer.SetEffectiveCombinedLodSplatBudget(Mathf.RoundToInt(value));
                 return;
             default:
                 gaussianSplatRenderer.SetAlphaCutoff(value);
@@ -944,7 +980,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
                 slider.maxValue = MaxAlphaCull;
             }
         }
-        else if (sliderKind == SliderLODCull)
+        else if (sliderKind == SliderLODSplatCap)
         {
             if (!Mathf.Approximately(slider.minValue, 0.0f))
             {
@@ -974,8 +1010,22 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         }
         if (valueText != null)
         {
-            SetText(valueText, sliderKind == SliderShBand ? Mathf.RoundToInt(currentValue).ToString() : FormatFloat(currentValue));
+            SetText(valueText, SliderValueText(sliderKind, currentValue));
         }
+    }
+
+    string SliderValueText(int sliderKind, float currentValue)
+    {
+        if (sliderKind == SliderShBand)
+        {
+            return Mathf.RoundToInt(currentValue).ToString();
+        }
+        if (sliderKind == SliderLODSplatCap)
+        {
+            int cap = Mathf.RoundToInt(currentValue);
+            return cap <= 0 ? Localize("No cap", "上限なし") : cap.ToString();
+        }
+        return FormatFloat(currentValue);
     }
 
     void SelectSplatSlot(int slotIndex)
@@ -1008,6 +1058,10 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
     void StepGaussianScale(float delta)
     {
         if (gaussianSplatRenderer == null)
+        {
+            return;
+        }
+        if (!CanChangeGlobalVariables())
         {
             return;
         }
@@ -1066,8 +1120,8 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
             SetText(alphaCutoffText, FormatFloat(DefaultAlphaCutoff));
             SetSliderWithoutNotify(alphaCullSlider, DefaultAlphaCull);
             SetText(alphaCullText, FormatFloat(DefaultAlphaCull));
-            SetSliderWithoutNotify(lodCullSlider, GetSliderDisplayValue(SliderLODCull, DefaultLODCull));
-            SetText(lodCullText, FormatFloat(DefaultLODCull));
+            SetSliderWithoutNotify(lodCullSlider, GetSliderDisplayValue(SliderLODSplatCap, DefaultLODSplatCap));
+            SetText(lodCullText, DefaultLODSplatCap.ToString());
             RefreshSplatButtons();
             return;
         }
@@ -1083,7 +1137,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         SetText(gaussianScaleText, FormatFloat(gaussianSplatRenderer.gaussianScale));
         SetText(alphaCutoffText, FormatFloat(gaussianSplatRenderer.alphaCutoff));
         SetText(alphaCullText, FormatFloat(gaussianSplatRenderer.alphaCull));
-        SetText(lodCullText, FormatFloat(gaussianSplatRenderer.lodCull));
+        SetText(lodCullText, SliderValueText(SliderLODSplatCap, gaussianSplatRenderer.GetEffectiveCombinedLodSplatBudget()));
         RefreshMaterialControls();
         RefreshSplatButtons();
         _sliderValuesInitialized = true;
@@ -1093,7 +1147,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
     public void DecreaseCameraQuantization() { StepCameraQuantization(-cameraQuantizationStep); }
 
     public void ToggleAlwaysUpdate() { if (gaussianSplatRenderer == null) return; gaussianSplatRenderer.ToggleAlwaysUpdate(); RefreshUI(); }
-    public void ToggleVrcLightVolumes() { if (gaussianSplatRenderer == null) return; gaussianSplatRenderer.ToggleVrcLightVolumes(); RefreshUI(); }
+    public void ToggleVrcLightVolumes() { if (gaussianSplatRenderer == null || !CanChangeGlobalVariables()) return; gaussianSplatRenderer.ToggleVrcLightVolumes(); RefreshUI(); }
 
     public void IncreaseGaussianScale() { StepGaussianScale(gaussianScaleStep); }
     public void DecreaseGaussianScale() { StepGaussianScale(-gaussianScaleStep); }

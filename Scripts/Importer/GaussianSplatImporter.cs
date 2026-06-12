@@ -5,6 +5,7 @@ using Unity.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using UnityEditor;
@@ -88,6 +89,7 @@ namespace GaussianSplatting
             public bool applyHorizonAlignment;
             public Quaternion horizonRotation;
             public Vector3 horizonPivot;
+            public bool lodUsePackedPositions;
         }
 
         static uint Morton3D(float nx, float ny, float nz)
@@ -486,7 +488,6 @@ namespace GaussianSplatting
             splatObject.sortedObject = null;
             splatObject.sortedRenderer = meshRenderer;
             splatObject.SetMaxSHBand(Mathf.Clamp(maxSHBand, 0, 3));
-            UdonSharpEditorUtility.CopyProxyToUdon(splatObject);
         }
 
         public static GameObject CreatePrefab(List<Material> materials, Mesh mesh, string assetPath, string name, int maxSHBand = -1, bool addGaussianSplatObject = true)
@@ -494,18 +495,7 @@ namespace GaussianSplatting
             GameObject existingPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(assetPath);
             if (existingPrefab != null)
             {
-                GameObject prefabContents = PrefabUtility.LoadPrefabContents(assetPath);
-                try
-                {
-                    ConfigurePrefabRoot(prefabContents, materials, mesh, name, maxSHBand, addGaussianSplatObject);
-                    PrefabUtility.SaveAsPrefabAsset(prefabContents, assetPath);
-                }
-                finally
-                {
-                    PrefabUtility.UnloadPrefabContents(prefabContents);
-                }
-
-                return AssetDatabase.LoadAssetAtPath<GameObject>(assetPath);
+                return existingPrefab;
             }
 
             var go = new GameObject(name);
@@ -1166,7 +1156,8 @@ namespace GaussianSplatting.Editor.Importers
         internal const bool DefaultCompressColorAlphaToBC7 = false;
         internal const bool DefaultCompressSHToBC7 = true;
         internal const int DefaultStartRenderQueue = 4050;
-        const int MaxPreviewSplats = 8192;
+        internal const int DefaultLODChunkSize = 1024;
+        const int MaxPreviewSplats = 32768;
         const float PreviewSplatPixelRadius = 5.0f;
 
         class ImportEntry
@@ -1183,6 +1174,9 @@ namespace GaussianSplatting.Editor.Importers
             public bool applyWallAlignment;
             public Quaternion wallRotation = Quaternion.identity;
             public List<Vector3> wallPoints = new List<Vector3>();
+            public bool importAsLOD;
+            public int lodChunkSize = DefaultLODChunkSize;
+            public bool lodUsePackedPositions = true;
             public bool overrideSettings;
             public bool computeBoundingBox = DefaultComputeBoundingBox;
             public bool multiPassRendering = DefaultMultiPassRendering;
@@ -1205,6 +1199,15 @@ namespace GaussianSplatting.Editor.Importers
             public Bounds bounds;
             public int splatCount;
             public string error;
+        }
+
+        sealed class PreviewLoadProgress
+        {
+            public int processed;
+            public int total;
+            public string stage = string.Empty;
+
+            public float Normalized => total > 0 ? Mathf.Clamp01(processed / (float)total) : 0.0f;
         }
 
         class GaussianSplatImportPreviewStage : PreviewSceneStage
@@ -1391,6 +1394,7 @@ namespace GaussianSplatting.Editor.Importers
         Vector2 scrollPosition = Vector2.zero;
         CancellationTokenSource _previewCancellation;
         Task<PreviewData> _previewTask;
+        PreviewLoadProgress _previewProgress;
         string _previewPath;
         PreviewData _previewData;
         Mesh _previewMesh;
@@ -1513,15 +1517,22 @@ namespace GaussianSplatting.Editor.Importers
             return rotation * (pos - entry.horizonPivot);
         }
 
-        static PreviewData LoadPreviewData(string path, CancellationToken token)
+        static PreviewData LoadPreviewData(string path, CancellationToken token, PreviewLoadProgress progress)
         {
             PreviewData preview = new PreviewData { path = path };
             try
             {
+                if (path.EndsWith(".ply", StringComparison.OrdinalIgnoreCase))
+                {
+                    return LoadPlyPreviewDataStreaming(path, token, progress);
+                }
+
+                SetPreviewProgress(progress, "Reading splats", 0, 1);
                 GaussianFileReader.ReadFile(path, 0, out NativeArray<ImportSplatData> splats, out NativeArray<Vector3> shCoeffs);
                 try
                 {
                     token.ThrowIfCancellationRequested();
+                    SetPreviewProgress(progress, "Building preview", 0, splats.Length);
                     preview.splatCount = splats.Length;
                     int previewCount = Mathf.Min(MaxPreviewSplats, splats.Length);
                     preview.positions = new Vector3[previewCount];
@@ -1541,6 +1552,7 @@ namespace GaussianSplatting.Editor.Importers
                             bounds.Encapsulate(pos);
                         }
                     }
+                    SetPreviewProgress(progress, "Sampling preview", 0, previewCount);
 
                     int step = Mathf.Max(1, splats.Length / Mathf.Max(1, previewCount));
                     for (int i = 0; i < previewCount; i++)
@@ -1549,7 +1561,12 @@ namespace GaussianSplatting.Editor.Importers
                         ImportSplatData splat = splats[Mathf.Min(splats.Length - 1, i * step)];
                         preview.positions[i] = splat.pos;
                         preview.colors[i] = new Color(splat.dc0.x, splat.dc0.y, splat.dc0.z, Mathf.Clamp01(splat.opacity));
+                        if ((i & 255) == 0)
+                        {
+                            SetPreviewProgress(progress, "Sampling preview", i, previewCount);
+                        }
                     }
+                    SetPreviewProgress(progress, "Sampling preview", previewCount, previewCount);
                     preview.bounds = hasBounds ? bounds : new Bounds(Vector3.zero, Vector3.one);
                 }
                 finally
@@ -1565,6 +1582,239 @@ namespace GaussianSplatting.Editor.Importers
             return preview;
         }
 
+        static PreviewData LoadPlyPreviewDataStreaming(string path, CancellationToken token, PreviewLoadProgress progress)
+        {
+            PreviewData preview = new PreviewData { path = path };
+            try
+            {
+                SetPreviewProgress(progress, "Reading PLY header", 0, 1);
+                using FileStream fs = OpenPreviewPlyDataStream(path, out int splatCount, out int stride, out List<(string, PLYFileReader.ElementType)> attributes);
+                if (splatCount <= 0 || stride <= 0)
+                {
+                    throw new IOException($"PLY preview header read failed for '{path}': vertex count {splatCount:N0}, stride {stride}.");
+                }
+                Dictionary<string, int> offsets = BuildPreviewFloatAttributeOffsets(attributes);
+                string[] required = { "x", "y", "z", "f_dc_0", "f_dc_1", "f_dc_2", "opacity" };
+                List<string> missing = new List<string>();
+                for (int i = 0; i < required.Length; i++)
+                {
+                    if (!offsets.ContainsKey(required[i]))
+                    {
+                        missing.Add(required[i]);
+                    }
+                }
+                if (missing.Count > 0)
+                {
+                    throw new IOException($"PLY file is probably not a Gaussian Splat file? Missing properties: {string.Join(",", missing)}");
+                }
+
+                preview.splatCount = splatCount;
+                int previewCount = Mathf.Min(MaxPreviewSplats, splatCount);
+                preview.positions = new Vector3[previewCount];
+                preview.colors = new Color[previewCount];
+                Bounds bounds = new Bounds();
+                bool hasBounds = false;
+                byte[] rowBuffer = new byte[stride];
+                long dataStart = fs.Position;
+                SetPreviewProgress(progress, "Sampling preview", 0, previewCount);
+
+                for (int sampleIndex = 0; sampleIndex < previewCount; sampleIndex++)
+                {
+                    token.ThrowIfCancellationRequested();
+                    long sourceIndex = previewCount > 1
+                        ? (long)Math.Round(sampleIndex * (double)(splatCount - 1) / (previewCount - 1))
+                        : 0L;
+                    fs.Seek(dataStart + sourceIndex * stride, SeekOrigin.Begin);
+                    ReadPreviewExact(fs, rowBuffer, stride, path);
+
+                    Vector3 pos = new Vector3(
+                        ReadPreviewFloat(rowBuffer, offsets["x"]),
+                        ReadPreviewFloat(rowBuffer, offsets["y"]),
+                        ReadPreviewFloat(rowBuffer, offsets["z"]));
+                    if (hasBounds)
+                    {
+                        bounds.Encapsulate(pos);
+                    }
+                    else
+                    {
+                        bounds = new Bounds(pos, Vector3.zero);
+                        hasBounds = true;
+                    }
+
+                    Vector3 dc0 = new Vector3(
+                        ReadPreviewFloat(rowBuffer, offsets["f_dc_0"]),
+                        ReadPreviewFloat(rowBuffer, offsets["f_dc_1"]),
+                        ReadPreviewFloat(rowBuffer, offsets["f_dc_2"]));
+                    float opacity = ReadPreviewFloat(rowBuffer, offsets["opacity"]);
+                    Vector3 color = PreviewSH0ToColor(dc0);
+                    preview.positions[sampleIndex] = pos;
+                    preview.colors[sampleIndex] = new Color(color.x, color.y, color.z, Mathf.Clamp01(PreviewSigmoid(opacity)));
+                    if ((sampleIndex & 255) == 0)
+                    {
+                        SetPreviewProgress(progress, "Sampling preview", sampleIndex, previewCount);
+                    }
+                }
+                SetPreviewProgress(progress, "Sampling preview", previewCount, previewCount);
+
+                preview.bounds = hasBounds ? bounds : new Bounds(Vector3.zero, Vector3.one);
+            }
+            catch (Exception e)
+            {
+                preview.error = e.Message;
+            }
+            return preview;
+        }
+
+        static FileStream OpenPreviewPlyDataStream(string path, out int vertexCount, out int vertexStride, out List<(string, PLYFileReader.ElementType)> attributes)
+        {
+            FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 1024 * 1024, FileOptions.SequentialScan);
+            vertexCount = 0;
+            vertexStride = 0;
+            attributes = new List<(string, PLYFileReader.ElementType)>();
+            bool gotBinaryLittleEndian = false;
+            bool inVertexElement = false;
+            const int maxHeaderLines = 9000;
+
+            for (int lineIndex = 0; lineIndex < maxHeaderLines; lineIndex++)
+            {
+                string line = ReadPreviewHeaderLine(fs);
+                if (line == "end_header")
+                {
+                    break;
+                }
+                if (string.IsNullOrWhiteSpace(line))
+                {
+                    continue;
+                }
+
+                string[] tokens = line.Split((char[])null, StringSplitOptions.RemoveEmptyEntries);
+                if (tokens.Length == 0)
+                {
+                    continue;
+                }
+
+                if (tokens.Length >= 3 && tokens[0] == "format")
+                {
+                    gotBinaryLittleEndian = tokens[1] == "binary_little_endian" && tokens[2] == "1.0";
+                    continue;
+                }
+
+                if (tokens.Length >= 3 && tokens[0] == "element")
+                {
+                    inVertexElement = tokens[1] == "vertex";
+                    if (inVertexElement && !int.TryParse(tokens[2], out vertexCount))
+                    {
+                        throw new IOException($"PLY preview header read failed for '{path}': invalid vertex count '{tokens[2]}'.");
+                    }
+                    continue;
+                }
+
+                if (inVertexElement && tokens.Length >= 3 && tokens[0] == "property")
+                {
+                    PLYFileReader.ElementType type = tokens[1] switch
+                    {
+                        "float" or "float32" => PLYFileReader.ElementType.Float,
+                        "double" or "float64" => PLYFileReader.ElementType.Double,
+                        "uchar" or "uint8" => PLYFileReader.ElementType.UChar,
+                        _ => PLYFileReader.ElementType.None
+                    };
+                    vertexStride += PLYFileReader.TypeToSize(type);
+                    attributes.Add((tokens[2], type));
+                }
+            }
+
+            if (!gotBinaryLittleEndian)
+            {
+                fs.Dispose();
+                throw new IOException($"PLY {path} not supported: needs to be binary, little endian PLY format.");
+            }
+            if (vertexCount <= 0 || vertexStride <= 0)
+            {
+                fs.Dispose();
+                throw new IOException($"PLY preview header read failed for '{path}': vertex count {vertexCount:N0}, stride {vertexStride}.");
+            }
+
+            return fs;
+        }
+
+        static string ReadPreviewHeaderLine(FileStream fs)
+        {
+            List<byte> bytes = new List<byte>(128);
+            while (true)
+            {
+                int b = fs.ReadByte();
+                if (b == -1 || b == '\n')
+                {
+                    break;
+                }
+                bytes.Add((byte)b);
+            }
+
+            if (bytes.Count > 0 && bytes[bytes.Count - 1] == '\r')
+            {
+                bytes.RemoveAt(bytes.Count - 1);
+            }
+
+            return Encoding.UTF8.GetString(bytes.ToArray());
+        }
+
+        static void SetPreviewProgress(PreviewLoadProgress progress, string stage, int processed, int total)
+        {
+            if (progress == null)
+            {
+                return;
+            }
+            progress.stage = stage;
+            progress.processed = processed;
+            progress.total = Mathf.Max(0, total);
+        }
+
+        static Dictionary<string, int> BuildPreviewFloatAttributeOffsets(List<(string, PLYFileReader.ElementType)> attributes)
+        {
+            Dictionary<string, int> result = new Dictionary<string, int>(attributes.Count);
+            int offset = 0;
+            for (int i = 0; i < attributes.Count; i++)
+            {
+                (string name, PLYFileReader.ElementType type) = attributes[i];
+                if (type == PLYFileReader.ElementType.Float)
+                {
+                    result[name] = offset;
+                }
+                offset += PLYFileReader.TypeToSize(type);
+            }
+            return result;
+        }
+
+        static float ReadPreviewFloat(byte[] buffer, int offset)
+        {
+            return BitConverter.ToSingle(buffer, offset);
+        }
+
+        static void ReadPreviewExact(FileStream fs, byte[] buffer, int bytesToRead, string filePath)
+        {
+            int totalRead = 0;
+            while (totalRead < bytesToRead)
+            {
+                int read = fs.Read(buffer, totalRead, bytesToRead - totalRead);
+                if (read <= 0)
+                {
+                    throw new IOException($"PLY {filePath} read error, expected {bytesToRead} data bytes got {totalRead}");
+                }
+                totalRead += read;
+            }
+        }
+
+        static Vector3 PreviewSH0ToColor(Vector3 dc0)
+        {
+            const float shC0 = 0.2820948f;
+            return dc0 * shC0 + Vector3.one * 0.5f;
+        }
+
+        static float PreviewSigmoid(float value)
+        {
+            return 1.0f / (1.0f + Mathf.Exp(-value));
+        }
+
         void StartPreviewLoad(string path)
         {
             CancelPreviewLoad();
@@ -1576,8 +1826,10 @@ namespace GaussianSplatting.Editor.Importers
             }
 
             _previewCancellation = new CancellationTokenSource();
+            _previewProgress = new PreviewLoadProgress { stage = "Queued", processed = 0, total = 1 };
             CancellationToken token = _previewCancellation.Token;
-            _previewTask = Task.Run(() => LoadPreviewData(path, token), token);
+            PreviewLoadProgress progress = _previewProgress;
+            _previewTask = Task.Run(() => LoadPreviewData(path, token, progress), token);
         }
 
         void CancelPreviewLoad()
@@ -1588,6 +1840,7 @@ namespace GaussianSplatting.Editor.Importers
                 _previewCancellation = null;
             }
             _previewTask = null;
+            _previewProgress = null;
         }
 
         void PollPreviewLoad()
@@ -1606,15 +1859,22 @@ namespace GaussianSplatting.Editor.Importers
             {
                 Debug.LogWarning("Gaussian splat preview failed: " + e.Message);
                 _previewTask = null;
+                _previewProgress = null;
                 return;
             }
             _previewTask = null;
+            _previewProgress = null;
             if (preview.path != _previewPath || !string.IsNullOrEmpty(preview.error))
             {
                 if (!string.IsNullOrEmpty(preview.error))
                 {
                     Debug.LogWarning("Gaussian splat preview failed: " + preview.error);
                 }
+                return;
+            }
+            if (preview.splatCount <= 0 || preview.positions == null || preview.positions.Length == 0)
+            {
+                Debug.LogWarning($"Gaussian splat preview failed: '{preview.path}' produced an empty preview.");
                 return;
             }
 
@@ -1625,7 +1885,7 @@ namespace GaussianSplatting.Editor.Importers
             {
                 entry.cropBounds = preview.bounds;
             }
-            if (IsPreviewActive())
+            if (_framePreviewOnLoad || IsPreviewActive())
             {
                 OpenPreviewStage(_framePreviewOnLoad);
             }
@@ -1986,6 +2246,28 @@ namespace GaussianSplatting.Editor.Importers
             _previewStage?.SetCropVisible(entry.cropToBounds, entry.cropBounds);
         }
 
+        string GetCropEstimateLabel(ImportEntry entry)
+        {
+            if (entry == null || !entry.cropToBounds || _previewData == null || _previewData.positions == null || _previewData.positions.Length == 0 || _previewData.splatCount <= 0)
+            {
+                return string.Empty;
+            }
+
+            int sampledInside = 0;
+            for (int i = 0; i < _previewData.positions.Length; i++)
+            {
+                Vector3 pos = ApplyPreviewAlignment(entry, _previewData.positions[i]);
+                if (entry.cropBounds.Contains(pos))
+                {
+                    sampledInside++;
+                }
+            }
+
+            float ratio = sampledInside / (float)Mathf.Max(1, _previewData.positions.Length);
+            int estimatedCount = Mathf.Clamp(Mathf.RoundToInt(_previewData.splatCount * ratio), 0, _previewData.splatCount);
+            return $"Estimated crop result: {estimatedCount:N0} / {_previewData.splatCount:N0} splats ({ratio * 100.0f:0.0}%, sampled {sampledInside:N0} / {_previewData.positions.Length:N0})";
+        }
+
         void RebuildPreviewFromCache(bool framePreview)
         {
             if (_previewData == null)
@@ -2165,6 +2447,7 @@ namespace GaussianSplatting.Editor.Importers
             options.applyHorizonAlignment = entry.applyHorizonAlignment;
             options.horizonRotation = (entry.applyWallAlignment ? entry.wallRotation : Quaternion.identity) * entry.horizonRotation;
             options.horizonPivot = entry.horizonPivot;
+            options.lodUsePackedPositions = GaussianSplatLODFeature.IsAvailable() && entry.importAsLOD && entry.lodUsePackedPositions;
             return options;
         }
 
@@ -2182,12 +2465,29 @@ namespace GaussianSplatting.Editor.Importers
             {
                 if (GUILayout.Button(GSEditorText.T("Reload Preview", "プレビューを再読み込み")))
                 {
+                    _framePreviewOnLoad = true;
                     StartPreviewLoad(entry.path);
                 }
             }
             if (_previewTask != null && !_previewTask.IsCompleted)
             {
-                EditorGUILayout.HelpBox(GSEditorText.T("Loading preview asynchronously...", "プレビューを非同期で読み込み中..."), MessageType.Info);
+                PreviewLoadProgress progress = _previewProgress;
+                string stage = progress != null && !string.IsNullOrEmpty(progress.stage) ? progress.stage : "Loading preview";
+                float normalized = progress?.Normalized ?? 0.0f;
+                Rect progressRect = GUILayoutUtility.GetRect(18.0f, 18.0f, GUILayout.ExpandWidth(true));
+                EditorGUI.ProgressBar(progressRect, normalized, $"{stage} {normalized * 100.0f:0.0}%");
+                if (progress != null && progress.total > 0)
+                {
+                    EditorGUILayout.LabelField($"{progress.processed:N0} / {progress.total:N0} splats", EditorStyles.miniLabel);
+                }
+                else
+                {
+                    EditorGUILayout.HelpBox(GSEditorText.T("Loading preview asynchronously...", "プレビューを非同期で読み込み中..."), MessageType.Info);
+                }
+            }
+            else if (_previewData != null && _previewData.positions != null)
+            {
+                EditorGUILayout.LabelField($"Preview loaded: {_previewData.positions.Length:N0} sampled / {_previewData.splatCount:N0} splats", EditorStyles.miniLabel);
             }
             using (new EditorGUI.DisabledScope(_previewMesh == null || _previewMaterial == null))
             {
@@ -2210,6 +2510,11 @@ namespace GaussianSplatting.Editor.Importers
             {
                 entry.cropBounds.center = EditorGUILayout.Vector3Field(GSEditorText.T("Crop Center", "クロップ中心"), entry.cropBounds.center);
                 entry.cropBounds.size = Vector3.Max(Vector3.one * 0.0001f, EditorGUILayout.Vector3Field(GSEditorText.T("Crop Size", "クロップサイズ"), entry.cropBounds.size));
+            }
+            string cropEstimateLabel = GetCropEstimateLabel(entry);
+            if (!string.IsNullOrEmpty(cropEstimateLabel))
+            {
+                EditorGUILayout.LabelField(cropEstimateLabel, EditorStyles.miniLabel);
             }
             if (EditorGUI.EndChangeCheck())
             {
@@ -2289,6 +2594,23 @@ namespace GaussianSplatting.Editor.Importers
                 }
             }
             EditorGUILayout.EndHorizontal();
+
+            if (GaussianSplatLODFeature.IsAvailable())
+            {
+                EditorGUILayout.Space(6f);
+                EditorGUILayout.LabelField(GSEditorText.T("LOD Import", "LOD インポート"), EditorStyles.boldLabel);
+                entry.importAsLOD = EditorGUILayout.Toggle(GSEditorText.T("Import As LOD", "LOD としてインポート"), entry.importAsLOD);
+                using (new EditorGUI.DisabledScope(!entry.importAsLOD))
+                {
+                    entry.lodChunkSize = Mathf.Max(1, EditorGUILayout.IntField(GSEditorText.T("LOD Chunk Size", "LOD チャンクサイズ"), entry.lodChunkSize));
+                    entry.lodUsePackedPositions = EditorGUILayout.Toggle(GSEditorText.T("Pack LOD Positions", "LOD 位置をパック"), entry.lodUsePackedPositions);
+                }
+            }
+            else
+            {
+                entry.importAsLOD = false;
+                entry.lodUsePackedPositions = false;
+            }
 
             entry.overrideSettings = EditorGUILayout.Toggle(GSEditorText.T("Override Import Settings", "インポート設定を上書き"), entry.overrideSettings);
             if (!entry.overrideSettings)
@@ -2507,7 +2829,20 @@ namespace GaussianSplatting.Editor.Importers
                 string plyPath = entry.path;
                 EditorUtility.DisplayProgressBar(GSEditorText.T("PLY Import", "PLY インポート"),
                     GSEditorText.T($"Importing {Path.GetFileName(plyPath)}", $"{Path.GetFileName(plyPath)} をインポート中"), 0f);
-                PlySplatImporter.Import(plyPath, prefabPath, GetEntryOptions(entry));
+                PlySplatImporter.ImportOptions options = GetEntryOptions(entry);
+                if (entry.importAsLOD && GaussianSplatLODFeature.IsAvailable())
+                {
+                    string outputFolder = Path.GetDirectoryName(prefabPath)?.Replace('\\', '/');
+                    if (string.IsNullOrEmpty(outputFolder))
+                    {
+                        outputFolder = "Assets";
+                    }
+                    ImportLODPLY(plyPath, outputFolder, entry.lodChunkSize, options);
+                }
+                else
+                {
+                    PlySplatImporter.Import(plyPath, prefabPath, options);
+                }
             }
             catch (Exception e)
             {
@@ -2517,6 +2852,39 @@ namespace GaussianSplatting.Editor.Importers
             finally
             {
                 EditorUtility.ClearProgressBar();
+            }
+        }
+
+        static void ImportLODPLY(string plyPath, string outputFolder, int chunkSize, PlySplatImporter.ImportOptions options)
+        {
+            Type importerType = Type.GetType("GaussianSplatting.GaussianSplatLODImporter, GaussianSplatting.Editor");
+            if (importerType == null)
+            {
+                foreach (System.Reflection.Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    importerType = assembly.GetType("GaussianSplatting.GaussianSplatLODImporter");
+                    if (importerType != null)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            System.Reflection.MethodInfo importMethod = importerType?.GetMethod(
+                "ImportLODPLY",
+                new[] { typeof(string), typeof(string), typeof(int), typeof(PlySplatImporter.ImportOptions) });
+            if (importMethod == null)
+            {
+                throw new InvalidOperationException("LOD PLY importer is not available. Check that GaussianSplatting.Editor compiled successfully.");
+            }
+
+            try
+            {
+                importMethod.Invoke(null, new object[] { plyPath, outputFolder, chunkSize, options });
+            }
+            catch (System.Reflection.TargetInvocationException e) when (e.InnerException != null)
+            {
+                throw e.InnerException;
             }
         }
     }

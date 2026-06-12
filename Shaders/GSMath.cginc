@@ -88,6 +88,15 @@ Ellipse GetProjectedEllipsoid(float3 pos, float3 scale, float4 rotation)
     float4 axisClip0 = mul(UNITY_MATRIX_VP, mul(unity_ObjectToWorld, float4(axis0, 0.0)));
     float4 axisClip1 = mul(UNITY_MATRIX_VP, mul(unity_ObjectToWorld, float4(axis1, 0.0)));
     float4 axisClip2 = mul(UNITY_MATRIX_VP, mul(unity_ObjectToWorld, float4(axis2, 0.0)));
+    float3 axisDepth = float3(axisClip0.w, axisClip1.w, axisClip2.w);
+    float depthSupportSq = dot(axisDepth, axisDepth);
+    float depthSupport = sqrt(max(depthSupportSq, 0.0));
+
+    // The projected silhouette becomes singular when the camera/near plane intersects
+    // the ellipsoid. Reject these rare near-camera splats instead of letting c22
+    // approach zero and amplify the screen covariance.
+    float nearPlane = max(_ProjectionParams.y, DIV_EPSILON);
+    if (centerClip.w - depthSupport <= nearPlane) return ellipse;
 
     float3 h0 = float3(axisClip0.x - centerNdc.x * axisClip0.w, axisClip0.y - centerNdc.y * axisClip0.w, axisClip0.w);
     float3 h1 = float3(axisClip1.x - centerNdc.x * axisClip1.w, axisClip1.y - centerNdc.y * axisClip1.w, axisClip1.w);
@@ -98,18 +107,10 @@ Ellipse GetProjectedEllipsoid(float3 pos, float3 scale, float4 rotation)
     float c11 = dot(float3(h0.y, h1.y, h2.y), float3(h0.y, h1.y, h2.y));
     float c02 = dot(float3(h0.x, h1.x, h2.x), float3(h0.z, h1.z, h2.z));
     float c12 = dot(float3(h0.y, h1.y, h2.y), float3(h0.z, h1.z, h2.z));
-    float c22 = dot(float3(h0.z, h1.z, h2.z), float3(h0.z, h1.z, h2.z)) - centerClip.w * centerClip.w;
+    float c22 = depthSupportSq - centerClip.w * centerClip.w;
 
-    if (c22 > 0.0)
-    {
-        c00 = -c00;
-        c01 = -c01;
-        c11 = -c11;
-        c02 = -c02;
-        c12 = -c12;
-        c22 = -c22;
-    }
-    if (abs(c22) <= DIV_EPSILON) return ellipse;
+    float c22Epsilon = max(DIV_EPSILON, centerClip.w * centerClip.w * 1e-5);
+    if (c22 >= -c22Epsilon) return ellipse;
 
     float invC22 = 1.0 / c22;
     float invScale = -invC22;
@@ -117,12 +118,14 @@ Ellipse GetProjectedEllipsoid(float3 pos, float3 scale, float4 rotation)
     float covXX = (c00 - c02 * c02 * invC22) * invScale;
     float covXY = (c01 - c02 * c12 * invC22) * invScale;
     float covYY = (c11 - c12 * c12 * invC22) * invScale;
+    if (!valid_float(covXX) || !valid_float(covXY) || !valid_float(covYY)) return ellipse;
 
     float trace = covXX + covYY;
     float diff = covXX - covYY;
     float discr = sqrt(max(diff * diff + 4.0 * covXY * covXY, 0.0));
     float lambdaMajor = 0.5 * (trace + discr);
     float lambdaMinor = 0.5 * (trace - discr);
+    if (!valid_float(lambdaMajor) || !valid_float(lambdaMinor)) return ellipse;
     if (lambdaMajor <= 0.0 || lambdaMinor <= 0.0) return ellipse;
 
     float2 majorAxis = abs(covXY) + abs(lambdaMajor - covXX) > DIV_EPSILON

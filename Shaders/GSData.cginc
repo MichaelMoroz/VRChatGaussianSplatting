@@ -147,7 +147,7 @@ uint2 GetSplatCoord(uint id)
 
 float4 LoadSplatColor(uint2 coord)
 {
-    return _GS_Colors[coord];
+    return _VRChatCameraMode > 0.5 ? _GS_ColorsCamera[coord] : _GS_Colors[coord];
 }
 
 SplatData LoadSplatData(uint id) {

@@ -23,19 +23,23 @@ Material:
   m_SavedProperties:
     serializedVersion: 3
     m_TexEnvs:
+    - _Histograms:
+        m_Texture: {fileID: 8400000, guid: e2c600dbaec0ec64798e0ca4f3e5a050, type: 2}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
     - _KeyValues:
-        m_Texture: {fileID: 8400000, guid: ddc66d16944d4c94080642b187e9f244, type: 2}
+        m_Texture: {fileID: 8400000, guid: fe9a665fd5b34fd4dad5758fcd202184, type: 2}
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
     - _PrefixSums:
-        m_Texture: {fileID: 8400000, guid: edf1bb2a568c18448818016d5d30e187, type: 2}
+        m_Texture: {fileID: 8400000, guid: ac46256f0579c22408655d87cb126bc1, type: 2}
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
     m_Ints: []
     m_Floats:
     - _BitsPerStep: 4
-    - _CurrentBit: 28
-    - _ElementCount: 233923
+    - _CurrentBit: 27
+    - _ElementCount: 500000
     - _GroupSize: 4
     - _ImageSizeLog2: 11
     m_Colors: []

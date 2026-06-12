@@ -22,29 +22,44 @@ public partial class GaussianSplatRenderer : UdonSharpBehaviour
     const int DEFAULT_START_RENDER_QUEUE = 4050;
     const float DEFAULT_ALPHA_CUTOFF = 0.04f;
     const float DEFAULT_ALPHA_CULL = 0.04f;
+    const int DEFAULT_COMBINED_LOD_SPLAT_BUDGET_PC = 3000000;
+    const int DEFAULT_COMBINED_LOD_SPLAT_BUDGET_ANDROID = 300000;
+    const float DEFAULT_COMBINED_LOD_TARGET_SCALE = 0.95f;
+    const float DEFAULT_COMBINED_LOD_DIRECTIONAL_BIAS = 2.0f;
 
-    Vector3[] _completedCameraPos;
-    bool[] _hasCompletedSort;
-    Vector3 _activeSortQuantizedPos = Vector3.positiveInfinity;
-    RadixSort _radixSort;
-    Material keyValueMat;
-    MeshRenderer _sortedRenderer;
+    [System.NonSerialized] Vector3[] _completedCameraPos;
+    [System.NonSerialized] Vector3[] _completedCameraWorldPos;
+    [System.NonSerialized] bool[] _hasCompletedSort;
+    [System.NonSerialized] RadixSort _radixSort;
+    [System.NonSerialized] Material keyValueMat;
+    [System.NonSerialized] MeshRenderer _sortedRenderer;
 
-    GaussianSplatObject[] _sceneSplats = new GaussianSplatObject[0];
-    int _currentSourceIndex = -1;
-    bool _runtimeCacheValid;
+    [System.NonSerialized] GaussianSplatObject[] _sceneSplats = new GaussianSplatObject[0];
+    [System.NonSerialized] GaussianSplatLODObject[] _sceneLods = new GaussianSplatLODObject[0];
+    [System.NonSerialized] int _currentSourceIndex = -1;
+    [System.NonSerialized] bool _runtimeCacheValid;
 
     [HideInInspector, SerializeField] GameObject[] cachedSceneSplatObjects;
+    [HideInInspector, SerializeField] GameObject[] cachedSceneLODObjects;
     [SerializeField] GaussianSplatRenderingMode renderingMode = GaussianSplatRenderingMode.SingleSplat;
     [SerializeField] GaussianSplatCombiner combiner;
+    [Tooltip("Combined LOD splat cap for PC builds. 0 disables the cap.")]
+    [SerializeField] int combinedLodSplatBudgetPC = DEFAULT_COMBINED_LOD_SPLAT_BUDGET_PC;
+    [Tooltip("Combined LOD splat cap for Android builds. 0 disables the cap.")]
+    [SerializeField] int combinedLodSplatBudgetAndroid = DEFAULT_COMBINED_LOD_SPLAT_BUDGET_ANDROID;
+    [Tooltip("GPU LOD selection target as a fraction of the active LOD cap. Lower values leave headroom for alpha solver overshoot.")]
+    [SerializeField] float combinedLodTargetScale = DEFAULT_COMBINED_LOD_TARGET_SCALE;
+    [Tooltip("Directional LOD distance divisor. 1 disables the camera direction bias; 2 halves effective distance for chunks directly in front of the camera.")]
+    [Range(1.0f, 16.0f)] [SerializeField] float combinedLodDirectionalBias = DEFAULT_COMBINED_LOD_DIRECTIONAL_BIAS;
+    [HideInInspector, SerializeField] int combinedLodSettingsVersion;
+    [Tooltip("Draw editor-only wire boxes for active LOD chunks, colored by the currently selected GPU LOD.")]
+    [SerializeField] bool debugDrawLodGrid;
 
     [Header("Render Settings")]
     [Tooltip("Quantization of camera position to avoid unnecessary updates and jitter. Set to 0 to disable. Default is 10 cm.")]
     [SerializeField] float cameraPositionQuantization = 0.1f;
     [Tooltip("If true, the splat render order will be updated every frame. Useful for animated splats. If false, it will only update when the camera position changes.")]
     [SerializeField] bool alwaysUpdate;
-    [Tooltip("Number of radix sort passes to process per game frame while the screen-camera sort is pipelined.")]
-    [SerializeField] int sortPassesPerFrame = 2;
     [Tooltip("2D render texture used to store sorted splat render order for the screen camera.")]
     public RenderTexture splatRenderOrder;
     [Tooltip("2D render texture used to store sorted splat render order for the photo camera.")]
@@ -52,6 +67,8 @@ public partial class GaussianSplatRenderer : UdonSharpBehaviour
 
     [Tooltip("If true, the material properties will be overridden with the values set in this script. If false, the material properties will be set to their default values.")]
     [UdonSynced, SerializeField] public bool overrideMaterialProperties;
+    [Tooltip("When enabled, non-master players cannot change in-game UI controls marked as global.")]
+    [SerializeField] bool blockNonMasterGlobalChanges;
     [SerializeField] bool overrideRenderQueue;
     [SerializeField] int startRenderQueue = DEFAULT_START_RENDER_QUEUE;
     [UdonSynced, Range(0, 3)] [SerializeField] int requestedSHBand = 3;
@@ -83,12 +100,8 @@ public partial class GaussianSplatRenderer : UdonSharpBehaviour
         for (int i = 0; i < MAX_CAMERA_COUNT; i++)
         {
             _completedCameraPos[i] = Vector3.positiveInfinity;
+            _completedCameraWorldPos[i] = Vector3.positiveInfinity;
             _hasCompletedSort[i] = false;
-        }
-        _activeSortQuantizedPos = Vector3.positiveInfinity;
-        if (_radixSort != null)
-        {
-            _radixSort.CancelSort();
         }
     }
 
@@ -96,6 +109,7 @@ public partial class GaussianSplatRenderer : UdonSharpBehaviour
     {
         _runtimeCacheValid = false;
         _sceneSplats = new GaussianSplatObject[0];
+        _sceneLods = new GaussianSplatLODObject[0];
         _currentSourceIndex = -1;
         _sortedRenderer = null;
         ResetCameraPositions();
@@ -164,6 +178,11 @@ public partial class GaussianSplatRenderer : UdonSharpBehaviour
         return renderer != null && primaryMaterial != null && positions != null && count > 0;
     }
 
+    static bool TryGetLODSource(GaussianSplatLODObject lodObject)
+    {
+        return lodObject != null && lodObject.IsRenderable();
+    }
+
     Material[] GetRendererMaterialsForWrite(MeshRenderer renderer)
     {
         if (renderer == null)
@@ -184,7 +203,10 @@ public partial class GaussianSplatRenderer : UdonSharpBehaviour
     void RefreshRuntimeCache()
     {
         GameObject[] roots = cachedSceneSplatObjects;
-        if (roots == null || roots.Length == 0)
+        GameObject[] lodRoots = cachedSceneLODObjects;
+        bool hasSplats = roots != null && roots.Length > 0;
+        bool hasLods = lodRoots != null && lodRoots.Length > 0;
+        if (!hasSplats && !hasLods)
         {
             ResetRuntimeCache();
             _runtimeCacheValid = true;
@@ -195,7 +217,7 @@ public partial class GaussianSplatRenderer : UdonSharpBehaviour
         Texture ignoredPositions;
         int ignoredCount;
         int validCount = 0;
-        for (int i = 0; i < roots.Length; i++)
+        for (int i = 0; roots != null && i < roots.Length; i++)
         {
             GameObject root = roots[i];
             GaussianSplatObject splat = root != null ? root.GetComponent<GaussianSplatObject>() : null;
@@ -206,7 +228,7 @@ public partial class GaussianSplatRenderer : UdonSharpBehaviour
         }
         _sceneSplats = new GaussianSplatObject[validCount];
         int writeIndex = 0;
-        for (int i = 0; i < roots.Length; i++)
+        for (int i = 0; roots != null && i < roots.Length; i++)
         {
             GameObject root = roots[i];
             GaussianSplatObject splat = root != null ? root.GetComponent<GaussianSplatObject>() : null;
@@ -217,12 +239,37 @@ public partial class GaussianSplatRenderer : UdonSharpBehaviour
             _sceneSplats[writeIndex] = splat;
             writeIndex++;
         }
+
+        int validLodCount = 0;
+        for (int i = 0; lodRoots != null && i < lodRoots.Length; i++)
+        {
+            GameObject root = lodRoots[i];
+            GaussianSplatLODObject lodObject = root != null ? root.GetComponent<GaussianSplatLODObject>() : null;
+            if (TryGetLODSource(lodObject))
+            {
+                validLodCount++;
+            }
+        }
+        _sceneLods = new GaussianSplatLODObject[validLodCount];
+        writeIndex = 0;
+        for (int i = 0; lodRoots != null && i < lodRoots.Length; i++)
+        {
+            GameObject root = lodRoots[i];
+            GaussianSplatLODObject lodObject = root != null ? root.GetComponent<GaussianSplatLODObject>() : null;
+            if (!TryGetLODSource(lodObject))
+            {
+                continue;
+            }
+            _sceneLods[writeIndex] = lodObject;
+            writeIndex++;
+        }
         _currentSourceIndex = FindFirstActiveSourceIndex();
         _runtimeCacheValid = true;
     }
 
     int FindFirstActiveSourceIndex() { for (int i = 0; i < _sceneSplats.Length; i++) if (_sceneSplats[i] != null && _sceneSplats[i].gameObject.activeInHierarchy) return i; return -1; }
     bool IsSourceActive(int index) { return index >= 0 && index < _sceneSplats.Length && _sceneSplats[index] != null && _sceneSplats[index].gameObject.activeInHierarchy; }
+    bool IsLODObjectActive(int index) { return index >= 0 && index < _sceneLods.Length && _sceneLods[index] != null && _sceneLods[index].gameObject.activeInHierarchy && _sceneLods[index].IsRenderable(); }
     GaussianSplatObject GetCurrentSplat() { return IsSourceActive(_currentSourceIndex) ? _sceneSplats[_currentSourceIndex] : null; }
 
     int FindSourceIndex(GaussianSplatObject splat)
@@ -234,6 +281,22 @@ public partial class GaussianSplatRenderer : UdonSharpBehaviour
         for (int i = 0; i < _sceneSplats.Length; i++)
         {
             if (_sceneSplats[i] == splat)
+            {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    int FindLODObjectIndex(GaussianSplatLODObject lodObject)
+    {
+        if (lodObject == null)
+        {
+            return -1;
+        }
+        for (int i = 0; i < _sceneLods.Length; i++)
+        {
+            if (_sceneLods[i] == lodObject)
             {
                 return i;
             }
@@ -285,6 +348,46 @@ public partial class GaussianSplatRenderer : UdonSharpBehaviour
         }
     }
 
+    void RegisterRuntimeLODObject(GaussianSplatLODObject lodObject)
+    {
+        if (!TryGetLODSource(lodObject))
+        {
+            return;
+        }
+        GameObject root = lodObject.gameObject;
+        int cachedCount = cachedSceneLODObjects != null ? cachedSceneLODObjects.Length : 0;
+        bool hasCachedRoot = false;
+        for (int i = 0; i < cachedCount; i++)
+        {
+            if (cachedSceneLODObjects[i] == root)
+            {
+                hasCachedRoot = true;
+                break;
+            }
+        }
+        if (!hasCachedRoot)
+        {
+            GameObject[] roots = new GameObject[cachedCount + 1];
+            for (int i = 0; i < cachedCount; i++)
+            {
+                roots[i] = cachedSceneLODObjects[i];
+            }
+            roots[cachedCount] = root;
+            cachedSceneLODObjects = roots;
+        }
+        if (FindLODObjectIndex(lodObject) >= 0)
+        {
+            return;
+        }
+        GaussianSplatLODObject[] sceneLods = new GaussianSplatLODObject[_sceneLods.Length + 1];
+        for (int i = 0; i < _sceneLods.Length; i++)
+        {
+            sceneLods[i] = _sceneLods[i];
+        }
+        sceneLods[_sceneLods.Length] = lodObject;
+        _sceneLods = sceneLods;
+    }
+
     bool EnsureCurrentSourceSelected()
     {
         if (IsCombinedRenderingMode())
@@ -328,8 +431,88 @@ public partial class GaussianSplatRenderer : UdonSharpBehaviour
 
     void EnsureLocalOwnership() { if (Networking.LocalPlayer != null) Networking.SetOwner(Networking.LocalPlayer, gameObject); }
     void RequestSyncedStateUpdate() { if (Networking.LocalPlayer != null) RequestSerialization(); }
+    bool LocalPlayerIsMasterOrEditor() { return Networking.LocalPlayer == null || Networking.LocalPlayer.isMaster; }
+    bool CanModifyGlobalState() { return !blockNonMasterGlobalChanges || LocalPlayerIsMasterOrEditor(); }
+    public bool CanLocalPlayerModifyGlobalState() { return CanModifyGlobalState(); }
     public bool IsCombinedRenderingMode() { return renderingMode == GaussianSplatRenderingMode.CombineAllSplats; }
     bool ShouldAlwaysUpdate(bool useEditorOps) { return useEditorOps || IsCombinedRenderingMode() || alwaysUpdate; }
+
+    public int GetEffectiveCombinedLodSplatBudget()
+    {
+#if UNITY_ANDROID && !UNITY_EDITOR
+        return Mathf.Max(0, combinedLodSplatBudgetAndroid);
+#else
+        return Mathf.Max(0, combinedLodSplatBudgetPC);
+#endif
+    }
+
+    public int GetCombinedLodSplatBudgetPC() { return Mathf.Max(0, combinedLodSplatBudgetPC); }
+    public int GetCombinedLodSplatBudgetAndroid() { return Mathf.Max(0, combinedLodSplatBudgetAndroid); }
+    public bool HasActiveLODObjects()
+    {
+        if (!EnsureInitialized())
+        {
+            return false;
+        }
+        for (int i = 0; i < _sceneLods.Length; i++)
+        {
+            if (IsLODObjectActive(i))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public void SetCombinedLodSplatBudgetPC(int value)
+    {
+        int clampedValue = Mathf.Max(0, value);
+        if (combinedLodSplatBudgetPC == clampedValue)
+        {
+            return;
+        }
+        combinedLodSplatBudgetPC = clampedValue;
+        ResetCameraPositions();
+    }
+
+    public void SetCombinedLodSplatBudgetAndroid(int value)
+    {
+        int clampedValue = Mathf.Max(0, value);
+        if (combinedLodSplatBudgetAndroid == clampedValue)
+        {
+            return;
+        }
+        combinedLodSplatBudgetAndroid = clampedValue;
+        ResetCameraPositions();
+    }
+
+    public void SetEffectiveCombinedLodSplatBudget(int value)
+    {
+#if UNITY_ANDROID && !UNITY_EDITOR
+        SetCombinedLodSplatBudgetAndroid(value);
+#else
+        SetCombinedLodSplatBudgetPC(value);
+#endif
+    }
+
+    public int GetCombinedLodSplatBudgetSliderMax()
+    {
+#if UNITY_ANDROID && !UNITY_EDITOR
+        return Mathf.Max(DEFAULT_COMBINED_LOD_SPLAT_BUDGET_ANDROID * 2, combinedLodSplatBudgetAndroid);
+#else
+        return Mathf.Max(DEFAULT_COMBINED_LOD_SPLAT_BUDGET_PC * 2, combinedLodSplatBudgetPC);
+#endif
+    }
+
+    public float GetEffectiveCombinedLodTargetScale()
+    {
+        return combinedLodTargetScale > 0.0f ? Mathf.Clamp01(combinedLodTargetScale) : DEFAULT_COMBINED_LOD_TARGET_SCALE;
+    }
+
+    public float GetCombinedLodDirectionalBias()
+    {
+        return Mathf.Clamp(combinedLodDirectionalBias > 0.0f ? combinedLodDirectionalBias : DEFAULT_COMBINED_LOD_DIRECTIONAL_BIAS, 1.0f, 16.0f);
+    }
 
     void ApplyConfiguredMaterialSettings(Material material, int currentSHBand)
     {
@@ -391,22 +574,30 @@ public partial class GaussianSplatRenderer : UdonSharpBehaviour
     public GaussianSplatCombiner GetCombiner() { return ResolveCombiner(); }
     public void SetCombiner(GaussianSplatCombiner value) { combiner = value; }
 
-    public int GetSelectedSplatMaxSHBand() { GaussianSplatObject splat = !EnsureInitialized() || IsCombinedRenderingMode() || !EnsureCurrentSourceSelected() ? null : GetCurrentSplat(); return splat != null ? splat.GetMaxSHBand() : 0; }
+    public int GetSelectedSplatMaxSHBand()
+    {
+        if (IsCombinedRenderingMode())
+        {
+            return 0;
+        }
+        GaussianSplatObject splat = !EnsureInitialized() || !EnsureCurrentSourceSelected() ? null : GetCurrentSplat();
+        return splat != null ? splat.GetMaxSHBand() : 0;
+    }
     public int GetCurrentSHBand() { return Mathf.Clamp(requestedSHBand, 0, GetSelectedSplatMaxSHBand()); }
-    public void SetSHBand(int value) { EnsureLocalOwnership(); requestedSHBand = Mathf.Clamp(value, 0, 3); ApplyMaterialSettingsToSelectedObject(); RequestSyncedStateUpdate(); }
+    public void SetSHBand(int value) { if (!CanModifyGlobalState()) return; EnsureLocalOwnership(); requestedSHBand = Mathf.Clamp(value, 0, 3); ApplyMaterialSettingsToSelectedObject(); RequestSyncedStateUpdate(); }
     public float GetCameraPositionQuantization() { return cameraPositionQuantization; }
     public void SetCameraPositionQuantization(float value) { cameraPositionQuantization = Mathf.Max(0.0f, value); ResetCameraPositions(); }
     public bool GetAlwaysUpdate() { return IsCombinedRenderingMode() || alwaysUpdate; }
     public void SetAlwaysUpdate(bool value) { alwaysUpdate = value; ResetCameraPositions(); }
     public void ToggleAlwaysUpdate() { SetAlwaysUpdate(!alwaysUpdate); }
     public bool GetUseVrcLightVolumes() { return useVrcLightVolumes; }
-    public void SetUseVrcLightVolumes(bool value) { EnsureLocalOwnership(); useVrcLightVolumes = value; ApplyMaterialSettingsToSelectedObject(); RequestSyncedStateUpdate(); }
+    public void SetUseVrcLightVolumes(bool value) { if (!CanModifyGlobalState()) return; EnsureLocalOwnership(); useVrcLightVolumes = value; ApplyMaterialSettingsToSelectedObject(); RequestSyncedStateUpdate(); }
     public void ToggleVrcLightVolumes() { SetUseVrcLightVolumes(!useVrcLightVolumes); }
     public float GetAntiAliasing() { return antiAliasing; }
     public void SetAntiAliasing(float value) { overrideMaterialProperties = true; antiAliasing = Mathf.Clamp(value, 0.0f, 3.0f); ApplyMaterialSettingsToSelectedObject(); }
     public float GetLightVolumeIntensity() { return lightVolumeIntensity; }
     public void SetLightVolumeIntensity(float value) { overrideMaterialProperties = true; lightVolumeIntensity = Mathf.Clamp(value, 0.0f, 4.0f); ApplyMaterialSettingsToSelectedObject(); }
-    public void SetGaussianScale(float value) { EnsureLocalOwnership(); overrideMaterialProperties = true; gaussianScale = Mathf.Clamp(value, 0.0f, 2.0f); ApplyMaterialSettingsToSelectedObject(); RequestSyncedStateUpdate(); }
+    public void SetGaussianScale(float value) { if (!CanModifyGlobalState()) return; EnsureLocalOwnership(); overrideMaterialProperties = true; gaussianScale = Mathf.Clamp(value, 0.0f, 2.0f); ApplyMaterialSettingsToSelectedObject(); RequestSyncedStateUpdate(); }
     public void SetAlphaCutoff(float value) { overrideMaterialProperties = true; alphaCutoff = Mathf.Clamp(value, 0.005f, 0.3f); ApplyMaterialSettingsToSelectedObject(); }
     public float GetAlphaCull() { return alphaCull; }
     public void SetAlphaCull(float value) { overrideMaterialProperties = true; alphaCull = Mathf.Clamp(value, 0.005f, 0.3f); ApplyMaterialSettingsToSelectedObject(); }
@@ -443,6 +634,20 @@ public partial class GaussianSplatRenderer : UdonSharpBehaviour
             }
             totalCount = Mathf.Min(MAX_COMBINED_SPLAT_COUNT, totalCount + count);
         }
+        for (int i = 0; i < _sceneLods.Length; i++)
+        {
+            if (!IsLODObjectActive(i))
+            {
+                continue;
+            }
+            int effectiveBudget = GetEffectiveCombinedLodSplatBudget();
+            int lodBound = effectiveBudget > 0 ? Mathf.Max(0, effectiveBudget - totalCount) : _sceneLods[i].GetMaxLOD0SplatCount();
+            totalCount = Mathf.Min(MAX_COMBINED_SPLAT_COUNT, totalCount + lodBound);
+            if (effectiveBudget > 0)
+            {
+                break;
+            }
+        }
         return totalCount;
     }
 
@@ -459,6 +664,26 @@ public partial class GaussianSplatRenderer : UdonSharpBehaviour
         GaussianSplatObject splat = EnsureCurrentSourceSelected() ? GetCurrentSplat() : null;
         return TryGetSplatSource(splat, out MeshRenderer renderer, out Material primaryMaterial, out Texture positions, out int count) ? count : 0;
     }
+
+#if UNITY_EDITOR && !COMPILER_UDONSHARP
+    public int GetEditorReadbackRenderedSplatCount()
+    {
+        GaussianSplatCombiner sceneCombiner = ResolveCombiner();
+        return sceneCombiner != null ? sceneCombiner.GetEditorReadbackRenderedSplatCount() : 0;
+    }
+
+    public int GetEditorReadbackReservedSplatCount()
+    {
+        GaussianSplatCombiner sceneCombiner = ResolveCombiner();
+        return sceneCombiner != null ? sceneCombiner.GetEditorReadbackReservedSplatCount() : 0;
+    }
+
+    public float GetEditorReadbackAlpha()
+    {
+        GaussianSplatCombiner sceneCombiner = ResolveCombiner();
+        return sceneCombiner != null ? sceneCombiner.GetEditorReadbackAlpha() : 0.0f;
+    }
+#endif
 
     public string GetCurrentSplatName()
     {
@@ -508,9 +733,23 @@ public partial class GaussianSplatRenderer : UdonSharpBehaviour
         ApplyMaterialSettingsToSelectedObject();
     }
 
+    public void NotifyLODObjectEnabled(GaussianSplatLODObject lodObject)
+    {
+        if (!EnsureInitialized() || lodObject == null || !lodObject.gameObject.activeInHierarchy)
+        {
+            return;
+        }
+        RegisterRuntimeLODObject(lodObject);
+        ResetCameraPositions();
+        if (IsCombinedRenderingMode())
+        {
+            UpdateSourceVisibility();
+        }
+    }
+
     public void SelectSplatObject(GaussianSplatObject selectedSplatObject)
     {
-        if (!EnsureInitialized() || selectedSplatObject == null || !selectedSplatObject.gameObject.activeInHierarchy)
+        if (!CanModifyGlobalState() || !EnsureInitialized() || selectedSplatObject == null || !selectedSplatObject.gameObject.activeInHierarchy)
         {
             return;
         }
@@ -558,6 +797,19 @@ public partial class GaussianSplatRenderer : UdonSharpBehaviour
         ResetCameraPositions();
         UpdateSourceVisibility();
         ApplyMaterialSettingsToSelectedObject();
+    }
+
+    public void NotifyLODObjectDisabled(GaussianSplatLODObject lodObject)
+    {
+        if (!EnsureInitialized() || lodObject == null)
+        {
+            return;
+        }
+        ResetCameraPositions();
+        if (IsCombinedRenderingMode())
+        {
+            UpdateSourceVisibility();
+        }
     }
 
     void DisableMsaaInGame()
@@ -644,7 +896,6 @@ public partial class GaussianSplatRenderer : UdonSharpBehaviour
             Debug.LogError("RadixSort component not found on the GaussianSplatRenderer GameObject.");
             return false;
         }
-        _radixSort.SetPipelinedPassesPerFrame(Mathf.Clamp(sortPassesPerFrame, 1, RadixSort.TotalSortPasses));
         GaussianSplatCombiner combined = ResolveCombiner();
         if (keyValueMat == null)
         {
@@ -659,15 +910,17 @@ public partial class GaussianSplatRenderer : UdonSharpBehaviour
             || !EnsureRenderTextureCreated(splatRenderOrderPhoto, "Splat render order photo")
             || !EnsureRenderTextureCreated(_radixSort.keyValues0, "RadixSort keyValues0")
             || !EnsureRenderTextureCreated(_radixSort.keyValues1, "RadixSort keyValues1")
+            || !EnsureRenderTextureCreated(_radixSort.histograms, "RadixSort histograms")
             || !EnsureRenderTextureCreated(_radixSort.prefixSums, "RadixSort prefixSums")
             || (combined != null && !combined.EnsureResourcesCreated()))
         {
             Debug.LogError("Gaussian splat render textures could not be created at runtime.");
             return false;
         }
-        if (_completedCameraPos == null || _completedCameraPos.Length < MAX_CAMERA_COUNT)
+        if (_completedCameraPos == null || _completedCameraPos.Length < MAX_CAMERA_COUNT || _completedCameraWorldPos == null || _completedCameraWorldPos.Length < MAX_CAMERA_COUNT)
         {
             _completedCameraPos = new Vector3[MAX_CAMERA_COUNT];
+            _completedCameraWorldPos = new Vector3[MAX_CAMERA_COUNT];
             _hasCompletedSort = new bool[MAX_CAMERA_COUNT];
             ResetCameraPositions();
         }
@@ -780,12 +1033,14 @@ public partial class GaussianSplatRenderer : UdonSharpBehaviour
         keyValueMat.SetVector("_CameraPos", _sortedRenderer.transform.InverseTransformPoint(worldCameraPos));
     }
 
-    bool SortNeeded(int cameraId, Vector3 quantizedPos, bool useEditorOps)
+    bool UpdateCombinedTexturesForSort(GaussianSplatCombiner combined, Vector3 screenCamPos, Vector3 lodCameraPos, Vector3 lodCameraForward, Vector3 photoCamPos, bool updatePhotoCameraColors, bool adaptLodSelection, bool useEditorOps)
     {
-        return !_hasCompletedSort[cameraId] || ShouldAlwaysUpdate(useEditorOps) || quantizedPos != _completedCameraPos[cameraId];
+        return combined != null
+            && combined.UpdateTexturesWithPhotoFlag(_sceneSplats, _sceneLods, screenCamPos, lodCameraPos, lodCameraForward, photoCamPos, updatePhotoCameraColors, GetEffectiveCombinedLodSplatBudget(), adaptLodSelection, useEditorOps)
+            && UpdateSortBinding();
     }
 
-    void SortCameraViews(Vector3 screenCamPos, Vector3 photoCamPos, bool sortPhotoCamera, bool useEditorOps)
+    void SortCameraViews(Vector3 screenCamPos, Vector3 screenCamForward, Vector3 photoCamPos, bool sortPhotoCamera, bool useEditorOps)
     {
         if (!EnsureInitialized())
         {
@@ -796,56 +1051,84 @@ public partial class GaussianSplatRenderer : UdonSharpBehaviour
             return;
         }
         GaussianSplatCombiner combined = IsCombinedRenderingMode() ? ResolveCombiner() : null;
-        if (IsCombinedRenderingMode() && (combined == null || !combined.UpdateTextures(_sceneSplats, screenCamPos, photoCamPos, useEditorOps)))
+        if (IsCombinedRenderingMode() && combined != null)
         {
-            return;
+            combined.SetLodSplatTargetScale(GetEffectiveCombinedLodTargetScale());
+            combined.SetLodDirectionalBias(GetCombinedLodDirectionalBias());
         }
-        if (!UpdateSortBinding())
-        {
-            return;
-        }
-
 #if UNITY_EDITOR && !COMPILER_UDONSHARP
         if (useEditorOps)
         {
-            // Editor previews: full sort + copy every frame for both camera slices.
+            if (IsCombinedRenderingMode() && (combined == null || !UpdateCombinedTexturesForSort(combined, screenCamPos, screenCamPos, screenCamForward, photoCamPos, sortPhotoCamera, true, true)))
+            {
+                return;
+            }
+            if (!IsCombinedRenderingMode() && !UpdateSortBinding())
+            {
+                return;
+            }
+            // Editor previews need a blocking full sort for the visible SceneView camera.
             SetSortCameraPos(screenCamPos);
             _radixSort.RunFullSortForEditor(splatRenderOrder, SCREEN_CAMERA_ID);
-            SetSortCameraPos(photoCamPos);
-            _radixSort.RunFullSortForEditor(splatRenderOrderPhoto, PHOTO_CAMERA_ID);
+            _completedCameraPos[SCREEN_CAMERA_ID] = QuantizePosition(screenCamPos);
+            _completedCameraWorldPos[SCREEN_CAMERA_ID] = screenCamPos;
+            _hasCompletedSort[SCREEN_CAMERA_ID] = true;
+            if (sortPhotoCamera)
+            {
+                SetSortCameraPos(photoCamPos);
+                _radixSort.RunFullSortForEditor(splatRenderOrderPhoto, PHOTO_CAMERA_ID);
+                _completedCameraPos[PHOTO_CAMERA_ID] = QuantizePosition(photoCamPos);
+                _completedCameraWorldPos[PHOTO_CAMERA_ID] = photoCamPos;
+                _hasCompletedSort[PHOTO_CAMERA_ID] = true;
+            }
             OnScreenSortPublished();
             return;
         }
 #endif
 
-        // Game screen camera: RadixSort owns the pipelined start/advance pacing.
-        Vector3 quantizedScreenPos = QuantizePosition(screenCamPos);
-        bool requestScreenSort = SortNeeded(SCREEN_CAMERA_ID, quantizedScreenPos, false);
-        if (requestScreenSort && _radixSort.IsSortComplete())
+        if (IsCombinedRenderingMode())
         {
+            if (combined == null || !UpdateCombinedTexturesForSort(combined, screenCamPos, screenCamPos, screenCamForward, photoCamPos, sortPhotoCamera, true, false))
+            {
+                return;
+            }
             SetSortCameraPos(screenCamPos);
-            _activeSortQuantizedPos = quantizedScreenPos;
-        }
-        if (_radixSort.UpdatePipelinedSort(splatRenderOrder, SCREEN_CAMERA_ID, requestScreenSort))
-        {
-            _completedCameraPos[SCREEN_CAMERA_ID] = _activeSortQuantizedPos;
+            _radixSort.RunFullSort(splatRenderOrder, SCREEN_CAMERA_ID);
+            _completedCameraPos[SCREEN_CAMERA_ID] = QuantizePosition(screenCamPos);
+            _completedCameraWorldPos[SCREEN_CAMERA_ID] = screenCamPos;
             _hasCompletedSort[SCREEN_CAMERA_ID] = true;
-            _activeSortQuantizedPos = Vector3.positiveInfinity;
-            OnScreenSortPublished();
-        }
-
-        // Game photo camera: occasional blocking full sort while the screen pipeline is idle.
-        if (sortPhotoCamera && _radixSort.IsSortComplete())
-        {
-            Vector3 quantizedPhotoPos = QuantizePosition(photoCamPos);
-            if (SortNeeded(PHOTO_CAMERA_ID, quantizedPhotoPos, false))
+            if (sortPhotoCamera)
             {
                 SetSortCameraPos(photoCamPos);
                 _radixSort.RunFullSort(splatRenderOrderPhoto, PHOTO_CAMERA_ID);
-                _completedCameraPos[PHOTO_CAMERA_ID] = quantizedPhotoPos;
+                _completedCameraPos[PHOTO_CAMERA_ID] = QuantizePosition(photoCamPos);
+                _completedCameraWorldPos[PHOTO_CAMERA_ID] = photoCamPos;
                 _hasCompletedSort[PHOTO_CAMERA_ID] = true;
             }
+            OnScreenSortPublished();
+            return;
         }
+
+        if (!UpdateSortBinding())
+        {
+            return;
+        }
+
+        SetSortCameraPos(screenCamPos);
+        _radixSort.RunFullSort(splatRenderOrder, SCREEN_CAMERA_ID);
+        _completedCameraPos[SCREEN_CAMERA_ID] = QuantizePosition(screenCamPos);
+        _completedCameraWorldPos[SCREEN_CAMERA_ID] = screenCamPos;
+        _hasCompletedSort[SCREEN_CAMERA_ID] = true;
+
+        if (sortPhotoCamera)
+        {
+            SetSortCameraPos(photoCamPos);
+            _radixSort.RunFullSort(splatRenderOrderPhoto, PHOTO_CAMERA_ID);
+            _completedCameraPos[PHOTO_CAMERA_ID] = QuantizePosition(photoCamPos);
+            _completedCameraWorldPos[PHOTO_CAMERA_ID] = photoCamPos;
+            _hasCompletedSort[PHOTO_CAMERA_ID] = true;
+        }
+        OnScreenSortPublished();
     }
 
     void Update()
@@ -856,9 +1139,10 @@ public partial class GaussianSplatRenderer : UdonSharpBehaviour
             return;
         }
         Vector3 screenCamPos = VRCCameraSettings.ScreenCamera.Position;
+        Vector3 screenCamForward = VRCCameraSettings.ScreenCamera.Rotation * Vector3.forward;
         VRCCameraSettings photoCam = VRCCameraSettings.PhotoCamera;
         bool sortPhotoCamera = photoCam != null && photoCam.Active;
-        SortCameraViews(screenCamPos, sortPhotoCamera ? photoCam.Position : screenCamPos, sortPhotoCamera, false);
+        SortCameraViews(screenCamPos, screenCamForward, sortPhotoCamera ? photoCam.Position : screenCamPos, sortPhotoCamera, false);
     }
 
     public override void OnDeserialization()
@@ -867,7 +1151,6 @@ public partial class GaussianSplatRenderer : UdonSharpBehaviour
         {
             return;
         }
-        ResetCameraPositions();
         ApplyMaterialSettingsToSelectedObject();
     }
 }

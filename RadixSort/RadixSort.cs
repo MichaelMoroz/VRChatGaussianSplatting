@@ -17,76 +17,26 @@ public class RadixSort : UdonSharpBehaviour
 
     [SerializeField] public RenderTexture keyValues0;
     [SerializeField] public RenderTexture keyValues1;
+    [SerializeField] public RenderTexture histograms;
     [SerializeField] public RenderTexture prefixSums;
 
     [HideInInspector] [SerializeField] public int elementCount = 1024 * 1024;
-    [SerializeField] int pipelinedPassesPerFrame = 1;
 
     public const int BitsPerPass = 4;
-    public const int TotalSortPasses = 8;
-    public const int MaxKeyBits = BitsPerPass * TotalSortPasses;
+    public const int SortStartBit = 7;
+    public const int MaxKeyBits = 31;
+    public const int TotalSortPasses = 6;
     private const int groupSizeLog2 = 4;
-
-    private int _currentBit;
-    private bool _sortInProgress;
-    private RenderTexture _targetRenderOrder;
-    private int _targetSlice;
 
 #if UNITY_EDITOR && !COMPILER_UDONSHARP
     static Material _editorCopySortedOrderMaterial;
 #endif
 
-    // Game: start a pipelined sort whose finished order will be copied into renderOrder[slice].
-    public void BeginSort(RenderTexture renderOrder, int slice)
-    {
-        _targetRenderOrder = renderOrder;
-        _targetSlice = slice;
-        BeginSortInternal(false);
-    }
-
-    // Game: advance the in-flight sort by the configured number of radix subpasses for this frame.
-    // Returns true on the frame the sort completes, after the sorted order has been copied into the
-    // target render-order texture.
-    public bool RunSort()
-    {
-        if (!_sortInProgress)
-        {
-            return false;
-        }
-        StepSortInternal(GetPipelinedPassesPerFrame(), false);
-        if (_sortInProgress)
-        {
-            return false;
-        }
-        CopySortedOrderInternal(_targetRenderOrder, _targetSlice, false);
-        return true;
-    }
-
-    // Game: if idle and requested, start a new pipelined sort; then advance the in-flight sort by
-    // the configured number of radix passes for this frame. Returns true on the frame the sort is
-    // published into the target render-order texture.
-    public bool UpdatePipelinedSort(RenderTexture renderOrder, int slice, bool requestSort)
-    {
-        if (!_sortInProgress)
-        {
-            if (!requestSort)
-            {
-                return false;
-            }
-            _targetRenderOrder = renderOrder;
-            _targetSlice = slice;
-            BeginSortInternal(false);
-        }
-        return RunSort();
-    }
-
-    // Game: run a complete sort immediately and copy the order (used for the occasional photo camera).
+    // Game: run a complete sort immediately and copy the order.
     public void RunFullSort(RenderTexture renderOrder, int slice)
     {
-        _targetRenderOrder = renderOrder;
-        _targetSlice = slice;
         BeginSortInternal(false);
-        StepSortInternal(TotalSortPasses, false);
+        RunSortPassesInternal(false);
         CopySortedOrderInternal(renderOrder, slice, false);
     }
 
@@ -94,10 +44,8 @@ public class RadixSort : UdonSharpBehaviour
     // Editor previews: full sort + copy every frame for the given camera slice.
     public void RunFullSortForEditor(RenderTexture renderOrder, int slice)
     {
-        _targetRenderOrder = renderOrder;
-        _targetSlice = slice;
         BeginSortInternal(true);
-        StepSortInternal(TotalSortPasses, true);
+        RunSortPassesInternal(true);
         CopySortedOrderInternal(renderOrder, slice, true);
     }
 #endif
@@ -120,33 +68,30 @@ public class RadixSort : UdonSharpBehaviour
         }
 
         radixSort.SetTexture("_PrefixSums", prefixSums);
-        _currentBit = 0;
-        _sortInProgress = true;
+        radixSort.SetTexture("_Histograms", histograms);
     }
 
-    void StepSortInternal(int maxSubpasses, bool useEditorOps)
+    void RunSortPassesInternal(bool useEditorOps)
     {
-        if (!_sortInProgress)
-        {
-            return;
-        }
-
-        int subpasses = Mathf.Clamp(maxSubpasses, 0, TotalSortPasses);
-        // 2. Radix passes
-        for (int i = 0; i < subpasses && _currentBit < MaxKeyBits; i++)
+        int currentBit = SortStartBit;
+        for (int i = 0; i < TotalSortPasses && currentBit < MaxKeyBits; i++)
         {
             radixSort.SetTexture("_KeyValues", keyValues0);
-            radixSort.SetInt("_CurrentBit", _currentBit);
+            radixSort.SetInt("_CurrentBit", currentBit);
 
 #if UNITY_EDITOR && !COMPILER_UDONSHARP
             if (useEditorOps)
             {
-                Graphics.Blit(null, prefixSums, radixSort, 0);
+                Graphics.Blit(null, histograms, radixSort, 0);
+                radixSort.SetTexture("_Histograms", histograms);
+                Graphics.Blit(null, prefixSums, radixSort, 1);
             }
             else
 #endif
             {
-                VRCGraphics.Blit(null, prefixSums, radixSort, 0);
+                VRCGraphics.Blit(null, histograms, radixSort, 0);
+                radixSort.SetTexture("_Histograms", histograms);
+                VRCGraphics.Blit(null, prefixSums, radixSort, 1);
             }
 
             prefixSums.GenerateMips();
@@ -154,12 +99,12 @@ public class RadixSort : UdonSharpBehaviour
 #if UNITY_EDITOR && !COMPILER_UDONSHARP
             if (useEditorOps)
             {
-                Graphics.Blit(null, keyValues1, radixSort, 1);
+                Graphics.Blit(null, keyValues1, radixSort, 2);
             }
             else
 #endif
             {
-                VRCGraphics.Blit(null, keyValues1, radixSort, 1);
+                VRCGraphics.Blit(null, keyValues1, radixSort, 2);
             }
 
             // Ping-pong the buffers
@@ -167,40 +112,8 @@ public class RadixSort : UdonSharpBehaviour
             keyValues0 = keyValues1;
             keyValues1 = temp;
 
-            _currentBit += BitsPerPass;
+            currentBit += BitsPerPass;
         }
-
-        if (_currentBit >= MaxKeyBits)
-        {
-            _sortInProgress = false;
-        }
-    }
-
-    public bool IsSortComplete()
-    {
-        return !_sortInProgress;
-    }
-
-    public bool SetPipelinedPassesPerFrame(int value)
-    {
-        int clampedValue = Mathf.Clamp(value, 1, TotalSortPasses);
-        if (pipelinedPassesPerFrame == clampedValue)
-        {
-            return false;
-        }
-        pipelinedPassesPerFrame = clampedValue;
-        return true;
-    }
-
-    int GetPipelinedPassesPerFrame()
-    {
-        return Mathf.Clamp(pipelinedPassesPerFrame, 1, TotalSortPasses);
-    }
-
-    public void CancelSort()
-    {
-        _sortInProgress = false;
-        _currentBit = 0;
     }
 
 #if UNITY_EDITOR && !COMPILER_UDONSHARP
@@ -284,11 +197,25 @@ public class RadixSort : UdonSharpBehaviour
         int _OptimalImageSizeY = 1 << _OptimalImageSizeLog2Y;
 
         if(keyValues0 == null || keyValues0.width < _OptimalImageSizeX || keyValues0.height < _OptimalImageSizeY) {
-            Debug.LogError($"RadixSort: Texture size ({keyValues0.width}x{keyValues0.height}) is smaller than required ({_OptimalImageSizeX}x{_OptimalImageSizeY}). Please resize the textures.");
+            int currentWidth = keyValues0 != null ? keyValues0.width : 0;
+            int currentHeight = keyValues0 != null ? keyValues0.height : 0;
+            Debug.LogError($"RadixSort: Texture size ({currentWidth}x{currentHeight}) is smaller than required ({_OptimalImageSizeX}x{_OptimalImageSizeY}). Please resize the textures.");
+            return;
+        }
+        int _HistogramPOTLog2 = Mathf.Max(0, _OptimalPOTLog2 - groupSizeLog2);
+        int _HistogramImageSizeLog2Y = _HistogramPOTLog2 / 2;
+        int _HistogramImageSizeLog2X = _HistogramImageSizeLog2Y + _HistogramPOTLog2 % 2;
+        int _HistogramImageSizeX = 1 << _HistogramImageSizeLog2X;
+        int _HistogramImageSizeY = 1 << _HistogramImageSizeLog2Y;
+        if(histograms == null || histograms.width < _HistogramImageSizeX || histograms.height < _HistogramImageSizeY) {
+            int currentWidth = histograms != null ? histograms.width : 0;
+            int currentHeight = histograms != null ? histograms.height : 0;
+            Debug.LogError($"RadixSort: Histogram texture size ({currentWidth}x{currentHeight}) is smaller than required ({_HistogramImageSizeX}x{_HistogramImageSizeY}). Please resize the textures.");
             return;
         }
 
         Vector2 scale = new Vector2((float)_OptimalImageSizeX / keyValues0.width, (float)_OptimalImageSizeY / keyValues0.height);
+        Vector2 histogramScale = new Vector2((float)_HistogramImageSizeX / histograms.width, (float)_HistogramImageSizeY / histograms.height);
 
         computeKeyValues.SetInt("_BitsPerStep", BitsPerPass);
         computeKeyValues.SetInt("_GroupSize", groupSizeLog2);
@@ -305,5 +232,6 @@ public class RadixSort : UdonSharpBehaviour
         radixSort.SetInt("_ImageSizeLog2Y", _OptimalImageSizeLog2Y);
         radixSort.SetInt("_ImageElementsLog2", _OptimalPOTLog2);
         radixSort.SetVector("_Scale", scale);
+        radixSort.SetVector("_HistogramScale", histogramScale);
     }
 }

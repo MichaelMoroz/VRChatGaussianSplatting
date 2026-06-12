@@ -19,7 +19,7 @@ namespace GaussianSplatting.Editor
     {
         const float DefaultAlphaCutoff = 0.04f;
         const float DefaultAlphaCull = 0.04f;
-        const float DefaultLODCull = 0.0f;
+        const float DefaultLODSplatCapSlider = 0.89164376f;
         const string UiFontAssetPath = "Assets/VRChatGaussianSplatting/Resources/Fonts/NotoSansJP-VF.ttf";
         const string UiTextMeshProFontAssetPath = "Assets/VRChatGaussianSplatting/Resources/Fonts/NotoSansJP-VF TMP.asset";
         const string UiMaterialFolderPath = "Assets/VRChatGaussianSplatting/Resources/Materials";
@@ -57,16 +57,45 @@ namespace GaussianSplatting.Editor
             {
                 GaussianSplatRenderer renderer = renderers[i];
                 if (renderer == null || renderer != GaussianSplatRenderer.FindExistingSceneRenderer(renderer.gameObject.scene) || EditorUtility.IsPersistent(renderer) || UnityEditor.SceneManagement.EditorSceneManager.IsPreviewScene(renderer.gameObject.scene) || renderer.transform.Find("Gaussian Splat UI") != null) continue;
-                GaussianSplatObject[] splats = Resources.FindObjectsOfTypeAll<GaussianSplatObject>();
-                for (int j = 0; j < splats.Length; j++)
+                if (SceneHasSplatContent(renderer.gameObject.scene))
                 {
-                    if (splats[j] != null && !EditorUtility.IsPersistent(splats[j]) && splats[j].gameObject.scene == renderer.gameObject.scene)
+                    Generate(renderer, false);
+                }
+            }
+        }
+
+        static bool IsAutoUiSource(Component component, UnityEngine.SceneManagement.Scene scene)
+        {
+            return component != null
+                && !EditorUtility.IsPersistent(component)
+                && component.gameObject.scene == scene
+                && component.gameObject.activeInHierarchy;
+        }
+
+        static bool SceneHasSplatContent(UnityEngine.SceneManagement.Scene scene)
+        {
+            GaussianSplatObject[] splats = Resources.FindObjectsOfTypeAll<GaussianSplatObject>();
+            for (int i = 0; i < splats.Length; i++)
+            {
+                if (IsAutoUiSource(splats[i], scene))
+                {
+                    return true;
+                }
+            }
+
+            if (GaussianSplatLODFeature.IsAvailable())
+            {
+                GaussianSplatLODObject[] lodObjects = Resources.FindObjectsOfTypeAll<GaussianSplatLODObject>();
+                for (int i = 0; i < lodObjects.Length; i++)
+                {
+                    GaussianSplatLODObject lodObject = lodObjects[i];
+                    if (IsAutoUiSource(lodObject, scene) && lodObject.IsRenderable())
                     {
-                        Generate(renderer, false);
-                        break;
+                        return true;
                     }
                 }
             }
+            return false;
         }
 
         static string GetUiTextCharacterSet()
@@ -216,8 +245,8 @@ namespace GaussianSplatting.Editor
             generatedUi.alphaCutoffSlider.value = DefaultAlphaCutoff;
             CreateSliderSetting("Alpha Cull", "Alpha Cull\n(higher = fewer splats)", 0.005f, 0.3f, false, "0.04", 0.0f, out generatedUi.alphaCullLabelText, out generatedUi.alphaCullSlider, out generatedUi.alphaCullText);
             generatedUi.alphaCullSlider.value = DefaultAlphaCull;
-            CreateSliderSetting("LOD Cull", "LOD Cull\n(higher = fewer splats)", 0.0f, 0.1f, false, "0", 0.0f, out generatedUi.lodCullLabelText, out generatedUi.lodCullSlider, out generatedUi.lodCullText);
-            generatedUi.lodCullSlider.value = DefaultLODCull;
+            CreateSliderSetting("LOD Splat Cap", "LOD Splat Cap", 0.0f, 1.0f, false, "3000000", 0.0f, out generatedUi.lodCullLabelText, out generatedUi.lodCullSlider, out generatedUi.lodCullText);
+            generatedUi.lodCullSlider.value = DefaultLODSplatCapSlider;
             generatedUi.qualitySectionText = CreateTextElement("Quality Section", settingsColumn.transform, "Quality", 18, TextAnchor.MiddleLeft);
             GameObject qualityRow = CreateHorizontalGroup("Quality Row", settingsColumn.transform, 8.0f, false);
             generatedUi.qualityVeryLowButton = CreateButtonElement("Quality Very Low Button", qualityRow.transform, "Very Low", new Color(0.2f, 0.2f, 0.24f, 1.0f), 0.0f, 1.0f);

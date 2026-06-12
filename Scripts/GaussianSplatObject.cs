@@ -24,7 +24,7 @@ namespace GaussianSplatting
 
         void OnValidate()
         {
-            GaussianSplatRendererUI.RequestEditorRefresh();
+            GaussianSplatRenderer.RequestEditorRefresh();
         }
 
         void EnsureSceneRenderer(bool createIfMissing)

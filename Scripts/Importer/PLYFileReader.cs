@@ -30,28 +30,56 @@ namespace GaussianSplatting.Editor.Utils
             attrs = new List<(string, ElementType)>();
             const int kMaxHeaderLines = 9000;
             bool got_binary_le = false;
+            bool inVertexElement = false;
+            bool gotEndHeader = false;
             for (int lineIdx = 0; lineIdx < kMaxHeaderLines; ++lineIdx)
             {
                 var line = ReadLine(fs);
-                if (line == "end_header" || line.Length == 0)
-                    break;
-                var tokens = line.Split(' ');
-                if (tokens.Length == 3 && tokens[0] == "format" && tokens[1] == "binary_little_endian" && tokens[2] == "1.0")
-                    got_binary_le = true;
-                if (tokens.Length == 3 && tokens[0] == "element" && tokens[1] == "vertex")
-                    vertexCount = int.Parse(tokens[2]);
-                if (tokens.Length == 3 && tokens[0] == "property")
+                if (line == "end_header")
                 {
-                    ElementType type = tokens[1] switch
+                    gotEndHeader = true;
+                    break;
+                }
+                if (string.IsNullOrWhiteSpace(line))
+                    continue;
+
+                var tokens = line.Split((char[])null, StringSplitOptions.RemoveEmptyEntries);
+                if (tokens.Length == 0)
+                    continue;
+
+                if (tokens.Length >= 3 && tokens[0] == "format")
+                {
+                    got_binary_le = tokens[1] == "binary_little_endian" && tokens[2] == "1.0";
+                    continue;
+                }
+
+                if (tokens.Length >= 3 && tokens[0] == "element")
+                {
+                    inVertexElement = tokens[1] == "vertex";
+                    if (inVertexElement && !int.TryParse(tokens[2], out vertexCount))
+                        throw new IOException($"PLY {filePath} header read error: invalid vertex count '{tokens[2]}'");
+                    continue;
+                }
+
+                if (inVertexElement && tokens.Length >= 3 && tokens[0] == "property")
+                {
+                    if (tokens[1] == "list")
+                        throw new IOException($"PLY {filePath} not supported: vertex list properties are not fixed-stride");
+
+                    ElementType type = ParseElementType(tokens[1]);
+                    if (type == ElementType.None)
                     {
-                        "float" => ElementType.Float,
-                        "double" => ElementType.Double,
-                        "uchar" => ElementType.UChar,
-                        _ => ElementType.None
-                    };
+                        throw new IOException($"PLY {filePath} not supported: unknown vertex property type '{tokens[1]}'");
+                    }
+
                     vertexStride += TypeToSize(type);
                     attrs.Add((tokens[2], type));
                 }
+            }
+
+            if (!gotEndHeader)
+            {
+                throw new IOException($"PLY {filePath} header read error: end_header not found");
             }
 
             if (!got_binary_le)
@@ -84,9 +112,30 @@ namespace GaussianSplatting.Editor.Utils
         public enum ElementType
         {
             None,
+            Char,
             Float,
             Double,
-            UChar
+            UChar,
+            Short,
+            UShort,
+            Int,
+            UInt
+        }
+
+        static ElementType ParseElementType(string type)
+        {
+            return type switch
+            {
+                "char" or "int8" => ElementType.Char,
+                "uchar" or "uint8" => ElementType.UChar,
+                "short" or "int16" => ElementType.Short,
+                "ushort" or "uint16" => ElementType.UShort,
+                "int" or "int32" => ElementType.Int,
+                "uint" or "uint32" => ElementType.UInt,
+                "float" or "float32" => ElementType.Float,
+                "double" or "float64" => ElementType.Double,
+                _ => ElementType.None
+            };
         }
 
         public static int TypeToSize(ElementType t)
@@ -94,9 +143,14 @@ namespace GaussianSplatting.Editor.Utils
             return t switch
             {
                 ElementType.None => 0,
+                ElementType.Char => 1,
                 ElementType.Float => 4,
                 ElementType.Double => 8,
                 ElementType.UChar => 1,
+                ElementType.Short => 2,
+                ElementType.UShort => 2,
+                ElementType.Int => 4,
+                ElementType.UInt => 4,
                 _ => throw new ArgumentOutOfRangeException(nameof(t), t, null)
             };
         }

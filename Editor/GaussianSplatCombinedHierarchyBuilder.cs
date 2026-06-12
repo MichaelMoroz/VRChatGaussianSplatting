@@ -40,8 +40,7 @@ namespace GaussianSplatting.Editor
                 combinedTransform.localScale = Vector3.one;
                 EditorUtility.SetDirty(combinedTransform);
             }
-            MeshFilter combinedFilter = combinedObject.GetComponent<MeshFilter>();
-            Bounds combinedBounds = combinedFilter != null && combinedFilter.sharedMesh != null ? combinedFilter.sharedMesh.bounds : new Bounds(Vector3.zero, Vector3.one * 1000.0f);
+            Bounds combinedBounds = HugeBounds();
             string combinedFolderPath = PlySplatImporter.GetSceneTempResourceFolderPath(renderer.gameObject.scene, "RTs/Combined");
             string assetPrefix = PlySplatImporter.SanitizeAssetName(renderer.name);
             PlySplatImporter.EnsureFolderExists(combinedFolderPath);
@@ -61,13 +60,15 @@ namespace GaussianSplatting.Editor
             bool changed = false;
             Mesh parentMesh = PlySplatImporter.CreateOrReplaceAsset(CreateMesh(parentMaterials.Count, 0, combinedBounds), combinedFolderPath + "/" + assetPrefix + "_CombinedConversionMesh.asset");
             MeshFilter parentFilter = parentRenderer.GetComponent<MeshFilter>();
-            if (parentFilter != null && parentFilter.sharedMesh != parentMesh)
+            if (parentFilter != null && (parentFilter.sharedMesh != parentMesh || !BoundsApproximatelyEqual(parentMesh.bounds, combinedBounds)))
             {
                 Undo.RecordObject(parentFilter, "Update Combined Conversion Mesh");
                 parentFilter.sharedMesh = parentMesh;
                 EditorUtility.SetDirty(parentFilter);
+                EditorUtility.SetDirty(parentMesh);
                 changed = true;
             }
+            changed = UpdateExistingCombinedMeshBounds(combinedTransform, combinedBounds, changed);
             Material[] parentMaterialArray = parentMaterials.ToArray();
             if (!GaussianSplatRenderer.MaterialArraysMatch(parentRenderer.sharedMaterials, parentMaterialArray))
             {
@@ -157,7 +158,7 @@ namespace GaussianSplatting.Editor
                 chunkRenderer.allowOcclusionWhenDynamic = parentRenderer.allowOcclusionWhenDynamic;
                 int splatCount = Mathf.Max(0, splatMaterial.GetInt("_SplatCount"));
                 string chunkMeshPath = combinedFolderPath + "/" + assetPrefix + (chunkCount > 0 ? $"_CombinedPass{chunkCount}" : "_CombinedMain") + "_Mesh.asset";
-                bool chunkMeshMatches = ChunkMeshMatches(chunkFilter.sharedMesh, splatCount, alphaMask != null);
+                bool chunkMeshMatches = ChunkMeshMatches(chunkFilter.sharedMesh, splatCount, alphaMask != null, combinedBounds);
                 if (!chunkMeshMatches && AssetDatabase.LoadAssetAtPath<Mesh>(chunkMeshPath) != null)
                 {
                     AssetDatabase.DeleteAsset(chunkMeshPath);
@@ -212,12 +213,50 @@ namespace GaussianSplatting.Editor
             }
             return changed;
         }
+        static bool UpdateExistingCombinedMeshBounds(Transform combinedTransform, Bounds combinedBounds, bool changed)
+        {
+            if (combinedTransform == null)
+            {
+                return changed;
+            }
+
+            MeshFilter parentFilter = combinedTransform.GetComponent<MeshFilter>();
+            changed = UpdateMeshFilterBounds(parentFilter, combinedBounds, changed);
+            for (int childIndex = 0; childIndex < combinedTransform.childCount; childIndex++)
+            {
+                Transform child = combinedTransform.GetChild(childIndex);
+                if (child == null || !child.name.StartsWith("CombinedChunk"))
+                {
+                    continue;
+                }
+                changed = UpdateMeshFilterBounds(child.GetComponent<MeshFilter>(), combinedBounds, changed);
+            }
+            return changed;
+        }
+
+        static bool UpdateMeshFilterBounds(MeshFilter meshFilter, Bounds bounds, bool changed)
+        {
+            Mesh mesh = meshFilter != null ? meshFilter.sharedMesh : null;
+            if (mesh == null || BoundsApproximatelyEqual(mesh.bounds, bounds))
+            {
+                return changed;
+            }
+
+            mesh.bounds = bounds;
+            EditorUtility.SetDirty(mesh);
+            if (meshFilter != null)
+            {
+                EditorUtility.SetDirty(meshFilter);
+            }
+            return true;
+        }
+
         static bool SetCombinedActive(GameObject combinedObject, bool active, bool changed)
         {
-            if (combinedObject != null && !active && combinedObject.activeSelf)
+            if (combinedObject != null && combinedObject.activeSelf != active)
             {
                 Undo.RecordObject(combinedObject, "Toggle Combined Gaussian Splat Renderer");
-                combinedObject.SetActive(false);
+                combinedObject.SetActive(active);
                 EditorUtility.SetDirty(combinedObject);
                 changed = true;
             }
@@ -227,13 +266,137 @@ namespace GaussianSplatting.Editor
         {
             return material != null && material.shader != null && material.shader.name == shaderName;
         }
-        static bool ChunkMeshMatches(Mesh mesh, int splatCount, bool hasAlphaMask)
+        static Bounds ComputeCombinedLocalBounds(UnityEngine.SceneManagement.Scene scene, Transform combinedTransform)
+        {
+            Bounds combinedBounds = new Bounds();
+            bool hasBounds = false;
+            bool forceHugeBounds = false;
+            GaussianSplatObject[] splats = FindSceneObjects<GaussianSplatObject>(scene);
+            for (int i = 0; i < splats.Length; i++)
+            {
+                GaussianSplatObject splat = splats[i];
+                if (splat == null || !splat.gameObject.activeInHierarchy)
+                {
+                    continue;
+                }
+                MeshRenderer sourceRenderer = splat.GetSortedRenderer();
+                if (sourceRenderer == null)
+                {
+                    continue;
+                }
+                if (sourceRenderer.transform == combinedTransform || sourceRenderer.transform.IsChildOf(combinedTransform))
+                {
+                    continue;
+                }
+                EncapsulateWorldBounds(sourceRenderer.bounds, combinedTransform, ref combinedBounds, ref hasBounds);
+            }
+
+            GaussianSplatLODObject[] lodObjects = FindSceneObjects<GaussianSplatLODObject>(scene);
+            for (int i = 0; i < lodObjects.Length; i++)
+            {
+                GaussianSplatLODObject lodObject = lodObjects[i];
+                if (lodObject == null || !lodObject.gameObject.activeInHierarchy || !lodObject.IsRenderable())
+                {
+                    continue;
+                }
+                if (lodObject.transform == combinedTransform || lodObject.transform.IsChildOf(combinedTransform))
+                {
+                    continue;
+                }
+                if (!lodObject.TryGetLocalBounds(out Bounds lodLocalBounds))
+                {
+                    forceHugeBounds = true;
+                    continue;
+                }
+                EncapsulateTransformedBounds(lodObject.transform.localToWorldMatrix, lodLocalBounds, combinedTransform, ref combinedBounds, ref hasBounds);
+            }
+
+            if (forceHugeBounds || !hasBounds)
+            {
+                return HugeBounds();
+            }
+            Vector3 paddedSize = Vector3.Max(combinedBounds.size, Vector3.one * 0.001f);
+            return new Bounds(combinedBounds.center, paddedSize + Vector3.one * 1.0f);
+        }
+
+        static T[] FindSceneObjects<T>(UnityEngine.SceneManagement.Scene scene) where T : Component
+        {
+            T[] objects = Resources.FindObjectsOfTypeAll<T>();
+            List<T> filtered = new List<T>();
+            for (int i = 0; i < objects.Length; i++)
+            {
+                T obj = objects[i];
+                if (obj == null || EditorUtility.IsPersistent(obj))
+                {
+                    continue;
+                }
+                GameObject root = obj.transform.root != null ? obj.transform.root.gameObject : obj.gameObject;
+                if (root != null && root.scene == scene)
+                {
+                    filtered.Add(obj);
+                }
+            }
+            return filtered.ToArray();
+        }
+
+        static Bounds HugeBounds()
+        {
+            return new Bounds(Vector3.zero, Vector3.one * 1000000.0f);
+        }
+
+        static void EncapsulateWorldBounds(Bounds worldBounds, Transform targetTransform, ref Bounds combinedBounds, ref bool hasBounds)
+        {
+            Matrix4x4 worldToTarget = targetTransform != null ? targetTransform.worldToLocalMatrix : Matrix4x4.identity;
+            EncapsulateBounds(worldToTarget, worldBounds, ref combinedBounds, ref hasBounds);
+        }
+
+        static void EncapsulateTransformedBounds(Matrix4x4 localToWorld, Bounds localBounds, Transform targetTransform, ref Bounds combinedBounds, ref bool hasBounds)
+        {
+            Matrix4x4 worldToTarget = targetTransform != null ? targetTransform.worldToLocalMatrix : Matrix4x4.identity;
+            EncapsulateBounds(worldToTarget * localToWorld, localBounds, ref combinedBounds, ref hasBounds);
+        }
+
+        static void EncapsulateBounds(Matrix4x4 matrix, Bounds sourceBounds, ref Bounds combinedBounds, ref bool hasBounds)
+        {
+            Vector3 center = sourceBounds.center;
+            Vector3 extents = sourceBounds.extents;
+            for (int x = -1; x <= 1; x += 2)
+            {
+                for (int y = -1; y <= 1; y += 2)
+                {
+                    for (int z = -1; z <= 1; z += 2)
+                    {
+                        Vector3 corner = center + Vector3.Scale(extents, new Vector3(x, y, z));
+                        Vector3 transformed = matrix.MultiplyPoint3x4(corner);
+                        if (hasBounds)
+                        {
+                            combinedBounds.Encapsulate(transformed);
+                        }
+                        else
+                        {
+                            combinedBounds = new Bounds(transformed, Vector3.zero);
+                            hasBounds = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        static bool BoundsApproximatelyEqual(Bounds left, Bounds right)
+        {
+            const float epsilon = 0.001f;
+            return (left.center - right.center).sqrMagnitude <= epsilon * epsilon
+                && (left.size - right.size).sqrMagnitude <= epsilon * epsilon;
+        }
+
+        static bool ChunkMeshMatches(Mesh mesh, int splatCount, bool hasAlphaMask, Bounds bounds)
         {
             int splatSubMesh = hasAlphaMask ? 1 : 0;
             return mesh != null
                 && mesh.subMeshCount > splatSubMesh
                 && mesh.GetTopology(splatSubMesh) == MeshTopology.Points
-                && mesh.GetIndexCount(splatSubMesh) == (uint)((splatCount + 31) / 32);
+                && mesh.GetIndexCount(splatSubMesh) == (uint)((splatCount + 31) / 32)
+                && BoundsApproximatelyEqual(mesh.bounds, bounds);
         }
         static Mesh CreateMesh(int conversionPassCount, int splatCount, Bounds bounds, bool hasAlphaMask = false)
         {
