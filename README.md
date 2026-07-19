@@ -189,3 +189,15 @@ The shader can integrate with VRC Light Volumes through the `VRC Light Volumes` 
 - `Light Volume Intensity` scales the contribution of the sampled light volume lighting.
 - This affects shading only. It does not change the sorting path or render-order generation.
 - Some splats look better as mostly self-lit imagery, while others benefit from picking up scene lighting, so this is intentionally exposed as a runtime control.
+
+
+---
+
+# Future Roadmap
+
+* Custom Gaussian Splat object, with manually provided splat data textures (could be render texture generated procedurally)
+* Animated transitions and effects for splat objects
+* Progressive LOD load and web request support
+* 3D collider generation
+* 4DGS support (requires a commonly supported 4DGS format to be established first, it doesnt exist yet. Just a sequence of 3DGS is not an optimal representation for 4DGS.).
+
