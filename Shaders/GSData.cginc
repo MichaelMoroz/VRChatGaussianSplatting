@@ -2,6 +2,12 @@
 
 Texture2D _GS_Positions, _GS_Scales, _GS_Rotations, _GS_Colors, _GS_SH;
 Texture2D _GS_ColorsCamera;
+// Phase 3 unified format: when _GS_PACKED_POSITIONS is enabled, _GS_Positions holds RGBA32 10-bit
+// per-axis values normalized within fixed-size chunks; positions are dequantized via per-chunk
+// bounds. chunkId = splatIndex / _GS_ChunkSize (fixed-size chunks => arithmetic, no lookup texture).
+// A chunk's bbox is 2 pixels of one texture: row 0 = min, row 1 = max (column = chunkId).
+Texture2D _GS_ChunkBounds;
+int _GS_ChunkSize;
 float4 _GS_SH_Min;
 float4 _GS_SH_Range;
 Texture2D<float> _GS_RenderOrder;
@@ -150,11 +156,28 @@ float4 LoadSplatColor(uint2 coord)
     return _VRChatCameraMode > 0.5 ? _GS_ColorsCamera[coord] : _GS_Colors[coord];
 }
 
+float3 DecodePackedSplatPosition(uint id, uint2 coord)
+{
+    uint chunkSize = (uint)max(_GS_ChunkSize, 1);
+    uint chunkId = id / chunkSize;
+    uint4 b = (uint4)round(saturate(_GS_Positions[coord]) * 255.0);
+    uint qx = b.r | ((b.a & 3u) << 8);
+    uint qy = b.g | (((b.a >> 2) & 3u) << 8);
+    uint qz = b.b | (((b.a >> 4) & 3u) << 8);
+    float3 boundsMin = _GS_ChunkBounds[uint2(chunkId, 0)].xyz;
+    float3 boundsMax = _GS_ChunkBounds[uint2(chunkId, 1)].xyz;
+    return lerp(boundsMin, boundsMax, float3(qx, qy, qz) * (1.0 / 1023.0));
+}
+
 SplatData LoadSplatData(uint id) {
     uint2 coord = GetSplatCoord(id);
 
     SplatData o;
+#if defined(_GS_PACKED_POSITIONS)
+    o.mean = DecodePackedSplatPosition(id, coord);
+#else
     o.mean = _GS_Positions[coord].xyz;
+#endif
     // Without a low pass filter some splats can look too "thin", so we try to correct for this.
     // Only necessary if splats are trained without mip-splatting.
     o.scale = max(exp2(_Log2MinScale), _GS_Scales[coord].xyz);
@@ -304,3 +327,67 @@ SplatData LoadSplatDataPrecomputedOrder(uint id, float3 cam_dir) {
     data.valid = true; // precomputed order is always valid
     return data;
 }
+
+#ifdef GS_COLLIDER_SOURCE_LOAD
+// Editor collider bake reads the ORIGINAL packed source textures directly (no fused set, no GPU sort).
+// A CPU-sorted order texture maps draw rank -> source texel index (uint, exact past 16.7M). Source LOD0
+// splats live in variable-size chunks with gaps, so the texel index -> chunk (needed for the packed
+// position bounds) is a binary search over the chunk offset table.
+StructuredBuffer<uint> _GS_ColliderOrder; // rank -> source texel index (exact, unlimited count)
+Texture2D _GS_ColliderChunkRange;    // per chunk: (offsetHi, offsetLo, count, _), offset = hi*4096 + lo
+Texture2D _GS_ColliderChunkMinTex;   // per chunk: bounds min in .xyz
+Texture2D _GS_ColliderChunkMaxTex;   // per chunk: bounds max in .xyz
+int _GS_ColliderChunkCount;
+int _GS_ColliderChunkWidth;          // power-of-two width of the chunk metadata textures
+int _GS_ColliderChunkShift;          // log2(_GS_ColliderChunkWidth)
+
+uint2 ColliderChunkCoord(uint c)
+{
+    return uint2(c & (uint)(_GS_ColliderChunkWidth - 1), c >> (uint)_GS_ColliderChunkShift);
+}
+
+uint ColliderChunkOffset(uint c)
+{
+    float4 r = _GS_ColliderChunkRange[ColliderChunkCoord(c)];
+    return (uint)round(r.r) * 4096u + (uint)round(r.g);
+}
+
+// Largest chunk index whose stored offset <= texelId (chunks are laid out at strictly increasing offsets).
+uint ColliderFindChunk(uint texelId)
+{
+    uint lo = 0u;
+    uint hi = (uint)max(_GS_ColliderChunkCount, 1);
+    [loop] while (lo < hi)
+    {
+        uint mid = (lo + hi) >> 1u;
+        if (ColliderChunkOffset(mid) <= texelId) lo = mid + 1u; else hi = mid;
+    }
+    return lo - 1u;
+}
+
+SplatData LoadSplatDataColliderSource(uint rank)
+{
+    uint texelId = _GS_ColliderOrder[rank];
+
+    uint c = ColliderFindChunk(texelId);
+    uint2 cc = ColliderChunkCoord(c);
+    float3 boundsMin = _GS_ColliderChunkMinTex[cc].xyz;
+    float3 boundsMax = _GS_ColliderChunkMaxTex[cc].xyz;
+
+    uint2 coord = GetSplatCoord(texelId);
+    uint4 b = (uint4)round(saturate(_GS_Positions[coord]) * 255.0);
+    uint qx = b.r | ((b.a & 3u) << 8);
+    uint qy = b.g | (((b.a >> 2) & 3u) << 8);
+    uint qz = b.b | (((b.a >> 4) & 3u) << 8);
+
+    SplatData o;
+    o.mean = lerp(boundsMin, boundsMax, float3(qx, qy, qz) * (1.0 / 1023.0));
+    o.scale = max(exp2(_Log2MinScale), _GS_Scales[coord].xyz);
+    o.quat = normalize(lerp(-1.0, 1.0, _GS_Rotations[coord]));
+    o.color = LoadSplatColor(coord);
+    o.color.a *= _Opacity;
+    o.id = texelId;
+    o.valid = true;
+    return o;
+}
+#endif

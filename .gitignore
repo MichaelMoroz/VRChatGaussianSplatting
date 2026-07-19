@@ -8,3 +8,9 @@ PublicExport.meta
 PublicExport/**/*.meta
 tools/*.ps1.meta
 tools/*.json.meta
+
+# Maintainer-local files (not part of the package)
+.dev-docs/
+.mcp.json
+.vscode/
+strip_high_sh.py

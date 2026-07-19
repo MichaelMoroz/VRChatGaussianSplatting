@@ -5,13 +5,15 @@ using UnityEngine.UI;
 using VRC.SDKBase;
 
 #if UNITY_EDITOR && !COMPILER_UDONSHARP
-using System.Collections.Generic;
 using UnityEditor;
+using UnityEditor.Events;
+using UdonSharpEditor;
 #endif
 
 namespace GaussianSplatting
 {
 
+// Manual sync carries only the gallery selection (the [UdonSynced] fields below); all other UI state is local.
 [UdonBehaviourSyncMode(BehaviourSyncMode.Manual)]
 public class GaussianSplatRendererUI : UdonSharpBehaviour
 {
@@ -30,9 +32,16 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
     const float DefaultAlphaCull = 0.04f;
     const float MaxAlphaCull = 0.3f;
     const int DefaultLODSplatCap = 3000000;
-    const float DefaultPanelWidth = 1120.0f;
-    const float CombinedPanelWidth = 560.0f;
+    const float PanelWidth = 560.0f;
+    const float SettingsColumnWidth = 520.0f;
+    const float GalleryColumnSpacing = 18.0f;
+    const float GalleryScrollbarWidth = 8.0f;
+    const float GalleryPanelWidth = (SettingsColumnWidth * 2.0f) + GalleryColumnSpacing + 24.0f;
     const float BackgroundPadding = 24.0f;
+    const float GalleryEntryMinHeight = 76.0f;
+    const float GalleryEntryNameFontSize = 16.0f;
+    const float GalleryEntryCountFontSize = 12.0f;
+    const float GalleryEntryDescriptionFontSize = 12.0f;
     const float SliderChangeThreshold = 0.0001f;
     public const string DefaultSubtitleEnglish = "Github: https://github.com/MichaelMoroz/VRChatGaussianSplatting\nDeveloped by misha_m";
     public const string DefaultSubtitleJapanese = "Github: https://github.com/MichaelMoroz/VRChatGaussianSplatting\n開発: misha_m";
@@ -47,31 +56,49 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
     [Header("UI References")]
     public TextMeshProUGUI subtitleText, customSubtitleText;
     public TextMeshProUGUI currentSplatText, sortingSectionText, cameraQuantizationLabelText, cameraQuantizationText;
-    public TextMeshProUGUI alwaysUpdateLabelText, materialSectionText, shBandLabelText, shBandText, vrcLightVolumesLabelText, antiAliasingLabelText, antiAliasingText;
+    public TextMeshProUGUI materialSectionText, shBandLabelText, shBandText, vrcLightVolumesLabelText, antiAliasingLabelText, antiAliasingText;
     public TextMeshProUGUI lightVolumeIntensityLabelText, lightVolumeIntensityText, gaussianScaleLabelText, gaussianScaleText, alphaCutoffLabelText, alphaCutoffText;
     public TextMeshProUGUI alphaCullLabelText, alphaCullText;
     public TextMeshProUGUI lodCullLabelText, lodCullText, qualitySectionText;
-    public TextMeshProUGUI languageSectionText, splatSectionText;
-    public Button alwaysUpdateButton, vrcLightVolumesButton, englishLanguageButton, japaneseLanguageButton, splatScrollUpButton, splatScrollDownButton;
-    public Button qualityVeryLowButton, qualityLowButton, qualityMediumButton, qualityHighButton;
+    public TextMeshProUGUI languageSectionText;
+    public Button vrcLightVolumesButton, englishLanguageButton, japaneseLanguageButton;
+    public Button qualityVeryLowButton, qualityLowButton, qualityMediumButton, qualityHighButton, advancedSettingsButton;
     public Slider shBandSlider, antiAliasingSlider, lightVolumeIntensitySlider, alphaCutoffSlider;
     public Slider alphaCullSlider, lodCullSlider;
-    public Button[] splatButtons;
-    [HideInInspector] public GaussianSplatObject[] cachedSceneSplatObjects;
+    [Header("Gallery")]
+    [Tooltip("Splat objects in the gallery, added manually. When 1+ are listed, gallery mode is active and only the selected one renders. Objects NOT in this list are never touched.")]
+    [SerializeField] public GaussianSplatObject[] galleryObjects = new GaussianSplatObject[0];
+    [Tooltip("Inspector-only switch. If off, the gallery list is kept but gallery UI/selection enforcement are disabled and listed splats are not touched.")]
+    [SerializeField] public bool galleryEnabled = true;
+    [Tooltip("If on, only the instance master can change the gallery selection. Synced so the master can toggle it at runtime from the in-panel button.")]
+    [SerializeField, UdonSynced] public bool galleryMasterLock = true;
+    public GameObject gallerySection;
+    public TextMeshProUGUI galleryHeaderText;
+    public GameObject galleryListRoot;
+    public GalleryEntry[] galleryEntries;
+    public Button galleryMasterLockButton;          // ON/OFF toggle for galleryMasterLock; interactable for the master only
+    public TextMeshProUGUI galleryMasterNameLabel;  // current master's name, shown above the toggle
+    public TextMeshProUGUI galleryMasterLockTitle;  // "Master lock:" label left of the toggle
+    public TextMeshProUGUI galleryMasterLockLabel;  // toggle button text ("ON"/"OFF")
+    [SerializeField, UdonSynced] int _gallerySelectedIndex;
+    string _galleryMasterName = "";                 // cached so RefreshUI doesn't scan players every frame
 
-    [UdonSynced, SerializeField] int syncedSelectedSplatObjectIndex = -1;
     [SerializeField] float gaussianScaleStep = 0.1f;
     [SerializeField] float cameraQuantizationStep = 0.05f;
     [SerializeField] int selectedLanguage = LanguageEnglish;
+    [SerializeField] bool showAdvancedSettings;
 
     Color _selectedSplatColor = new Color(0.55f, 0.39f, 0.12f, 1.0f);
     Color _defaultSplatColor = new Color(0.2f, 0.2f, 0.24f, 1.0f);
-    Color _scrollEnabledColor = new Color(0.15f, 0.24f, 0.36f, 1.0f);
-    Color _scrollDisabledColor = new Color(0.1f, 0.1f, 0.12f, 1.0f);
     Color _toggleEnabledColor = new Color(0.18f, 0.4f, 0.24f, 1.0f);
     Color _toggleDisabledColor = new Color(0.3f, 0.16f, 0.14f, 1.0f);
+    Color _galleryListColor = new Color(0.08f, 0.085f, 0.095f, 1.0f);
+    Color _galleryRowColor = new Color(0.12f, 0.13f, 0.145f, 1.0f);
+    Color _galleryRowHoverColor = new Color(0.16f, 0.17f, 0.19f, 1.0f);
+    Color _gallerySelectedColor = new Color(0.10f, 0.32f, 0.42f, 1.0f);
+    Color _gallerySelectedHoverColor = new Color(0.12f, 0.38f, 0.50f, 1.0f);
+    Color _galleryDescriptionColor = new Color(0.78f, 0.81f, 0.86f, 1.0f);
 
-    int _splatListStartIndex;
     bool _sliderValuesInitialized;
     bool _layoutDefaultsInitialized;
     float _lastShBandSliderValue;
@@ -80,9 +107,6 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
     float _lastAlphaCutoffSliderValue;
     float _lastAlphaCullSliderValue;
     float _lastLODSplatCapSliderValue;
-    float _defaultCanvasWidth;
-    float _defaultPanelWidth;
-    GaussianSplatObject[] _sceneSplatObjects;
     RectTransform _canvasRect;
     RectTransform _panelRect;
     Transform _backgroundTransform;
@@ -92,13 +116,48 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
     void Start()
     {
         if (SkipRuntimeRefresh()) return;
-        ApplySyncedSplatObjectSelection();
+        UpdateGalleryMasterName();
+        ApplyGalleryVisibility();
+        RefreshUI();
+    }
+
+    // The instance master can migrate when players join/leave, so refresh the cached name on those events
+    // rather than scanning the player list every frame.
+    public override void OnPlayerJoined(VRCPlayerApi player) { UpdateGalleryMasterName(); }
+    public override void OnPlayerLeft(VRCPlayerApi player) { UpdateGalleryMasterName(); }
+
+    void UpdateGalleryMasterName()
+    {
+        int count = VRCPlayerApi.GetPlayerCount();
+        if (count <= 0) { _galleryMasterName = ""; return; }
+        VRCPlayerApi[] players = new VRCPlayerApi[count];
+        VRCPlayerApi.GetPlayers(players);
+        for (int i = 0; i < players.Length; i++)
+        {
+            if (players[i] != null && players[i].isMaster) { _galleryMasterName = players[i].displayName; return; }
+        }
+        _galleryMasterName = "";
+    }
+
+    // Master-only toggle of the selection lock, wired to the in-panel button's onClick.
+    public void ToggleGalleryMasterLock()
+    {
+        if (Networking.LocalPlayer == null || !Networking.LocalPlayer.isMaster) return;
+        GalleryTakeOwnership();
+        galleryMasterLock = !galleryMasterLock;
+        RequestSerialization();
         RefreshUI();
     }
 
     void Update()
     {
         if (SkipRuntimeRefresh()) return;
+        RefreshUI();
+    }
+
+    public override void OnDeserialization()
+    {
+        ApplyGalleryVisibility();
         RefreshUI();
     }
 
@@ -141,18 +200,26 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
             {
                 continue;
             }
-            if (ui.SyncEditorSerializedState())
+            bool serializedStateChanged = ui.SyncEditorSerializedState();
+            if (serializedStateChanged)
             {
                 EditorUtility.SetDirty(ui);
+                ui.RefreshUI();
             }
-            ui.RefreshUI();
         }
     }
 
     void OnValidate()
     {
-        SyncEditorSerializedState();
+        // OnValidate runs in a restricted Unity callback where hierarchy destruction is not allowed.
+        // Queue the existing editor update refresh instead; it can safely rebuild/remove gallery UI objects.
         RequestEditorRefresh();
+    }
+
+    public void ApplyGalleryInspectorState()
+    {
+        ApplyGalleryVisibility();
+        RefreshUI();
     }
 
     bool SyncEditorSerializedState()
@@ -164,7 +231,6 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         GaussianSplatRenderer previousRenderer = gaussianSplatRenderer;
         TextMeshProUGUI previousSubtitleText = subtitleText;
         TextMeshProUGUI previousCustomSubtitleText = customSubtitleText;
-        GaussianSplatObject[] previousCachedSceneSplatObjects = cachedSceneSplatObjects;
         FindRenderer();
         if (subtitleText == null)
         {
@@ -180,9 +246,8 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         }
         bool backgroundMaterialChanged = EnsureBackgroundMaterial();
         bool subtitleLayoutChanged = ApplySubtitleLayoutDefaults();
-        bool splatButtonTextChanged = EnsureSplatButtonRichText();
-        RefreshSceneSplatObjects();
-        return gaussianSplatRenderer != previousRenderer || subtitleText != previousSubtitleText || customSubtitleText != previousCustomSubtitleText || backgroundMaterialChanged || subtitleLayoutChanged || splatButtonTextChanged || !SplatObjectArraysMatch(previousCachedSceneSplatObjects, cachedSceneSplatObjects);
+        bool galleryUiChanged = EnsureGalleryUI();
+        return gaussianSplatRenderer != previousRenderer || subtitleText != previousSubtitleText || customSubtitleText != previousCustomSubtitleText || backgroundMaterialChanged || subtitleLayoutChanged || galleryUiChanged;
     }
 
     bool EnsureBackgroundMaterial()
@@ -278,27 +343,6 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         return changed;
     }
 
-    bool EnsureSplatButtonRichText()
-    {
-        if (splatButtons == null)
-        {
-            return false;
-        }
-        bool changed = false;
-        for (int i = 0; i < splatButtons.Length; i++)
-        {
-            Button button = splatButtons[i];
-            TextMeshProUGUI label = button != null ? button.GetComponentInChildren<TextMeshProUGUI>() : null;
-            if (label != null && !label.richText)
-            {
-                label.richText = true;
-                EditorUtility.SetDirty(label);
-                changed = true;
-            }
-        }
-        return changed;
-    }
-
     TextMeshProUGUI CreateCustomSubtitleText()
     {
         Transform settingsColumn = transform.Find("Panel/Body Row/Settings Column");
@@ -335,6 +379,404 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         EditorUtility.SetDirty(layoutElement);
         return text;
     }
+
+    // Builds (or removes) the right-side gallery column based on whether the manual list has any objects.
+    bool EnsureGalleryUI()
+    {
+        Transform bodyRow = transform.Find("Panel/Body Row");
+        Transform panel = transform.Find("Panel");
+        if (bodyRow == null || panel == null)
+        {
+            return false;
+        }
+
+        bool changed = false;
+        Transform legacyTopSection = panel.Find("Gallery Section");
+        if (legacyTopSection != null && legacyTopSection.parent != bodyRow)
+        {
+            DestroyImmediate(legacyTopSection.gameObject);
+            changed = true;
+        }
+        Transform legacyToggleColumn = bodyRow.Find("Gallery Column");
+        if (legacyToggleColumn != null && legacyToggleColumn.Find("Gallery Header Row/Gallery Toggle") != null)
+        {
+            DestroyImmediate(legacyToggleColumn.gameObject);
+            changed = true;
+        }
+        Transform legacySectionInRow = bodyRow.Find("Gallery Section");
+        if (legacySectionInRow != null)
+        {
+            DestroyImmediate(legacySectionInRow.gameObject);
+            changed = true;
+        }
+
+        Transform existing = bodyRow.Find("Gallery Column");
+        if (GalleryActive())
+        {
+            if (existing != null)
+            {
+                bool missingScrollbar = existing.Find("Gallery List/Scrollbar Vertical") == null;
+                bool missingMasterLock = existing.Find("Gallery Header Row/Master Lock") == null;
+                bool missingEntryCount = GalleryEntriesMissingCountText();
+                if (galleryEntries == null || galleryEntries.Length < galleryObjects.Length || missingScrollbar || missingMasterLock || missingEntryCount)
+                {
+                    DestroyImmediate(existing.gameObject);
+                    BuildGalleryUI(bodyRow);
+                    return true;
+                }
+                TextMeshProUGUI existingHeader = FindGalleryHeaderText(existing);
+                bool refChanged = gallerySection != existing.gameObject || galleryHeaderText != existingHeader;
+                gallerySection = existing.gameObject;
+                galleryHeaderText = existingHeader;
+                return changed || refChanged || EnsureGalleryColumnLayout(existing.gameObject);
+            }
+            BuildGalleryUI(bodyRow);
+            return true;
+        }
+        if (existing != null)
+        {
+            DestroyImmediate(existing.gameObject);
+            gallerySection = null;
+            galleryHeaderText = null;
+            galleryListRoot = null;
+            galleryEntries = new GalleryEntry[0];
+            return true;
+        }
+        return changed;
+    }
+
+    bool EnsureGalleryColumnLayout(GameObject column)
+    {
+        bool changed = false;
+        Image image = column.GetComponent<Image>();
+        if (image != null)
+        {
+            DestroyImmediate(image);
+            changed = true;
+        }
+        VerticalLayoutGroup vlg = column.GetComponent<VerticalLayoutGroup>();
+        if (vlg == null)
+        {
+            vlg = column.AddComponent<VerticalLayoutGroup>();
+            changed = true;
+        }
+        vlg.childControlWidth = true;
+        vlg.childControlHeight = true;
+        vlg.childForceExpandWidth = true;
+        vlg.childForceExpandHeight = false;
+        vlg.spacing = 8.0f;
+        vlg.padding = new RectOffset(12, 12, 12, 12);
+
+        LayoutElement columnLayout = column.GetComponent<LayoutElement>();
+        if (columnLayout == null)
+        {
+            columnLayout = column.AddComponent<LayoutElement>();
+            changed = true;
+        }
+        if (!Mathf.Approximately(columnLayout.preferredWidth, SettingsColumnWidth) || !Mathf.Approximately(columnLayout.minWidth, SettingsColumnWidth))
+        {
+            columnLayout.preferredWidth = SettingsColumnWidth;
+            columnLayout.minWidth = SettingsColumnWidth;
+            changed = true;
+        }
+        if (!Mathf.Approximately(columnLayout.preferredHeight, 900.0f) || !Mathf.Approximately(columnLayout.minHeight, 900.0f))
+        {
+            columnLayout.preferredHeight = 900.0f;
+            columnLayout.minHeight = 900.0f;
+            changed = true;
+        }
+        return changed;
+    }
+
+    void BuildGalleryUI(Transform bodyRow)
+    {
+        GameObject section = new GameObject("Gallery Column", typeof(RectTransform), typeof(VerticalLayoutGroup), typeof(LayoutElement));
+        Undo.RegisterCreatedObjectUndo(section, "Build Gallery UI");
+        section.transform.SetParent(bodyRow, false);
+        section.transform.SetAsLastSibling();
+        EnsureGalleryColumnLayout(section);
+        gallerySection = section;
+
+        CreateGalleryHeader(section.transform);
+
+        Transform content;
+        galleryListRoot = CreateScrollList(section.transform, out content);
+
+        int entryCapacity = Mathf.Max(64, galleryObjects != null ? galleryObjects.Length : 0);
+        galleryEntries = new GalleryEntry[entryCapacity];
+        for (int i = 0; i < galleryEntries.Length; i++)
+        {
+            galleryEntries[i] = CreateGalleryEntry(content, i);
+        }
+        UdonSharpEditorUtility.CopyProxyToUdon(this);
+        EditorUtility.SetDirty(this);
+    }
+
+    TextMeshProUGUI CreateGalleryText(Transform parent, string objectName, string value, float fontSize, FontStyles style, float height)
+    {
+        GameObject go = new GameObject(objectName, typeof(RectTransform), typeof(TextMeshProUGUI), typeof(LayoutElement));
+        go.transform.SetParent(parent, false);
+        TextMeshProUGUI text = go.GetComponent<TextMeshProUGUI>();
+        TextMeshProUGUI reference = FindSubtitleText();
+        text.font = reference != null ? reference.font : text.font;
+        text.color = Color.white; text.fontSize = fontSize; text.fontStyle = style;
+        text.alignment = TextAlignmentOptions.TopLeft; text.enableWordWrapping = true; text.overflowMode = TextOverflowModes.Truncate;
+        text.raycastTarget = false; text.text = value;
+        LayoutElement le = go.GetComponent<LayoutElement>();
+        if (height > 0.0f) { le.minHeight = le.preferredHeight = height; }
+        return text;
+    }
+
+    // Header row: "Gallery (global)" on the left; on the right the master's name ABOVE a "Master lock:" label
+    // and an ON/OFF toggle button (green when ON). Master-only click is enforced in RefreshGalleryMasterLock.
+    void CreateGalleryHeader(Transform parent)
+    {
+        GameObject headerRow = new GameObject("Gallery Header Row", typeof(RectTransform), typeof(HorizontalLayoutGroup), typeof(LayoutElement));
+        headerRow.transform.SetParent(parent, false);
+        HorizontalLayoutGroup hlg = headerRow.GetComponent<HorizontalLayoutGroup>();
+        hlg.childControlWidth = true; hlg.childControlHeight = true; hlg.childForceExpandWidth = false; hlg.childForceExpandHeight = false; hlg.childAlignment = TextAnchor.MiddleLeft; hlg.spacing = 10.0f;
+        headerRow.GetComponent<LayoutElement>().minHeight = 56.0f;
+
+        galleryHeaderText = CreateGalleryText(headerRow.transform, "Gallery Header", "Gallery (global)", 18.0f, FontStyles.Bold, 0.0f);
+        galleryHeaderText.alignment = TextAlignmentOptions.MidlineLeft;
+        galleryHeaderText.GetComponent<LayoutElement>().flexibleWidth = 1.0f; // takes the remaining width; pushes the lock block right
+
+        GameObject right = new GameObject("Master Lock", typeof(RectTransform), typeof(VerticalLayoutGroup), typeof(LayoutElement), typeof(ContentSizeFitter));
+        right.transform.SetParent(headerRow.transform, false);
+        VerticalLayoutGroup rvlg = right.GetComponent<VerticalLayoutGroup>();
+        rvlg.childControlWidth = true; rvlg.childControlHeight = true; rvlg.childForceExpandWidth = true; rvlg.childForceExpandHeight = false; rvlg.childAlignment = TextAnchor.UpperRight; rvlg.spacing = 2.0f;
+        right.GetComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+        LayoutElement rightLe = right.GetComponent<LayoutElement>(); rightLe.minWidth = rightLe.preferredWidth = 210.0f; rightLe.flexibleWidth = 0.0f;
+
+        // master's name, above the button
+        galleryMasterNameLabel = CreateGalleryText(right.transform, "Master Name", "", 12.0f, FontStyles.Normal, 0.0f);
+        galleryMasterNameLabel.color = _galleryDescriptionColor;
+        galleryMasterNameLabel.alignment = TextAlignmentOptions.MidlineRight;
+
+        GameObject lockRow = new GameObject("Lock Row", typeof(RectTransform), typeof(HorizontalLayoutGroup), typeof(LayoutElement));
+        lockRow.transform.SetParent(right.transform, false);
+        HorizontalLayoutGroup lhlg = lockRow.GetComponent<HorizontalLayoutGroup>();
+        lhlg.childControlWidth = true; lhlg.childControlHeight = true; lhlg.childForceExpandWidth = false; lhlg.childForceExpandHeight = false; lhlg.childAlignment = TextAnchor.MiddleRight; lhlg.spacing = 8.0f;
+        lockRow.GetComponent<LayoutElement>().minHeight = 34.0f;
+
+        galleryMasterLockTitle = CreateGalleryText(lockRow.transform, "Title", "Master lock:", 14.0f, FontStyles.Normal, 0.0f);
+        galleryMasterLockTitle.alignment = TextAlignmentOptions.MidlineRight;
+        galleryMasterLockTitle.GetComponent<LayoutElement>().flexibleWidth = 1.0f;
+
+        GameObject btnGo = new GameObject("Toggle", typeof(RectTransform), typeof(Image), typeof(Button), typeof(LayoutElement));
+        btnGo.transform.SetParent(lockRow.transform, false);
+        Image bg = btnGo.GetComponent<Image>(); bg.color = GalleryMasterLockColor();
+        Button button = btnGo.GetComponent<Button>(); button.targetGraphic = bg; button.transition = Selectable.Transition.ColorTint;
+        LayoutElement btnLe = btnGo.GetComponent<LayoutElement>(); btnLe.minWidth = btnLe.preferredWidth = 64.0f; btnLe.minHeight = 32.0f; btnLe.flexibleWidth = 0.0f; btnLe.flexibleHeight = 0.0f;
+
+        galleryMasterLockLabel = CreateGalleryText(btnGo.transform, "State", galleryMasterLock ? "ON" : "OFF", 14.0f, FontStyles.Bold, 0.0f);
+        galleryMasterLockLabel.alignment = TextAlignmentOptions.Center;
+        RectTransform lblRect = (RectTransform)galleryMasterLockLabel.transform;
+        lblRect.anchorMin = Vector2.zero; lblRect.anchorMax = Vector2.one; lblRect.offsetMin = Vector2.zero; lblRect.offsetMax = Vector2.zero;
+
+        galleryMasterLockButton = button;
+        WireUdonClick(button, UdonSharpEditorUtility.GetBackingUdonBehaviour(this), "ToggleGalleryMasterLock");
+    }
+
+    GameObject CreateScrollList(Transform parent, out Transform content)
+    {
+        GameObject scrollGo = new GameObject("Gallery List", typeof(RectTransform), typeof(Image), typeof(ScrollRect), typeof(LayoutElement));
+        scrollGo.transform.SetParent(parent, false);
+        scrollGo.GetComponent<Image>().color = _galleryListColor;
+        LayoutElement scrollLayout = scrollGo.GetComponent<LayoutElement>();
+        scrollLayout.preferredHeight = 826.0f; scrollLayout.minHeight = 160.0f; scrollLayout.flexibleHeight = 1.0f;
+
+        GameObject viewportGo = new GameObject("Viewport", typeof(RectTransform), typeof(RectMask2D), typeof(Image));
+        viewportGo.transform.SetParent(scrollGo.transform, false);
+        RectTransform viewportRect = (RectTransform)viewportGo.transform;
+        viewportRect.anchorMin = Vector2.zero; viewportRect.anchorMax = Vector2.one; viewportRect.pivot = new Vector2(0.0f, 1.0f);
+        // Inset the right edge so the visual scrollbar strip doesn't overlap the entries.
+        viewportRect.offsetMin = Vector2.zero; viewportRect.offsetMax = new Vector2(-GalleryScrollbarWidth, 0.0f);
+        viewportGo.GetComponent<Image>().color = new Color(0, 0, 0, 0);
+
+        GameObject contentGo = new GameObject("Content", typeof(RectTransform), typeof(VerticalLayoutGroup), typeof(ContentSizeFitter));
+        contentGo.transform.SetParent(viewportGo.transform, false);
+        RectTransform contentRect = (RectTransform)contentGo.transform;
+        contentRect.anchorMin = new Vector2(0.0f, 1.0f); contentRect.anchorMax = new Vector2(1.0f, 1.0f); contentRect.pivot = new Vector2(0.5f, 1.0f); contentRect.sizeDelta = new Vector2(0.0f, 0.0f);
+        VerticalLayoutGroup contentVlg = contentGo.GetComponent<VerticalLayoutGroup>();
+        contentVlg.childControlWidth = true; contentVlg.childControlHeight = true; contentVlg.childForceExpandWidth = true; contentVlg.childForceExpandHeight = false; contentVlg.spacing = 6.0f; contentVlg.padding = new RectOffset(8, 8, 8, 8);
+        ContentSizeFitter contentCsf = contentGo.GetComponent<ContentSizeFitter>();
+        contentCsf.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+
+        ScrollRect scroll = scrollGo.GetComponent<ScrollRect>();
+        scroll.horizontal = false; scroll.vertical = true; scroll.movementType = ScrollRect.MovementType.Clamped;
+        scroll.inertia = true; scroll.scrollSensitivity = 32.0f;
+        scroll.viewport = viewportRect; scroll.content = contentRect;
+
+        // Visual-only scrollbar: the ScrollRect drives its handle size (how much fits) and position (where you
+        // are) even though it's non-interactable, so it indicates scrollability without being draggable.
+        Scrollbar scrollbar = CreateVisualScrollbar(scrollGo.transform, GalleryScrollbarWidth);
+        scroll.verticalScrollbar = scrollbar;
+        scroll.verticalScrollbarVisibility = ScrollRect.ScrollbarVisibility.Permanent;
+        scroll.verticalScrollbarSpacing = 0.0f;
+
+        content = contentGo.transform;
+        return scrollGo;
+    }
+
+    // A non-interactable vertical scrollbar wired to the gallery ScrollRect: a track + handle whose size and
+    // position the ScrollRect updates automatically (handle filling the track == the list isn't scrollable).
+    Scrollbar CreateVisualScrollbar(Transform parent, float width)
+    {
+        Color trackColor = new Color(0.05f, 0.055f, 0.065f, 1.0f);
+        Color handleColor = new Color(0.45f, 0.48f, 0.54f, 1.0f);
+
+        GameObject barGo = new GameObject("Scrollbar Vertical", typeof(RectTransform), typeof(Image), typeof(Scrollbar));
+        barGo.transform.SetParent(parent, false);
+        RectTransform barRect = (RectTransform)barGo.transform;
+        barRect.anchorMin = new Vector2(1.0f, 0.0f); barRect.anchorMax = new Vector2(1.0f, 1.0f); barRect.pivot = new Vector2(1.0f, 0.5f);
+        barRect.sizeDelta = new Vector2(width, 0.0f); barRect.anchoredPosition = Vector2.zero;
+        barGo.GetComponent<Image>().color = trackColor;
+
+        GameObject areaGo = new GameObject("Sliding Area", typeof(RectTransform));
+        areaGo.transform.SetParent(barGo.transform, false);
+        RectTransform areaRect = (RectTransform)areaGo.transform;
+        areaRect.anchorMin = Vector2.zero; areaRect.anchorMax = Vector2.one; areaRect.sizeDelta = Vector2.zero; areaRect.anchoredPosition = Vector2.zero;
+
+        GameObject handleGo = new GameObject("Handle", typeof(RectTransform), typeof(Image));
+        handleGo.transform.SetParent(areaGo.transform, false);
+        RectTransform handleRect = (RectTransform)handleGo.transform;
+        handleRect.sizeDelta = Vector2.zero;
+        handleGo.GetComponent<Image>().color = handleColor;
+
+        Scrollbar bar = barGo.GetComponent<Scrollbar>();
+        bar.direction = Scrollbar.Direction.BottomToTop;
+        bar.handleRect = handleRect;
+        bar.targetGraphic = handleGo.GetComponent<Image>();
+        bar.interactable = false; // visual only; the ScrollRect still drives size/value
+        return bar;
+    }
+
+    GalleryEntry CreateGalleryEntry(Transform content, int index)
+    {
+        GameObject entryGo = new GameObject("Gallery Entry " + index, typeof(RectTransform), typeof(Image), typeof(Button), typeof(LayoutElement), typeof(VerticalLayoutGroup), typeof(ContentSizeFitter));
+        entryGo.transform.SetParent(content, false);
+        Image background = entryGo.GetComponent<Image>();
+        background.color = _galleryRowColor;
+        Button button = entryGo.GetComponent<Button>();
+        button.targetGraphic = background;
+        button.transition = Selectable.Transition.ColorTint;
+        ColorBlock buttonColors = button.colors;
+        buttonColors.normalColor = _galleryRowColor;
+        buttonColors.highlightedColor = _galleryRowHoverColor;
+        buttonColors.pressedColor = _gallerySelectedHoverColor;
+        buttonColors.selectedColor = _galleryRowHoverColor;
+        buttonColors.disabledColor = _galleryRowColor;
+        button.colors = buttonColors;
+
+        VerticalLayoutGroup rowVlg = entryGo.GetComponent<VerticalLayoutGroup>();
+        rowVlg.childControlWidth = true; rowVlg.childControlHeight = true; rowVlg.childForceExpandWidth = true; rowVlg.childForceExpandHeight = false; rowVlg.spacing = 3.0f; rowVlg.padding = new RectOffset(14, 14, 11, 11);
+        ContentSizeFitter rowCsf = entryGo.GetComponent<ContentSizeFitter>();
+        rowCsf.verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+        LayoutElement rowLayout = entryGo.GetComponent<LayoutElement>();
+        rowLayout.minHeight = GalleryEntryMinHeight;
+        rowLayout.flexibleHeight = 0.0f;
+
+        GameObject titleRow = new GameObject("Title Row", typeof(RectTransform), typeof(HorizontalLayoutGroup), typeof(LayoutElement));
+        titleRow.transform.SetParent(entryGo.transform, false);
+        HorizontalLayoutGroup titleLayout = titleRow.GetComponent<HorizontalLayoutGroup>();
+        titleLayout.childControlWidth = true; titleLayout.childControlHeight = true; titleLayout.childForceExpandWidth = false; titleLayout.childForceExpandHeight = false; titleLayout.spacing = 8.0f;
+        LayoutElement titleRowLayout = titleRow.GetComponent<LayoutElement>();
+        titleRowLayout.minHeight = titleRowLayout.preferredHeight = 20.0f;
+
+        TextMeshProUGUI nameText = CreateGalleryText(titleRow.transform, "Name", "", GalleryEntryNameFontSize, FontStyles.Bold, 0.0f);
+        LayoutElement nameLayout = nameText.GetComponent<LayoutElement>();
+        if (nameLayout != null) nameLayout.flexibleWidth = 1.0f;
+        TextMeshProUGUI countText = CreateGalleryText(titleRow.transform, "Splat Count", "", GalleryEntryCountFontSize, FontStyles.Normal, 0.0f);
+        countText.alignment = TextAlignmentOptions.MidlineRight;
+        countText.color = _galleryDescriptionColor;
+        LayoutElement countLayout = countText.GetComponent<LayoutElement>();
+        if (countLayout != null)
+        {
+            countLayout.minWidth = 92.0f;
+            countLayout.preferredWidth = 112.0f;
+            countLayout.flexibleWidth = 0.0f;
+        }
+        TextMeshProUGUI descriptionText = CreateGalleryText(entryGo.transform, "Description", "", GalleryEntryDescriptionFontSize, FontStyles.Normal, 0.0f);
+        descriptionText.color = _galleryDescriptionColor;
+        // Multiline: wrap and grow the row (the row has a ContentSizeFitter) instead of truncating.
+        descriptionText.overflowMode = TextOverflowModes.Overflow;
+
+        GalleryEntry entry = UdonSharpUndo.AddComponent<GalleryEntry>(entryGo);
+        entry.ui = this; entry.index = index; entry.button = button; entry.background = background; entry.nameText = nameText; entry.countText = countText; entry.descriptionText = descriptionText;
+        UdonSharpEditorUtility.CopyProxyToUdon(entry);
+        WireUdonClick(button, UdonSharpEditorUtility.GetBackingUdonBehaviour(entry), "Select");
+
+        entryGo.SetActive(false);
+        return entry;
+    }
+
+    void ApplyGalleryEntryEditorLayout(GalleryEntry entry)
+    {
+        if (entry == null)
+        {
+            return;
+        }
+        VerticalLayoutGroup rowVlg = entry.GetComponent<VerticalLayoutGroup>();
+        if (rowVlg != null)
+        {
+            rowVlg.childControlWidth = true;
+            rowVlg.childControlHeight = true;
+            rowVlg.childForceExpandWidth = true;
+            rowVlg.childForceExpandHeight = false;
+            rowVlg.spacing = 3.0f;
+            rowVlg.padding = new RectOffset(14, 14, 11, 11);
+        }
+        LayoutElement rowLayout = entry.GetComponent<LayoutElement>();
+        if (rowLayout != null)
+        {
+            rowLayout.minHeight = GalleryEntryMinHeight;
+            rowLayout.flexibleHeight = 0.0f;
+        }
+        if (entry.nameText != null)
+        {
+            entry.nameText.fontSize = GalleryEntryNameFontSize;
+        }
+        if (entry.countText != null)
+        {
+            entry.countText.fontSize = GalleryEntryCountFontSize;
+            entry.countText.color = _galleryDescriptionColor;
+            entry.countText.alignment = TextAlignmentOptions.MidlineRight;
+        }
+        if (entry.descriptionText != null)
+        {
+            entry.descriptionText.fontSize = GalleryEntryDescriptionFontSize;
+            entry.descriptionText.color = _galleryDescriptionColor;
+            entry.descriptionText.enableWordWrapping = true;
+            entry.descriptionText.overflowMode = TextOverflowModes.Overflow;
+        }
+    }
+
+    bool GalleryEntriesMissingCountText()
+    {
+        if (galleryEntries == null)
+        {
+            return true;
+        }
+        for (int i = 0; i < galleryEntries.Length; i++)
+        {
+            GalleryEntry entry = galleryEntries[i];
+            if (entry != null && entry.countText == null)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    static void WireUdonClick(Button button, VRC.Udon.UdonBehaviour backing, string eventName)
+    {
+        if (button == null || backing == null)
+        {
+            return;
+        }
+        UnityEventTools.AddStringPersistentListener(button.onClick, backing.SendCustomEvent, eventName);
+    }
 #endif
 
     bool SkipRuntimeRefresh()
@@ -349,11 +791,9 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
     string Localize(string english, string japanese) { return selectedLanguage == LanguageJapanese ? japanese : english; }
         string FormatFloat(float value) { return (Mathf.Round(value * 10000.0f) * 0.0001f).ToString("0.####"); }
     string ToggleLabel(bool enabled) { return Localize(enabled ? "On" : "Off", enabled ? "オン" : "オフ"); }
-    string ScrollLabel(bool up) { return Localize(up ? "Up" : "Down", up ? "上へ" : "下へ"); }
-    string CurrentSplatNoneLabel() { return Localize("Current Splat: None", "現在のスプラット: なし"); }
+    string AdvancedSettingsLabel() { return Localize(showAdvancedSettings ? "Hide Advanced Settings" : "Show Advanced Settings", showAdvancedSettings ? "詳細設定を隠す" : "詳細設定を表示"); }
     string RenderedSplatCountLabel(int count) { return Localize("Rendered Splats: ", "描画スプラット数: ") + count; }
-    bool CanChangeGlobalVariables() { return gaussianSplatRenderer == null || gaussianSplatRenderer.CanLocalPlayerModifyGlobalState(); }
-    bool SliderCanWriteBack(int sliderKind, bool allowWriteBack) { return allowWriteBack && (sliderKind != SliderShBand || CanChangeGlobalVariables()); }
+    bool SliderCanWriteBack(int sliderKind, bool allowWriteBack) { return allowWriteBack; }
     bool ShouldShowLODControls() { return gaussianSplatRenderer != null && gaussianSplatRenderer.HasActiveLODObjects(); }
 
     void SetText(TextMeshProUGUI text, string value) { if (text != null && text.text != value) text.text = value; }
@@ -398,7 +838,50 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
 
     float GetLodSplatCapSliderMax()
     {
-        return Mathf.Max(MinPositiveLodSplatCap, gaussianSplatRenderer != null ? gaussianSplatRenderer.GetCombinedLodSplatBudgetSliderMax() : DefaultLODSplatCap * 2);
+        return Mathf.Max(0.0f, gaussianSplatRenderer != null ? gaussianSplatRenderer.GetCombinedLodSplatBudgetSliderMax() : DefaultLODSplatCap);
+    }
+
+    float GetLodSplatCapSliderMin()
+    {
+        return Mathf.Max(0.0f, gaussianSplatRenderer != null ? gaussianSplatRenderer.GetCombinedLodSplatBudgetSliderMin() : 0.0f);
+    }
+
+    float ToLodSplatCapSliderValue(float value)
+    {
+        float minValue = GetLodSplatCapSliderMin();
+        float maxValue = GetLodSplatCapSliderMax();
+        if (maxValue <= minValue)
+        {
+            return 0.0f;
+        }
+        if (minValue <= 0.0f)
+        {
+            if (maxValue <= MinPositiveLodSplatCap)
+            {
+                return Mathf.InverseLerp(0.0f, maxValue, Mathf.Clamp(value, 0.0f, maxValue));
+            }
+            return ToZeroLogSliderValue(Mathf.Clamp(value, minValue, maxValue), MinPositiveLodSplatCap, maxValue);
+        }
+        return ToLogSliderValue(value, Mathf.Max(1.0f, minValue), maxValue);
+    }
+
+    float FromLodSplatCapSliderValue(float sliderValue)
+    {
+        float minValue = GetLodSplatCapSliderMin();
+        float maxValue = GetLodSplatCapSliderMax();
+        if (maxValue <= minValue)
+        {
+            return minValue;
+        }
+        if (minValue <= 0.0f)
+        {
+            if (maxValue <= MinPositiveLodSplatCap)
+            {
+                return Mathf.Lerp(0.0f, maxValue, Mathf.Clamp01(sliderValue));
+            }
+            return FromZeroLogSliderValue(sliderValue, MinPositiveLodSplatCap, maxValue);
+        }
+        return FromLogSliderValue(sliderValue, Mathf.Max(1.0f, minValue), maxValue);
     }
 
     float GetSliderDisplayValue(int sliderKind, float actualValue)
@@ -406,7 +889,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         switch (sliderKind)
         {
             case SliderAlphaCutoff: return ToLogSliderValue(actualValue, MinAlphaCutoff, MaxAlphaCutoff);
-            case SliderLODSplatCap: return ToZeroLogSliderValue(actualValue, MinPositiveLodSplatCap, GetLodSplatCapSliderMax());
+            case SliderLODSplatCap: return ToLodSplatCapSliderValue(actualValue);
             default: return actualValue;
         }
     }
@@ -416,7 +899,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         switch (sliderKind)
         {
             case SliderAlphaCutoff: return FromLogSliderValue(sliderValue, MinAlphaCutoff, MaxAlphaCutoff);
-            case SliderLODSplatCap: return FromZeroLogSliderValue(sliderValue, MinPositiveLodSplatCap, GetLodSplatCapSliderMax());
+            case SliderLODSplatCap: return FromLodSplatCapSliderValue(sliderValue);
             default: return sliderValue;
         }
     }
@@ -435,6 +918,20 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
 
     TextMeshProUGUI ResolveSubtitleText() { return subtitleText != null ? subtitleText : FindSubtitleText(); }
     TextMeshProUGUI ResolveCustomSubtitleText() { return customSubtitleText != null ? customSubtitleText : FindCustomSubtitleText(); }
+    TextMeshProUGUI FindGalleryHeaderText(Transform galleryColumn)
+    {
+        Transform headerTransform = galleryColumn != null ? galleryColumn.Find("Gallery Header Row/Gallery Header") : null;
+        return headerTransform != null ? headerTransform.GetComponent<TextMeshProUGUI>() : null;
+    }
+    TextMeshProUGUI ResolveGalleryHeaderText()
+    {
+        if (galleryHeaderText != null)
+        {
+            return galleryHeaderText;
+        }
+        Transform galleryColumn = transform.Find("Panel/Body Row/Gallery Column");
+        return FindGalleryHeaderText(galleryColumn);
+    }
 
     void RefreshLocalizedLabels()
     {
@@ -445,19 +942,18 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         SetActive(customSubtitle, !string.IsNullOrEmpty(customSubtitleValue));
         SetLocalizedText(sortingSectionText, "Sorting Settings", "ソート設定");
         SetLocalizedText(cameraQuantizationLabelText, "Camera move amount to trigger resort", "再ソートするカメラ移動量");
-        SetLocalizedText(alwaysUpdateLabelText, "Sort every frame", "毎フレームソート");
         SetLocalizedText(materialSectionText, "Material Settings", "マテリアル設定");
-        SetLocalizedText(shBandLabelText, "SH Band (global)", "SH バンド (共有)");
-        SetLocalizedText(vrcLightVolumesLabelText, "VRC Light Volumes (global)", "VRC Light Volumes (共有)");
+        SetLocalizedText(shBandLabelText, "SH Band", "SH バンド");
+        SetLocalizedText(vrcLightVolumesLabelText, "VRC Light Volumes", "VRC Light Volumes");
         SetLocalizedText(lightVolumeIntensityLabelText, "Light Volume Intensity", "ライトボリューム強度");
         SetLocalizedText(antiAliasingLabelText, "Antialiasing", "アンチエイリアス");
-        SetLocalizedText(gaussianScaleLabelText, "Gaussian Scale (global)", "ガウススケール (共有)");
+        SetLocalizedText(gaussianScaleLabelText, "Gaussian Scale", "ガウススケール");
         SetLocalizedText(alphaCutoffLabelText, "Alpha Cutoff\n(lower = better quality)", "アルファカットオフ\n(低いほど高品質)");
         SetLocalizedText(alphaCullLabelText, "Alpha Cull\n(higher = fewer splats)", "アルファカリング\n(高いほどスプラット減少)");
         SetLocalizedText(lodCullLabelText, "LOD Splat Cap", "LOD スプラット上限");
         SetLocalizedText(qualitySectionText, "Quality", "品質");
         SetLocalizedText(languageSectionText, "Language", "言語");
-        SetLocalizedText(splatSectionText, "Splat Object (global)", "スプラットオブジェクト (共有)");
+        SetLocalizedText(ResolveGalleryHeaderText(), "Gallery (global)", "ギャラリー (全体)");
         RefreshLanguageButtons();
     }
 
@@ -467,11 +963,34 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         if (japaneseLanguageButton != null) { SetInteractable(japaneseLanguageButton, true); ApplyButtonVisual(japaneseLanguageButton, "日本語", selectedLanguage == LanguageJapanese ? _selectedSplatColor : _defaultSplatColor); }
     }
 
+    bool AdvancedSettingsVisible() { return showAdvancedSettings || advancedSettingsButton == null; }
+
+    void RefreshAdvancedSettingsButton()
+    {
+        if (advancedSettingsButton != null)
+        {
+            SetInteractable(advancedSettingsButton, true);
+            ApplyButtonVisual(advancedSettingsButton, AdvancedSettingsLabel(), showAdvancedSettings ? _selectedSplatColor : _defaultSplatColor);
+        }
+    }
+
+    void SetAdvancedMaterialControlsVisible(bool visible)
+    {
+        SetActive(materialSectionText, visible);
+        SetParentActive(shBandLabelText, visible);
+        SetParentActive(vrcLightVolumesLabelText, visible);
+        SetParentActive(lightVolumeIntensityLabelText, visible);
+        SetParentActive(antiAliasingLabelText, visible);
+        SetParentActive(gaussianScaleLabelText, visible);
+        SetParentActive(alphaCutoffLabelText, visible);
+        SetParentActive(alphaCullLabelText, visible);
+        SetParentActive(lodCullLabelText, visible && ShouldShowLODControls());
+    }
+
     void RefreshSortingVisibility()
     {
         SetActive(sortingSectionText, false);
         SetParentActive(cameraQuantizationLabelText, false);
-        SetParentActive(alwaysUpdateLabelText, false);
     }
 
     void FindRenderer()
@@ -483,140 +1002,6 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         GameObject rendererObject = GameObject.Find("GaussianSplatRenderer");
         if (rendererObject != null) gaussianSplatRenderer = rendererObject.GetComponent<GaussianSplatRenderer>();
 #endif
-    }
-
-    static bool SplatObjectArraysMatch(GaussianSplatObject[] left, GaussianSplatObject[] right)
-    {
-        if (left == right) return true;
-        if (left == null || right == null || left.Length != right.Length) return false;
-        for (int i = 0; i < left.Length; i++) if (left[i] != right[i]) return false;
-        return true;
-    }
-
-#if UNITY_EDITOR && !COMPILER_UDONSHARP
-    static string GetHierarchySortKey(Transform transform)
-    {
-        string key = string.Empty;
-        while (transform != null)
-        {
-            key = transform.GetSiblingIndex().ToString("D6") + "/" + key;
-            transform = transform.parent;
-        }
-        return key;
-    }
-
-    static int CompareSceneSplatObjects(GaussianSplatObject left, GaussianSplatObject right)
-    {
-        if (left == right) return 0;
-        if (left == null) return 1;
-        if (right == null) return -1;
-        int hierarchyCompare = string.CompareOrdinal(GetHierarchySortKey(left.transform), GetHierarchySortKey(right.transform));
-        return hierarchyCompare != 0 ? hierarchyCompare : left.GetInstanceID().CompareTo(right.GetInstanceID());
-    }
-#endif
-
-    void RefreshSceneSplatObjects()
-    {
-#if UNITY_EDITOR && !COMPILER_UDONSHARP
-        List<GaussianSplatObject> sceneObjects = new List<GaussianSplatObject>();
-        GaussianSplatObject[] allObjects = Resources.FindObjectsOfTypeAll<GaussianSplatObject>();
-        for (int i = 0; i < allObjects.Length; i++)
-        {
-            GaussianSplatObject currentObject = allObjects[i];
-            if (!IsSceneObject(currentObject) || currentObject.gameObject.scene != gameObject.scene)
-            {
-                continue;
-            }
-            sceneObjects.Add(currentObject);
-        }
-        sceneObjects.Sort(CompareSceneSplatObjects);
-        _sceneSplatObjects = sceneObjects.ToArray();
-        if (!SplatObjectArraysMatch(cachedSceneSplatObjects, _sceneSplatObjects))
-        {
-            cachedSceneSplatObjects = _sceneSplatObjects;
-        }
-#else
-        if (cachedSceneSplatObjects != null && cachedSceneSplatObjects.Length > 0)
-        {
-            _sceneSplatObjects = cachedSceneSplatObjects;
-            return;
-        }
-#if COMPILER_UDONSHARP
-        _sceneSplatObjects = new GaussianSplatObject[0];
-#else
-        _sceneSplatObjects = Object.FindObjectsOfType<GaussianSplatObject>(true);
-#endif
-#endif
-    }
-
-    int FindSceneSplatObjectIndex(GaussianSplatObject targetSplatObject)
-    {
-        if (targetSplatObject == null || _sceneSplatObjects == null)
-        {
-            return -1;
-        }
-        for (int i = 0; i < _sceneSplatObjects.Length; i++)
-        {
-            if (_sceneSplatObjects[i] == targetSplatObject)
-            {
-                return i;
-            }
-        }
-        return -1;
-    }
-
-    void EnsureLocalOwnership() { if (Networking.LocalPlayer != null) Networking.SetOwner(Networking.LocalPlayer, gameObject); }
-    void RequestSyncedSelectionUpdate() { if (Networking.LocalPlayer != null) RequestSerialization(); }
-
-    void ApplySplatObjectSelection(GaussianSplatObject selectedSplatObject)
-    {
-        if (selectedSplatObject == null || _sceneSplatObjects == null)
-        {
-            return;
-        }
-        selectedSplatObject.gameObject.SetActive(true);
-        if (gaussianSplatRenderer != null)
-        {
-            gaussianSplatRenderer.SelectSplatObject(selectedSplatObject);
-        }
-        else
-        {
-            selectedSplatObject.NotifyRendererEnabled();
-        }
-    }
-
-    bool ApplySyncedSplatObjectSelection()
-    {
-        RefreshSceneSplatObjects();
-        if (_sceneSplatObjects == null || syncedSelectedSplatObjectIndex < 0 || syncedSelectedSplatObjectIndex >= _sceneSplatObjects.Length)
-        {
-            return false;
-        }
-        GaussianSplatObject selectedSplatObject = _sceneSplatObjects[syncedSelectedSplatObjectIndex];
-        if (selectedSplatObject == null)
-        {
-            return false;
-        }
-        ApplySplatObjectSelection(selectedSplatObject);
-        return true;
-    }
-
-    void SelectSplatObject(GaussianSplatObject selectedSplatObject)
-    {
-        if (!CanChangeGlobalVariables())
-        {
-            return;
-        }
-        RefreshSceneSplatObjects();
-        int selectedIndex = FindSceneSplatObjectIndex(selectedSplatObject);
-        if (selectedIndex < 0)
-        {
-            return;
-        }
-        EnsureLocalOwnership();
-        syncedSelectedSplatObjectIndex = selectedIndex;
-        ApplySyncedSplatObjectSelection();
-        RequestSyncedSelectionUpdate();
     }
 
     void ApplyButtonVisual(Button button, string labelText, Color backgroundColor)
@@ -645,51 +1030,6 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         }
         TextMeshProUGUI label = button.GetComponentInChildren<TextMeshProUGUI>();
         SetText(label, labelText);
-    }
-
-    string SanitizeRichText(string value)
-    {
-        return string.IsNullOrEmpty(value) ? string.Empty : value.Replace("<", "[").Replace(">", "]");
-    }
-
-    string GetSplatButtonLabel(GaussianSplatObject splatObject, bool isRendered, string renderingSuffix)
-    {
-        string label = SanitizeRichText(splatObject.GetDisplayName());
-        if (isRendered)
-        {
-            label += renderingSuffix;
-        }
-        string splatDescription = splatObject.GetDescription();
-        return string.IsNullOrEmpty(splatDescription) ? label : label + "\n<size=10>" + SanitizeRichText(splatDescription) + "</size>";
-    }
-
-    void SetButton(Button button, bool enabled, string label, Color enabledColor, Color disabledColor)
-    {
-        if (button == null)
-        {
-            return;
-        }
-        if (!button.gameObject.activeSelf)
-        {
-            button.gameObject.SetActive(true);
-        }
-        SetInteractable(button, enabled);
-        ApplyButtonVisual(button, label, enabled ? enabledColor : disabledColor);
-    }
-
-    void SetSplatListVisible(bool visible)
-    {
-        SetActive(splatSectionText, visible);
-        SetActive(splatScrollUpButton, visible);
-        SetActive(splatScrollDownButton, visible);
-        if (splatButtons == null)
-        {
-            return;
-        }
-        for (int i = 0; i < splatButtons.Length; i++)
-        {
-            SetActive(splatButtons[i], visible);
-        }
     }
 
     void EnsureLayoutCache()
@@ -722,32 +1062,41 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         {
             return;
         }
-        _defaultCanvasWidth = _canvasRect != null ? _canvasRect.sizeDelta.x : DefaultPanelWidth;
-        _defaultPanelWidth = _panelRect != null ? _panelRect.sizeDelta.x : DefaultPanelWidth;
         _defaultBackgroundScale = _backgroundTransform != null ? _backgroundTransform.localScale : Vector3.one;
         _layoutDefaultsInitialized = true;
     }
 
-    void RefreshRenderingModeLayout(bool combinedMode)
+    void ApplyPanelLayout()
     {
         EnsureLayoutCache();
-        if (_splatColumnObject != null && _splatColumnObject.activeSelf == combinedMode)
+        if (_splatColumnObject != null && _splatColumnObject.activeSelf)
         {
-            _splatColumnObject.SetActive(!combinedMode);
+            _splatColumnObject.SetActive(false);
         }
-        float targetWidth = combinedMode ? CombinedPanelWidth : _defaultCanvasWidth;
-        if (_canvasRect != null && !Mathf.Approximately(_canvasRect.sizeDelta.x, targetWidth))
+        float targetPanelWidth = GalleryActive() ? GalleryPanelWidth : PanelWidth;
+        if (_canvasRect != null && !Mathf.Approximately(_canvasRect.sizeDelta.x, targetPanelWidth))
         {
-            _canvasRect.sizeDelta = new Vector2(targetWidth, _canvasRect.sizeDelta.y);
+            _canvasRect.sizeDelta = new Vector2(targetPanelWidth, _canvasRect.sizeDelta.y);
         }
-        float targetPanelWidth = combinedMode ? CombinedPanelWidth : _defaultPanelWidth;
         if (_panelRect != null && !Mathf.Approximately(_panelRect.sizeDelta.x, targetPanelWidth))
         {
             _panelRect.sizeDelta = new Vector2(targetPanelWidth, _panelRect.sizeDelta.y);
         }
-        if (_backgroundTransform != null)
+        // Size + center the opaque background mesh to the panel's live world bounds, so it covers the whole
+        // panel (the gallery section grows it taller) and nothing floats over the splats.
+        if (_backgroundTransform != null && _panelRect != null)
         {
-            Vector3 targetScale = new Vector3(targetWidth + BackgroundPadding, _defaultBackgroundScale.y, _defaultBackgroundScale.z);
+            Vector3[] corners = new Vector3[4];
+            _panelRect.GetWorldCorners(corners);
+            Transform bgParent = _backgroundTransform.parent;
+            Vector3 worldCenter = (corners[0] + corners[2]) * 0.5f;
+            Vector3 localCenter = bgParent != null ? bgParent.InverseTransformPoint(worldCenter) : worldCenter;
+            localCenter.z = _backgroundTransform.localPosition.z;
+            if ((_backgroundTransform.localPosition - localCenter).sqrMagnitude > 0.0001f)
+            {
+                _backgroundTransform.localPosition = localCenter;
+            }
+            Vector3 targetScale = new Vector3(_panelRect.rect.width + BackgroundPadding, _panelRect.rect.height + BackgroundPadding, _defaultBackgroundScale.z);
             if (_backgroundTransform.localScale != targetScale)
             {
                 _backgroundTransform.localScale = targetScale;
@@ -755,70 +1104,17 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         }
     }
 
-    void RefreshSplatButtons()
-    {
-        int visibleButtonCount = splatButtons == null ? 0 : splatButtons.Length;
-        bool combinedMode = gaussianSplatRenderer != null && gaussianSplatRenderer.IsCombinedRenderingMode();
-        SetSplatListVisible(!combinedMode);
-        if (visibleButtonCount == 0 || combinedMode)
-        {
-            return;
-        }
-        int totalSplatCount = _sceneSplatObjects == null ? 0 : _sceneSplatObjects.Length;
-        if (totalSplatCount == 0)
-        {
-            for (int i = 0; i < visibleButtonCount; i++)
-            {
-                SetButton(splatButtons[i], false, string.Empty, _defaultSplatColor, _scrollDisabledColor);
-            }
-            SetButton(splatScrollUpButton, false, ScrollLabel(true), _scrollEnabledColor, _scrollDisabledColor);
-            SetButton(splatScrollDownButton, false, ScrollLabel(false), _scrollEnabledColor, _scrollDisabledColor);
-            return;
-        }
-        int maxStartIndex = Mathf.Max(0, totalSplatCount - visibleButtonCount);
-        _splatListStartIndex = Mathf.Clamp(_splatListStartIndex, 0, maxStartIndex);
-        GameObject currentSplatObject = gaussianSplatRenderer != null ? gaussianSplatRenderer.GetCurrentSplatObject() : null;
-        string renderingSuffix = Localize(" (Rendering)", " (表示中)");
-        for (int i = 0; i < visibleButtonCount; i++)
-        {
-            Button slotButton = splatButtons[i];
-            int splatDataIndex = _splatListStartIndex + i;
-            if (slotButton == null)
-            {
-                continue;
-            }
-            if (splatDataIndex >= totalSplatCount)
-            {
-                SetButton(slotButton, false, string.Empty, _defaultSplatColor, _scrollDisabledColor);
-                continue;
-            }
-            GaussianSplatObject splatObject = _sceneSplatObjects[splatDataIndex];
-            if (splatObject == null)
-            {
-                SetButton(slotButton, false, string.Empty, _defaultSplatColor, _scrollDisabledColor);
-                continue;
-            }
-            bool isRendered = currentSplatObject == splatObject.gameObject;
-            string label = GetSplatButtonLabel(splatObject, isRendered, renderingSuffix);
-            SetButton(slotButton, CanChangeGlobalVariables(), label, isRendered ? _selectedSplatColor : _defaultSplatColor, _scrollDisabledColor);
-        }
-        SetButton(splatScrollUpButton, _splatListStartIndex > 0, ScrollLabel(true), _scrollEnabledColor, _scrollDisabledColor);
-        SetButton(splatScrollDownButton, _splatListStartIndex < maxStartIndex, ScrollLabel(false), _scrollEnabledColor, _scrollDisabledColor);
-    }
-
-    void RefreshSortingControls()
-    {
-        SetText(cameraQuantizationText, FormatFloat(gaussianSplatRenderer.GetCameraPositionQuantization()));
-        if (alwaysUpdateButton != null)
-        {
-            bool alwaysUpdate = gaussianSplatRenderer.GetAlwaysUpdate();
-            SetInteractable(alwaysUpdateButton, !gaussianSplatRenderer.IsCombinedRenderingMode());
-            ApplyButtonVisual(alwaysUpdateButton, ToggleLabel(alwaysUpdate), alwaysUpdate ? _toggleEnabledColor : _toggleDisabledColor);
-        }
-    }
-
     void RefreshMaterialControls()
     {
+        RefreshAdvancedSettingsButton();
+        bool advancedVisible = AdvancedSettingsVisible();
+        SetAdvancedMaterialControlsVisible(advancedVisible);
+        RefreshQualityButtons();
+        if (!advancedVisible)
+        {
+            return;
+        }
+
 #if UNITY_EDITOR && !COMPILER_UDONSHARP
         bool allowWriteBack = EditorApplication.isPlaying;
 #else
@@ -827,7 +1123,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         if (vrcLightVolumesButton != null)
         {
             bool enabled = gaussianSplatRenderer.GetUseVrcLightVolumes();
-            SetInteractable(vrcLightVolumesButton, CanChangeGlobalVariables());
+            SetInteractable(vrcLightVolumesButton, true);
             ApplyButtonVisual(vrcLightVolumesButton, ToggleLabel(enabled), enabled ? _toggleEnabledColor : _toggleDisabledColor);
         }
         SyncSlider(shBandSlider, shBandText, SliderShBand, SliderCanWriteBack(SliderShBand, allowWriteBack));
@@ -841,7 +1137,6 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         {
             SyncSlider(lodCullSlider, lodCullText, SliderLODSplatCap, allowWriteBack);
         }
-        RefreshQualityButtons();
     }
 
     void RefreshQualityButtons()
@@ -1028,23 +1323,6 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         return FormatFloat(currentValue);
     }
 
-    void SelectSplatSlot(int slotIndex)
-    {
-        if (gaussianSplatRenderer != null && gaussianSplatRenderer.IsCombinedRenderingMode())
-        {
-            return;
-        }
-        RefreshSceneSplatObjects();
-        int splatDataIndex = _splatListStartIndex + slotIndex;
-        GaussianSplatObject selectedSplatObject = _sceneSplatObjects != null && splatDataIndex >= 0 && splatDataIndex < _sceneSplatObjects.Length ? _sceneSplatObjects[splatDataIndex] : null;
-        if (selectedSplatObject == null)
-        {
-            return;
-        }
-        SelectSplatObject(selectedSplatObject);
-        RefreshUI();
-    }
-
     void StepCameraQuantization(float delta)
     {
         if (gaussianSplatRenderer == null)
@@ -1061,93 +1339,269 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
         {
             return;
         }
-        if (!CanChangeGlobalVariables())
-        {
-            return;
-        }
         gaussianSplatRenderer.SetGaussianScale(gaussianSplatRenderer.gaussianScale + delta);
-        RefreshUI();
-    }
-
-    public void SelectSplatSlot0() { SelectSplatSlot(0); }
-    public void SelectSplatSlot1() { SelectSplatSlot(1); }
-    public void SelectSplatSlot2() { SelectSplatSlot(2); }
-    public void SelectSplatSlot3() { SelectSplatSlot(3); }
-    public void SelectSplatSlot4() { SelectSplatSlot(4); }
-    public void SelectSplatSlot5() { SelectSplatSlot(5); }
-    public void SelectSplatSlot6() { SelectSplatSlot(6); }
-    public void SelectSplatSlot7() { SelectSplatSlot(7); }
-    public void SelectSplatSlot8() { SelectSplatSlot(8); }
-    public void SelectSplatSlot9() { SelectSplatSlot(9); }
-    public void SelectSplatSlot10() { SelectSplatSlot(10); }
-    public void SelectSplatSlot11() { SelectSplatSlot(11); }
-    public void SelectSplatSlot12() { SelectSplatSlot(12); }
-    public void SelectSplatSlot13() { SelectSplatSlot(13); }
-    public void SelectSplatSlot14() { SelectSplatSlot(14); }
-    public void SelectSplatSlot15() { SelectSplatSlot(15); }
-
-    public void ScrollSplatListUp() { _splatListStartIndex = Mathf.Max(0, _splatListStartIndex - 1); RefreshUI(); }
-
-    public void ScrollSplatListDown()
-    {
-        int visibleButtonCount = splatButtons == null ? 0 : splatButtons.Length;
-        int totalSplatCount = _sceneSplatObjects == null ? 0 : _sceneSplatObjects.Length;
-        _splatListStartIndex = Mathf.Min(Mathf.Max(0, totalSplatCount - visibleButtonCount), _splatListStartIndex + 1);
-        RefreshUI();
-    }
-
-    public override void OnDeserialization()
-    {
-        if (gaussianSplatRenderer == null || !gaussianSplatRenderer.IsCombinedRenderingMode())
-        {
-            ApplySyncedSplatObjectSelection();
-        }
         RefreshUI();
     }
 
     public void RefreshUI()
     {
         FindRenderer();
-        RefreshSceneSplatObjects();
         RefreshLocalizedLabels();
         RefreshSortingVisibility();
-        bool combinedMode = gaussianSplatRenderer != null && gaussianSplatRenderer.IsCombinedRenderingMode();
-        RefreshRenderingModeLayout(combinedMode);
+        ApplyPanelLayout();
+        RefreshGallery();
         if (gaussianSplatRenderer == null)
         {
-            SetText(currentSplatText, CurrentSplatNoneLabel() + "\n" + RenderedSplatCountLabel(0));
+            SetText(currentSplatText, RenderedSplatCountLabel(0));
             SetSliderWithoutNotify(alphaCutoffSlider, GetSliderDisplayValue(SliderAlphaCutoff, DefaultAlphaCutoff));
             SetText(alphaCutoffText, FormatFloat(DefaultAlphaCutoff));
             SetSliderWithoutNotify(alphaCullSlider, DefaultAlphaCull);
             SetText(alphaCullText, FormatFloat(DefaultAlphaCull));
             SetSliderWithoutNotify(lodCullSlider, GetSliderDisplayValue(SliderLODSplatCap, DefaultLODSplatCap));
             SetText(lodCullText, DefaultLODSplatCap.ToString());
-            RefreshSplatButtons();
             return;
         }
-        if (currentSplatText != null)
-        {
-            string modeLabel = combinedMode ? Localize("Rendering Mode: Combined", "表示モード: 統合") : Localize("Rendering Mode: Single", "表示モード: 単体");
-            string currentSplatName = gaussianSplatRenderer.GetCurrentSplatName();
-            string renderedCountLabel = RenderedSplatCountLabel(gaussianSplatRenderer.GetCurrentRenderedSplatCount());
-            SetText(currentSplatText, combinedMode
-                ? modeLabel + "\n" + renderedCountLabel
-                : modeLabel + "\n" + (currentSplatName == "None" ? CurrentSplatNoneLabel() : Localize("Current Splat: ", "現在のスプラット: ") + currentSplatName) + "\n" + renderedCountLabel);
-        }
+        SetText(currentSplatText, RenderedSplatCountLabel(gaussianSplatRenderer.GetCurrentRenderedSplatCount()));
         SetText(gaussianScaleText, FormatFloat(gaussianSplatRenderer.gaussianScale));
         SetText(alphaCutoffText, FormatFloat(gaussianSplatRenderer.alphaCutoff));
         SetText(alphaCullText, FormatFloat(gaussianSplatRenderer.alphaCull));
         SetText(lodCullText, SliderValueText(SliderLODSplatCap, gaussianSplatRenderer.GetEffectiveCombinedLodSplatBudget()));
         RefreshMaterialControls();
-        RefreshSplatButtons();
         _sliderValuesInitialized = true;
+    }
+
+    bool HasGalleryObjects()
+    {
+        if (galleryObjects == null)
+        {
+            return false;
+        }
+        for (int i = 0; i < galleryObjects.Length; i++)
+        {
+            if (galleryObjects[i] != null)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Gallery UI and one-at-a-time visibility enforcement exist only when the inspector toggle is on and the
+    // manual list holds at least one real object. Disabling gallery keeps the list but stops touching objects.
+    bool GalleryActive()
+    {
+        return galleryEnabled && HasGalleryObjects();
+    }
+
+    void RefreshGallery()
+    {
+        ApplyGalleryVisibility();
+        bool active = GalleryActive();
+        if (gallerySection != null && gallerySection.activeSelf != active)
+        {
+            gallerySection.SetActive(active);
+        }
+        RefreshGalleryMasterLock();
+        if (!active || galleryEntries == null)
+        {
+            return;
+        }
+        int count = galleryObjects.Length;
+        int selected = NormalizedGallerySelectedIndex();
+        for (int i = 0; i < galleryEntries.Length; i++)
+        {
+            GalleryEntry entry = galleryEntries[i];
+            if (entry == null)
+            {
+                continue;
+            }
+#if UNITY_EDITOR && !COMPILER_UDONSHARP
+            ApplyGalleryEntryEditorLayout(entry);
+#endif
+            bool used = i < count && galleryObjects[i] != null;
+            if (entry.gameObject.activeSelf != used)
+            {
+                entry.gameObject.SetActive(used);
+            }
+            if (!used)
+            {
+                continue;
+            }
+            entry.ui = this;
+            entry.index = i;
+            SetText(entry.nameText, GalleryObjectName(i));
+            SetText(entry.countText, GalleryObjectSplatCountText(i));
+            SetText(entry.descriptionText, GalleryObjectDescription(i));
+            if (entry.button != null)
+            {
+                SetInteractable(entry.button, true);
+            }
+            if (entry.background != null)
+            {
+                bool selectedEntry = i == selected;
+                Color rowColor = selectedEntry ? _gallerySelectedColor : _galleryRowColor;
+                if (entry.background.color != rowColor)
+                {
+                    entry.background.color = rowColor;
+                }
+                if (entry.button != null)
+                {
+                    ColorBlock colors = entry.button.colors;
+                    colors.normalColor = rowColor;
+                    colors.highlightedColor = selectedEntry ? _gallerySelectedHoverColor : _galleryRowHoverColor;
+                    colors.pressedColor = _gallerySelectedHoverColor;
+                    colors.selectedColor = colors.highlightedColor;
+                    colors.disabledColor = rowColor;
+                    if (!entry.button.colors.Equals(colors))
+                    {
+                        entry.button.colors = colors;
+                    }
+                }
+            }
+        }
+    }
+
+    void RefreshGalleryMasterLock()
+    {
+        bool isMaster = Networking.LocalPlayer != null && Networking.LocalPlayer.isMaster;
+        SetInteractable(galleryMasterLockButton, isMaster); // only the master can toggle the lock
+        SetText(galleryMasterNameLabel, _galleryMasterName);
+        SetText(galleryMasterLockTitle, Localize("Master lock:", "マスターロック:"));
+        SetText(galleryMasterLockLabel, galleryMasterLock ? "ON" : "OFF");
+        if (galleryMasterLockButton != null)
+        {
+            Color c = GalleryMasterLockColor();
+            Color hover = new Color(Mathf.Min(1.0f, c.r + 0.08f), Mathf.Min(1.0f, c.g + 0.08f), Mathf.Min(1.0f, c.b + 0.08f), 1.0f);
+            ColorBlock cb = galleryMasterLockButton.colors;
+            cb.normalColor = c; cb.highlightedColor = hover; cb.selectedColor = hover; cb.pressedColor = c; cb.disabledColor = c;
+            if (!galleryMasterLockButton.colors.Equals(cb)) galleryMasterLockButton.colors = cb;
+            if (galleryMasterLockButton.targetGraphic != null && galleryMasterLockButton.targetGraphic.color != c)
+            {
+                galleryMasterLockButton.targetGraphic.color = c;
+            }
+        }
+    }
+
+    Color GalleryMasterLockColor()
+    {
+        // Green means lock is active; off is intentionally neutral, not another enabled-looking state.
+        return galleryMasterLock ? _toggleEnabledColor : new Color(0.28f, 0.30f, 0.34f, 1.0f);
+    }
+
+    // Master lock is optional (galleryMasterLock): when on, only the instance master may change the selection.
+    bool GalleryCanModify() { return !galleryMasterLock || Networking.LocalPlayer == null || Networking.LocalPlayer.isMaster; }
+    void GalleryTakeOwnership() { if (Networking.LocalPlayer != null && !Networking.IsOwner(gameObject)) Networking.SetOwner(Networking.LocalPlayer, gameObject); }
+
+    string GalleryObjectName(int index)
+    {
+        if (galleryObjects == null || index < 0 || index >= galleryObjects.Length || galleryObjects[index] == null) return "";
+        string n = galleryObjects[index].splatName;
+        if (n == null || n.Length == 0) n = galleryObjects[index].gameObject.name; // fall back to the object name
+        return n;
+    }
+
+    string GalleryObjectSplatCountText(int index)
+    {
+        if (galleryObjects == null || index < 0 || index >= galleryObjects.Length || galleryObjects[index] == null) return "";
+        int count = galleryObjects[index].GetMaxLOD0SplatCount();
+        if (count <= 0) return "";
+        return CompactSplatCount(count) + Localize(" splats", " Splat");
+    }
+
+    string CompactSplatCount(int count)
+    {
+        if (count >= 1000000) return CompactCount(count, 1000000, "M");
+        if (count >= 1000) return CompactCount(count, 1000, "K");
+        return count.ToString();
+    }
+
+    string CompactCount(int count, int unit, string suffix)
+    {
+        int tenths = (count * 10 + unit / 2) / unit;
+        int whole = tenths / 10;
+        int fraction = tenths - whole * 10;
+        return fraction == 0 ? whole + suffix : whole + "." + fraction + suffix;
+    }
+
+    string GalleryObjectDescription(int index)
+    {
+        if (galleryObjects == null || index < 0 || index >= galleryObjects.Length || galleryObjects[index] == null) return "";
+        string d = galleryObjects[index].description;
+        return d != null ? d : "";
+    }
+
+    int NormalizedGallerySelectedIndex()
+    {
+        if (galleryObjects == null || galleryObjects.Length == 0)
+        {
+            return -1;
+        }
+        int selected = Mathf.Clamp(_gallerySelectedIndex, 0, galleryObjects.Length - 1);
+        if (galleryObjects[selected] == null)
+        {
+            selected = -1;
+            for (int i = 0; i < galleryObjects.Length; i++)
+            {
+                if (galleryObjects[i] != null)
+                {
+                    selected = i;
+                    break;
+                }
+            }
+        }
+        if (selected != _gallerySelectedIndex)
+        {
+            _gallerySelectedIndex = selected;
+        }
+        return selected;
+    }
+
+    public void SelectGalleryIndex(int index)
+    {
+        if (!GalleryCanModify()) return;
+        if (galleryObjects == null || index < 0 || index >= galleryObjects.Length) return;
+        GalleryTakeOwnership();
+        _gallerySelectedIndex = index;
+        ApplyGalleryVisibility();
+        RequestSerialization();
+        RefreshUI();
+    }
+
+    // When the gallery is enabled, exactly one LISTED object is shown; the rest of the list is hidden. When the
+    // inspector toggle is off, the list/selection are left intact and no listed object active state is changed.
+    // Objects that are not in the list are never touched. Runs in edit mode too. Visibility is just GameObject
+    // active state - the renderer's combine already excludes inactive objects, so the gallery never touches the renderer.
+    void ApplyGalleryVisibility()
+    {
+        if (!GalleryActive())
+        {
+            return;
+        }
+        int selected = NormalizedGallerySelectedIndex();
+        if (selected < 0)
+        {
+            return;
+        }
+        GaussianSplatObject selectedObject = galleryObjects[selected];
+        for (int i = 0; i < galleryObjects.Length; i++)
+        {
+            GaussianSplatObject obj = galleryObjects[i];
+            if (obj == null)
+            {
+                continue;
+            }
+            bool show = obj == selectedObject;
+            if (obj.gameObject.activeSelf != show)
+            {
+                obj.gameObject.SetActive(show);
+            }
+        }
     }
 
     public void IncreaseCameraQuantization() { StepCameraQuantization(cameraQuantizationStep); }
     public void DecreaseCameraQuantization() { StepCameraQuantization(-cameraQuantizationStep); }
 
-    public void ToggleAlwaysUpdate() { if (gaussianSplatRenderer == null) return; gaussianSplatRenderer.ToggleAlwaysUpdate(); RefreshUI(); }
-    public void ToggleVrcLightVolumes() { if (gaussianSplatRenderer == null || !CanChangeGlobalVariables()) return; gaussianSplatRenderer.ToggleVrcLightVolumes(); RefreshUI(); }
+    public void ToggleVrcLightVolumes() { if (gaussianSplatRenderer == null) return; gaussianSplatRenderer.ToggleVrcLightVolumes(); RefreshUI(); }
 
     public void IncreaseGaussianScale() { StepGaussianScale(gaussianScaleStep); }
     public void DecreaseGaussianScale() { StepGaussianScale(-gaussianScaleStep); }
@@ -1155,6 +1609,7 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
     void SetLanguage(int language) { selectedLanguage = Mathf.Clamp(language, LanguageEnglish, LanguageJapanese); RefreshUI(); }
     public void SetLanguageEnglish() { SetLanguage(LanguageEnglish); }
     public void SetLanguageJapanese() { SetLanguage(LanguageJapanese); }
+    public void ToggleAdvancedSettings() { showAdvancedSettings = !showAdvancedSettings; RefreshUI(); }
 
     public void SetQualityVeryLow() { if (gaussianSplatRenderer == null) return; gaussianSplatRenderer.SetQualityVeryLow(); RefreshUI(); }
     public void SetQualityLow() { if (gaussianSplatRenderer == null) return; gaussianSplatRenderer.SetQualityLow(); RefreshUI(); }

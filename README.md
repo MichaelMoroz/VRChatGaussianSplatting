@@ -2,206 +2,136 @@
 
 ![Example Scene View](image.png)
 
-Gaussian splatting for VRChat worlds, with runtime sorted rendering, standalone precomputed imports, and automatic editor Scene view sorting.
+Gaussian splatting for VRChat worlds: runtime camera-sorted rendering through Udon, a splat importer, an in-world gallery and control UI, automatic editor Scene-view sorting, and editor tools for terrain colliders and re-importing.
 
-## Current Features
+## Features
 
 - Sorted-only runtime rendering through `GaussianSplatRenderer`
-- Automatic editor-only Scene view sorting for every discovered `GaussianSplatObject`
-- Importer for `.ply` splats from `Gaussian Splatting / Import PLY Splats...`
-- Optional standalone precomputed-sorting import path for splats that should render without `GaussianSplatRenderer`
-- Automatic scene renderer and world-space UI generation when Gaussian splats are present
-- Single-splat and combined runtime rendering modes
+- Importer for `.ply` and `.spz` splats from `Gaussian Splatting / Import Splats...`
+- Import modes: **LOD** (combined, with a level-of-detail hierarchy) and **Standalone** (self-rendering, precomputed sorting)
+- Combined runtime rendering — all active splats transformed into world space and sorted together
+- **LOD hierarchy** — an import-time LOD pyramid; the runtime selects per-chunk detail against a scene-wide, per-platform splat budget, with in-world quality tiers and an LOD Splat Cap
+- In-world **gallery** UI: list splats, show one at a time, optional master lock
+- Automatic scene renderer + world-space control UI when splats are present
+- Automatic, editor-only Scene-view sorting for every `GaussianSplatObject`
+- Editor tools: **terrain collider** generation, and **re-import** (exact / edit-settings) from a splat's stored import metadata
 - Android build conversion to no-geometry, fake-sRGB splat shaders
-- Global/networked controls for:
-  - current splat selection
-  - SH band
-  - VRC Light Volumes
-  - Gaussian scale
-- Local controls for:
-  - min/max sort distance
-  - camera quantization
-  - sorting steps
-  - sort every frame
-  - antialiasing
-  - light volume intensity
-  - alpha cutoff
+- Bilingual UI (English / 日本語)
+- VRC Light Volumes integration
 
-## Workflow
+## Quick Start
 
-1. Import the unitypackage from [releases](https://github.com/MichaelMoroz/VRChatGaussianSplatting/releases), or clone the repo directly.
-2. Open `Gaussian Splatting / Import PLY Splats...`.
-3. Add one or more `.ply` files and choose an output folder.
-4. Configure the import options:
-   - `Compute Bounding Box`
-   - `sRGB Color Correction`
-   - `Import Spherical Harmonics`
-   - `Default SH Band`
-   - `Multi-Pass Rendering`
-   - `Splat Count Per Pass`
-   - `Max Alpha Mask Count`
-   - `Precompute Sorting`
-5. Import the splats.
-6. For the runtime sorted path, add the imported prefabs to the scene. The editor automatically creates the scene renderer and control UI when needed.
-7. Use the renderer inspector to collect splats, choose single or combined rendering, resize sorting textures, and tune material/render settings.
+1. Import the unitypackage from [releases](https://github.com/MichaelMoroz/VRChatGaussianSplatting/releases), or clone the repo.
+2. Open `Gaussian Splatting / Import Splats...`.
+3. Add one or more `.ply` / `.spz` files, choose an output folder, and pick an **Import Mode**.
+4. Configure the import options (see below) and import.
+5. Drag the imported prefabs into the scene. The editor automatically creates the scene `GaussianSplatRenderer` and the world-space control UI when needed.
+6. Tune material/render settings from the renderer inspector or the in-world UI.
 
-### Import Option Notes
+### Import Modes
 
-- `sRGB Color Correction` adds 2 extra grab passes. It fixes transparency/compositing behavior, but it is heavier. Without it, the renderer falls back to back-to-front blending, which also means multi-pass rendering will not work correctly.
-- `sRGB Color Correction` only works correctly when the world uses HDR camera render targets.
-- Android builds use a fake-sRGB no-grabpass fallback because VRChat Android does not provide the same reliable HDR/grab-pass path.
-- `Multi-Pass Rendering` splits a splat into sequential chunks. This can improve VR rendering performance for large splats.
-- `Max Alpha Mask Count` inserts optional alpha-mask passes between multi-pass chunks to occlude later chunks behind opaque geometry. This can help performance, but grab passes are expensive, so it is a tradeoff.
-- `Precompute Sorting` bakes direction-based order into the imported data so the splat can render standalone, including outside the runtime renderer path, but it uses much more texture memory and can introduce artifacts.
+- **LOD** (default) — a combined `GaussianSplatObject` with a downsampled LOD pyramid. The combiner selects per-chunk detail by camera distance and a scene-wide splat budget; full-detail LOD0 is preserved up close.
+- **Standalone** — a self-rendering mesh + material with **precomputed direction-based sorting** baked in. Renders without `GaussianSplatRenderer` (e.g. avatars, or outside VRChat). Uses more texture memory and can introduce artifacts.
 
-### Exactness of Rendering
+### Import Options
 
-For normally trained splats, exact color reproduction requires the color-space transform grab-pass path.
+**All modes:**
+- `Compute Bounding Box`
+- `Import Spherical Harmonics` + `Max SH Band` — memory scales with the chosen band; disabled forces SH0.
+- `SH Compression` — `None` (RGB565), `BC1` (4 bpp), or `BC7` (8 bpp).
+- `Compress Color+Alpha to BC7`
+- **Transform / cleanup**: `Crop To Bounds` (preview box handle), `Horizon Alignment` / `Wall Alignment` (pick points in the preview), `Normalize Size` (scale the floater-robust extent to a target size).
 
-If you turn `sRGB Color Correction` off, there are two important side effects:
+**Combined (LOD) mode:**
+- `Chunk Size` — combined-render chunk size.
+- `LOD Resampling Rate` / `LOD Reused Splats` — tune the LOD pyramid's stored-splat count.
 
-1. Rendering order has to fall back to back-to-front blending because there is no grab pass caching the current view color, so the multi-pass optimization path is no longer applicable.
-2. Colors are no longer reproduced exactly. The color conversion still happens per splat, but the blending itself is no longer mathematically valid for the original training color space.
+**Standalone rendering only** (combined splats render through the combiner and ignore these):
+- `sRGB Color Correction` — the exact color/compositing path (two grab passes, needs HDR camera targets). **Forced off on Android.** See [Color reproduction & sRGB](#color-reproduction--srgb).
+- `Multi-Pass Rendering` + `Splat Count Per Pass` + `Max Alpha Mask Count` — split rendering into sequential chunks; alpha-mask passes can occlude later chunks behind opaque geometry (a tradeoff, since grab passes are expensive). Requires `sRGB Color Correction` on.
+- `Start Render Queue` — combined splats instead take their render queue from the `GaussianSplatRenderer` component.
 
-One workaround is to train the splats on images that were already color-converted into inverse sRGB space. Then the splats can be rendered without the runtime color-space conversion path, but you also need to turn off fake sRGB on the material.
+## Runtime Rendering
 
-### Runtime Sorted Rendering
+Use this path to camera-sort splats at runtime in VRChat worlds (Udon):
 
-Use this path when you want the splat to be camera-sorted at runtime in VRChat worlds (uses Udon):
+1. Add imported Gaussian Splat Objects to the scene.
+2. Let the editor create the scene `GaussianSplatRenderer` and UI, or select the renderer if it exists.
+3. The renderer combines all active splats into one sorted render; use the gallery to show one at a time.
+4. Enter play mode or build. The renderer updates sorted render order for the active (screen + photo) cameras.
 
-1. Add one or more imported Gaussian Splat Objects to the scene.
-2. Let the editor create the scene `GaussianSplatRenderer` and world-space UI automatically, or select the renderer if it already exists.
-3. In single-splat mode, enable the splat you want rendered. If multiple splats are active, only the selected/active splat is rendered.
-4. Enable combined mode when multiple splats need to render together.
-5. Enter play mode or build the world. The renderer updates sorted render order for the active cameras.
+### How rendering works
 
-### Combined Rendering
+The renderer transforms all active splats into world space, writes them into combined render textures, and sorts the result as one renderer — so any number of active splats render together. Combined LOD selection, the per-platform splat budget, and the quality tiers build on top of this.
 
-Combined mode transforms active splats into world space, writes them into combined render textures, and sorts the combined result as one renderer. It is required for rendering multiple splats at the same time, but it is slightly slower than single-splat mode.
+### Android Builds
 
-On Android/OpenGL ES, the combined data pass is limited to one source splat per combine batch to stay within conservative fragment texture binding limits. This increases the number of combine blits for scenes with multiple active splats, but avoids relying on desktop-class sampler counts.
+A pre-build scene pass converts runtime splat renderers from the geometry-shader path to no-geometry shaders and replaces point meshes with zero-sized quad meshes (quad vertex IDs drive splat lookup, so the mesh stays cheap if drawn with the wrong material). The same pass swaps the fullscreen color-space grab-pass shaders for the fake-sRGB no-geometry path, because VRChat Android lacks the reliable HDR/grab-pass path. It also sets the scene renderer to Low quality and disables camera HDR.
 
-### Standalone Precomputed Sorting
+## In-World UI
 
-Use `Precompute Sorting` in the importer when you want a splat to render without `GaussianSplatRenderer` - for avatars or in general outside of VRChat.
+The renderer creates a world-space control canvas automatically when splats are present and the scene has none. It's intended as a real in-world control surface.
 
-- This path bakes direction-based render order into the imported material data.
-- It is a standalone import mode.
-- It is not intended to be driven by `GaussianSplatRenderer`.
+**Networking:** only the **gallery selection** is synced (manual sync). All other controls are **local** per user.
 
-## Generated UI
+### Gallery mode
 
-The renderer creates a world-space control canvas automatically when Gaussian splats are present and the scene does not already have one.
+- Add splat objects to the renderer UI's **gallery list**. When the list has one or more entries, gallery mode is active and only the selected splat renders; objects not in the list are never touched.
+- An inspector-only **enable** toggle keeps the list but shows all listed splats when off.
+- A **master lock** restricts changing the selection to the instance master.
+- Entry names/descriptions come from each `GaussianSplatObject` (with fallbacks).
 
-Current synced/global controls:
+### Controls
 
-- `Current Splat (global)`
-- `Splat Selection (global)`
-- `SH Band (global)`
-- `VRC Light Volumes (global)`
-- `Gaussian Scale (global)`
+- Gallery selection (synced)
+- Quality presets: Very Low / Low / Medium / High (set alpha cull + alpha cutoff)
+- SH Band
+- VRC Light Volumes (toggle) + Light Volume Intensity
+- Gaussian Scale
+- Alpha Cutoff (lower = better quality, higher cost) + Alpha Cull
+- Antialiasing
+- Camera Quantization
+- Language (English / 日本語)
+- An **Advanced Settings** toggle reveals the finer sliders
+- LOD Splat Cap (shown only when LOD splats are present)
 
-Current local controls:
+Render queue and the sort/material settings live on the `GaussianSplatRenderer` component inspector. Use `Update Sorting Resource Textures` there to resize the sorting textures to fit the largest assigned splat instead of editing those assets by hand.
 
-- `Min Sort Distance`
-- `Max Sort Distance`
-- `Camera Quant`
-- `Sorting Steps`
-- `Sort every frame`
-- `Antialiasing`
-- `Light Volume Intensity`
-- `Alpha Cutoff (lower = better quality)`
-- `Render Queue`
+## Terrain Collider
 
-The generated UI is intended as a practical in-world control surface, not just a demo. The synced controls behave the same way as the selected splat index and update for other users.
+`Gaussian Splatting / Generate Terrain Collider…` (or the `GaussianSplatObject` context menu) rasterizes a splat into a heightmap on the GPU and builds a Unity `TerrainData` + `TerrainCollider`. Options cover terrain resolution, GPU batch size, small-splat filtering, and empty-pixel fill. It is a 2.5D (top-down) collider — good for ground/terrain, not overhangs or interiors.
 
-## Import Notes
+## Editor Scene-View Sorting
 
-- Large imports are still limited by available RAM.
-- SH import memory now scales with the selected SH band instead of always allocating for the highest band.
-- If `Import Spherical Harmonics` is disabled, the importer skips SH textures and forces SH0.
-- If SH import is enabled, the importer only creates textures up to the selected max/default band and falls back to the highest lower non-zero band when needed.
-- `.ply` files larger than 2 GB are still not supported.
-- If you have an especially large splat list on a renderer, use `Update Sorting Resource Textures` on `GaussianSplatRenderer` to resize the sorting textures to fit the largest assigned splat instead of managing those assets by hand.
+- Automatic for every `GaussianSplatObject`; editor-only, no Udon.
+- Owns its own transient sorting resources — it does not reuse the runtime `GaussianSplatRenderer` / `RadixSort` textures.
+- Skips standalone precomputed-sorting materials; applies only to the sorted runtime path.
+- Targets Scene-view cameras; inspector previews are not part of this pass.
 
 ## Tips
 
 > [!TIP]
-> In VRChat, splats should not rely on MSAA. `GaussianSplatRenderer` disables game-mode MSAA, and leaving it enabled is usually just extra cost for little or no visual benefit on splats.
+> The renderer automatically disables MSAA for splats in-game. Gaussian splats have very high overdraw, which makes MSAA extremely expensive for little or no benefit.
 
 > [!TIP]
-> The renderer currently shows one selected splat at a time. If you need a splat to render without the runtime sorter, import it with `Precompute Sorting` instead.
+> Lower `Alpha Cutoff` keeps more splats and improves quality at higher cost. Fit sorting textures to the largest splat with `Update Sorting Resource Textures`.
 
 > [!TIP]
-> Use `Update Sorting Resource Textures` after assigning splats to a renderer. That resizes the sorting textures to fit the largest assigned splat and is the preferred replacement for manually editing the radix-sort render textures.
+> `sRGB Color Correction` (standalone imports only; forced off on Android) is the exact color/compositing path but adds two grab passes. Turning it off falls back to back-to-front blending, disables multi-pass, and makes color non-exact (see [Color reproduction & sRGB](#color-reproduction--srgb)).
 
 > [!TIP]
-> Lower `Alpha Cutoff` keeps more splats and improves quality, but it also increases rendering cost. More `Sorting Steps` improve ordering accuracy, but they also make sorting more expensive.
-
-> [!TIP]
-> `sRGB Color Correction` gives the exact color/compositing path for normally trained splats, but it adds 2 grab passes. Disabling it can be worthwhile for performance, but rendering falls back to back-to-front blending, multi-pass optimization no longer applies, and the blended color is no longer exact unless the splat data was trained for that path.
-
-> [!TIP]
-> `VRC Light Volumes` is a scene-integration control. Leave it off if the splat should stay close to its baked appearance. Turn it on if you want the splat to pick up scene lighting, then tune `Light Volume Intensity` to control how strongly the sampled lighting affects it.
-
-## Rendering Pipeline
-
-- Runtime rendering is sorted-only.
-- The active runtime path uses sorted render-order textures and front-to-back compositing.
-- Screen and photo cameras use separate 2D render-order textures.
-- SH selection is controlled numerically through `_SHBand`.
-- Runtime SH band is clamped by the textures available on the imported material, so a splat cannot be pushed past the SH data it actually has.
-- Material/render controls now include:
-  - Gaussian scale
-  - antialiasing
-  - alpha cutoff
-  - VRC Light Volumes on/off
-  - light volume intensity
-- Game-mode MSAA is disabled by the renderer. Splats should not rely on MSAA for quality or performance.
-
-### Android Builds
-
-For Android builds, a pre-build scene pass converts runtime splat renderers from the geometry-shader path to no-geometry shaders and replaces point meshes with zero-sized quad meshes. The quad vertex IDs drive splat lookup in the shader, so the mesh stays cheap if it is ever drawn with the wrong material.
-
-The same build pass removes the fullscreen color-space grab-pass shaders from converted splat renderers and uses the fake-sRGB no-geometry shader path instead. Android builds also start at low quality by default.
-
-### VRC Light Volumes
-
-The shader can integrate with VRC Light Volumes through the `VRC Light Volumes (global)` toggle and the `Light Volume Intensity` control.
-
-- When enabled, the splat shader samples VRC Light Volume spherical-harmonic lighting at the splat world position.
-- The sampled lighting is applied to the non-emissive part of the splat color, while values above `1.0` are preserved as emissive.
-- `Light Volume Intensity` scales the contribution of the sampled light volume lighting.
-- This affects shading only. It does not change the sorting path or render-order generation.
-- Some splats look better as mostly self-lit imagery, while others benefit from picking up scene lighting, so this is intentionally exposed as a runtime control.
-
-### Practical Tips
-
-- In single-splat mode, `GaussianSplatRenderer` renders one selected splat at a time. Use combined mode for multiple simultaneous runtime splats.
-- The sort texture size still matters for performance and memory. The renderer helper is now the preferred way to size these textures, but the underlying rule is the same: fit them to the padded element count of the largest splat you want to sort.
-- For small splats or performance-constrained scenes, disabling sRGB correction can be worthwhile, but you are trading away correct transparency behavior.
-- Lower alpha cutoff keeps more splats alive and improves visual quality, but it also increases rendering cost.
-- More sorting steps improve order accuracy by sorting more bits of the distance key, but they also increase the sorting cost.
-
-## Editor Scene View Sorting
-
-- Scene view sorting is automatic for `GaussianSplatObject`.
-- It is editor-only and does not depend on Udon.
-- It creates and owns its own transient sorting resources.
-- It does not reuse the runtime `GaussianSplatRenderer` sorting textures or scene `RadixSort` resources.
-- It skips standalone precomputed-sorting materials and only applies to the sorted runtime path.
+> `VRC Light Volumes` is a scene-integration control: off keeps the splat near its baked look; on lets it pick up scene lighting (tune with `Light Volume Intensity`).
 
 ## Current Limitations
 
-- Single-splat mode renders one selected splat at a time; combined mode is required for multiple simultaneous runtime splats.
-- Standalone precomputed sorting is a separate import path and is not the same thing as runtime sorting.
-- Very large splats can still be heavy to import and render even with the newer SH memory reductions.
-- The current Scene view sorter targets Scene view cameras; inspector previews are not part of this pass.
-- Android combined rendering uses smaller combine batches to stay under OpenGL ES texture binding limits.
+- Standalone precomputed sorting is a separate import path, not the same as runtime sorting.
+- Very large splats are limited by available RAM and the combined render's splat-count cap.
+- The terrain collider is 2.5D (heightmap), so it cannot represent overhangs, walls, or interiors.
 
 ## Credits
 
 - `.PLY` importer adapted from [aras-p's UnityGaussianSplatting](https://github.com/aras-p/UnityGaussianSplatting)
+- `.SPZ` format from [Niantic's spz](https://github.com/nianticlabs/spz)
 - This repository is a heavily modified version of [lambdalemon's gaussian splats](https://github.com/lambdalemon/vrcsplat)
 - The radix sort uses [d4rkpl4y3r's mipmap prefix sum trick](https://github.com/d4rkc0d3r/CompactSparseTextureDemo)
 
@@ -213,28 +143,49 @@ The shader can integrate with VRC Light Volumes through the `VRC Light Volumes (
 - [- 川北東橋 ⁄ Kawakita-higashi Bridge - 3DGS — DEKA_KEIJI777V](https://vrchat.com/home/launch?worldId=wrld_45d430c0-2a0c-4d7b-b848-bd950fda5e5f)
 - [Хотинська фортеця - Gaussian Splatting - 3Dimka](https://vrchat.com/home/launch?worldId=wrld_2ccfe926-3b64-4522-97a1-9840f329f5b3)
 
-## Implementation Details
+---
 
-### Cursed Radix Sort
+# Technical Notes
+
+## Runtime Radix Sort
 
 As this is VRChat, we only have access to the normal rasterization pipeline without writable textures, buffers, or atomics, so the sorting path has to stay inside ordinary rendering primitives.
 
-The runtime sorter uses a radix sort built on mipmap-based prefix sums. For radix sorting you only need prefix sums over digit occurrences, and from that you can reconstruct the sorted sequence. In this implementation each step sorts 4 bits at a time over 16-value digits, which keeps the number of passes practical while still giving a useful quality/performance tradeoff through the `Sorting Steps` setting.
+The runtime sorter uses a radix sort built on mipmap-based prefix sums. For radix sorting you only need prefix sums over digit occurrences, and from that you can reconstruct the sorted sequence. In this implementation each step sorts 4 bits at a time over 16-value digits, over a fixed number of passes (currently 6) covering the high bits of the distance key, which keeps the cost practical while still giving good ordering accuracy.
 
-This same general sorted-order approach is now used both by the runtime renderer and by the automatic editor Scene view renderer, but the editor path owns its own materials and transient render textures instead of reusing the runtime scene resources.
+This same general sorted-order approach is used both by the runtime renderer and by the automatic editor Scene view renderer, but the editor path owns its own materials and transient render textures instead of reusing the runtime scene resources.
 
 The same core idea could be reused for other VRChat rendering or simulation problems where you need ordering but do not have access to compute-style GPU primitives.
 
-### Ellipsoid Screen Projection
+## Ellipsoid Screen Projection
 
-Splats are still rendered as projected billboards, but the ellipse projection path has been updated substantially.
+Splats are rendered as projected billboards, with the screen-space ellipse for each one computed exactly rather than approximated.
 
-Instead of relying on emulated double precision, the current implementation uses a more stable float-only ellipse fitting approach built around sampling the projected tangent outline of the ellipsoid and fitting the screen-space ellipse from those samples. The math now includes guarded divisions, bounded intermediate values, and safer normalization paths to keep thin splats stable without the older extended-precision workaround.
+The current implementation projects the Gaussian ellipsoid's quadric directly into clip space, extracts the resulting screen-space conic, and solves it analytically for the ellipse center, orientation, and axes. It is float-only, with no emulated double precision, and includes guarded divisions, bounded intermediate values, near-plane rejection for splats the camera is inside, and validity checks that keep thin or near-degenerate splats stable.
 
 Compared with normal 3DGS rendering, this avoids the center-Jacobian affine projection approximation entirely. Standard 3DGS uses the Jacobian of a local affine projection around the Gaussian center, which is fast but introduces projection error that shows up as blur, shape drift, and scene inconsistency, especially important for VR applications where the camera can be very near the splats and can have very large fields of view.
 
-Numerically, this projection is intended to recover the same projected ellipse as exact ellipsoid-projection approaches such as "Projecting Gaussian Ellipsoids While Avoiding Affine Projection Approximation" (arXiv:2411.07579v2), rather than being a lower-quality substitute for them. The difference is in how that ellipse is obtained: here it is recovered through a practical float-based outline-sampling fit that stays robust inside VRChat's shader/runtime constraints.
+This recovers the exact projected ellipse, the same result as ellipsoid-projection approaches such as "Projecting Gaussian Ellipsoids While Avoiding Affine Projection Approximation" (arXiv:2411.07579v2), obtained analytically from the projected conic rather than fitted or approximated.
 
-That also gives this approach an important practical advantage: it can naturally extend to distorted camera models as well, instead of being tied only to the standard pinhole-style projection derivation.
+Because they are rendered as billboards, keeping the projected ellipse tight matters a lot for overdraw. The exact projection preserves a stable, well-fitted screen-space footprint for the Gaussian and stays numerically robust on thin ellipsoids.
 
-Because splats are rendered as billboards, keeping the projected ellipse tight matters a lot for overdraw. The current projection path is aimed at preserving a practical, stable screen-space footprint for the Gaussian while avoiding the numerical instability that showed up on thin ellipsoids in the older implementation.
+## Color reproduction & sRGB
+
+`sRGB Color Correction` applies to the standalone import path only, and Android builds force it off. For standalone splats, exact color reproduction requires the color-space transform grab-pass path.
+
+If you turn `sRGB Color Correction` off, there are two important side effects:
+
+1. Rendering order has to fall back to back-to-front blending because there is no grab pass caching the current view color, so the multi-pass optimization path is no longer applicable.
+2. Colors are no longer reproduced exactly. The color conversion still happens per splat, but the blending itself is no longer mathematically valid for the original training color space.
+
+One workaround is to train the splats on images that were already color-converted into inverse sRGB space. Then the splats can be rendered without the runtime color-space conversion path, but you also need to turn off fake sRGB on the material.
+
+## VRC Light Volumes
+
+The shader can integrate with VRC Light Volumes through the `VRC Light Volumes` toggle and the `Light Volume Intensity` control.
+
+- When enabled, the splat shader samples VRC Light Volume spherical-harmonic lighting at the splat world position.
+- The sampled lighting is applied to the non-emissive part of the splat color, while values above `1.0` are preserved as emissive.
+- `Light Volume Intensity` scales the contribution of the sampled light volume lighting.
+- This affects shading only. It does not change the sorting path or render-order generation.
+- Some splats look better as mostly self-lit imagery, while others benefit from picking up scene lighting, so this is intentionally exposed as a runtime control.

@@ -9,9 +9,7 @@ GameObject:
   serializedVersion: 6
   m_Component:
   - component: {fileID: 6853482934782555252}
-  - component: {fileID: 6010162519596602217}
-  - component: {fileID: 6521079187055050775}
-  - component: {fileID: 6986115643422706437}
+  - component: {fileID: 5274429588878763877}
   - component: {fileID: 4642254070820677081}
   m_Layer: 0
   m_Name: hotdog
@@ -30,64 +28,12 @@ Transform:
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
   m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalScale: {x: 1, y: -1, z: 1}
+  m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
---- !u!33 &6010162519596602217
-MeshFilter:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 929106702503281337}
-  m_Mesh: {fileID: 4300000, guid: 61105ba1627dcf744af4671172a9b32f, type: 2}
---- !u!23 &6521079187055050775
-MeshRenderer:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 929106702503281337}
-  m_Enabled: 1
-  m_CastShadows: 1
-  m_ReceiveShadows: 1
-  m_DynamicOccludee: 0
-  m_StaticShadowCaster: 0
-  m_MotionVectors: 1
-  m_LightProbeUsage: 1
-  m_ReflectionProbeUsage: 1
-  m_RayTracingMode: 2
-  m_RayTraceProcedural: 0
-  m_RenderingLayerMask: 1
-  m_RendererPriority: 0
-  m_Materials:
-  - {fileID: 2100000, guid: 73a8c220c57f8234c9327638bf7158db, type: 2}
-  - {fileID: 2100000, guid: d462b29d4f4872d479cccdd2db6c3fd0, type: 2}
-  - {fileID: 2100000, guid: c522e6a0d7ee51e4db2ef138b55d007c, type: 2}
-  m_StaticBatchInfo:
-    firstSubMesh: 0
-    subMeshCount: 0
-  m_StaticBatchRoot: {fileID: 0}
-  m_ProbeAnchor: {fileID: 0}
-  m_LightProbeVolumeOverride: {fileID: 0}
-  m_ScaleInLightmap: 1
-  m_ReceiveGI: 1
-  m_PreserveUVs: 0
-  m_IgnoreNormalsForChartDetection: 0
-  m_ImportantGI: 0
-  m_StitchLightmapSeams: 1
-  m_SelectedEditorRenderState: 3
-  m_MinimumChartSize: 4
-  m_AutoUVMaxDistance: 0.5
-  m_AutoUVMaxAngle: 89
-  m_LightmapParameters: {fileID: 0}
-  m_SortingLayerID: 0
-  m_SortingLayer: 0
-  m_SortingOrder: 0
-  m_AdditionalVertexStreams: {fileID: 0}
---- !u!114 &6986115643422706437
+--- !u!114 &5274429588878763877
 MonoBehaviour:
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
@@ -96,7 +42,7 @@ MonoBehaviour:
   m_GameObject: {fileID: 929106702503281337}
   m_Enabled: 1
   m_EditorHideFlags: 0
-  m_Script: {fileID: 11500000, guid: 25ccda0031c7753438cb7e5261fef881, type: 3}
+  m_Script: {fileID: 11500000, guid: a1fec6026cf5dbc4db7994d260293bc8, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
   serializationData:
@@ -110,9 +56,42 @@ MonoBehaviour:
     SerializationNodes: []
   _udonSharpBackingUdonBehaviour: {fileID: 4642254070820677081}
   gaussianSplatRenderer: {fileID: 0}
-  sortedObject: {fileID: 0}
-  sortedRenderer: {fileID: 6521079187055050775}
-  maxShBand: 3
+  splatName: hotdog
+  description: Chunk LOD imported from Assets/VRChatGaussianSplatting/ExampleSplats/Objects/PLY/hotdog.ply
+  importMetadataJson: '{"sourcePath":"Assets/VRChatGaussianSplatting/ExampleSplats/Objects/PLY/hotdog.ply","prefabPath":"Assets/VRChatGaussianSplatting/ExampleSplats/Objects/hotdog.prefab","importAsLOD":true,"lodChunkSize":4096,"options":{"computeBoundingBox":true,"splatsPerPass":0,"standalone":false,"maxAlphaMaskCount":1,"useSRGB":true,"importSphericalHarmonics":true,"defaultSHBand":3,"compressColorAlphaToBC7":false,"startRenderQueue":4050,"cropToBounds":false,"cropBounds":{"m_Center":{"x":0.0,"y":0.0,"z":0.0},"m_Extent":{"x":0.0,"y":0.0,"z":0.0}},"cropPadding":0.0,"applyHorizonAlignment":false,"horizonRotation":{"x":0.0,"y":0.0,"z":0.0,"w":1.0},"horizonPivot":{"x":0.0,"y":0.0,"z":0.0},"lodUsePackedPositions":true,"lodComputeSplats":true,"lodResamplePercent":100,"lodReusePercent":50,"normalizeSize":false,"normalizeTargetSize":1.0,"shCompression":2}}'
+  chunkSize: 4096
+  chunkCount: 65
+  totalSplatCount: 140364
+  usePackedPositions: 1
+  lodReusePercent: 50
+  lodZeroOffset: 2
+  lodSplatRadius: 3.4564996
+  smallestChunkSize: 0.062661275
+  boundsMin: {x: -1.0450548, y: -2.7311077, z: -1.5256064}
+  boundsMax: {x: 1.3516046, y: -2.0590916, z: 0.87268615}
+  positions:
+  - {fileID: 2800000, guid: ea59f53c508e58446bba352be0379530, type: 2}
+  colors:
+  - {fileID: 2800000, guid: e9f8eacb679348748adb74bc9b99f080, type: 2}
+  rotations:
+  - {fileID: 2800000, guid: b38018c5ed874804ea4385b0aed34001, type: 2}
+  scales:
+  - {fileID: 2800000, guid: 9eb2dafe61efb044ba4b57f03ce7ddb1, type: 2}
+  sh:
+  - {fileID: 2800000, guid: 971bd1a36e0fa6a4fa98deccaeac5ec8, type: 2}
+  fileSplatCounts: aa350300
+  fileShCoeffCounts: 0f000000
+  fileShCoeffStrides: aa350300
+  fileShMins:
+  - {x: -0.60864, y: -0.56572545, z: -0.58358604, w: 0}
+  fileShRanges:
+  - {x: 1.1871431, y: 1.254688, z: 1.2511834, w: 0}
+  chunkBoundsMinTexture: {fileID: 2800000, guid: 701798b73d09d9f44b27e0d337f59e06,
+    type: 2}
+  chunkBoundsMaxTexture: {fileID: 2800000, guid: 5b3e25c9a814a75468d52e9845bb9f73,
+    type: 2}
+  chunkRangeTexture: {fileID: 2800000, guid: 6debeae44f4ba1e47a68fbfe6f85ee3a, type: 2}
+  chunkTextureLayout: {x: 128, y: 0.0078125, z: 65, w: 0}
 --- !u!114 &4642254070820677081
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -133,10 +112,9 @@ MonoBehaviour:
   AllowCollisionOwnershipTransfer: 0
   Reliable: 0
   _syncMethod: 0
-  serializedProgramAsset: {fileID: 11400000, guid: 94102a12b698cf5439b07db54cc01bd2,
+  serializedProgramAsset: {fileID: 11400000, guid: 8e0f4f0bb49cff2449b55360b543781c,
     type: 2}
-  programSource: {fileID: 11400000, guid: afc4a1c5cccdcf946b053bb1ca8d2033, type: 2}
-  serializedPublicVariablesBytesString: Ai8AAAAAATIAAABWAFIAQwAuAFUAZABvAG4ALgBDAG8AbQBtAG8AbgAuAFUAZABvAG4AVgBhAHIAaQBhAGIAbABlAFQAYQBiAGwAZQAsACAAVgBSAEMALgBVAGQAbwBuAC4AQwBvAG0AbQBvAG4AAAAAAAYBAAAAAAAAACcBBAAAAHQAeQBwAGUAAWgAAABTAHkAcwB0AGUAbQAuAEMAbwBsAGwAZQBjAHQAaQBvAG4AcwAuAEcAZQBuAGUAcgBpAGMALgBMAGkAcwB0AGAAMQBbAFsAVgBSAEMALgBVAGQAbwBuAC4AQwBvAG0AbQBvAG4ALgBJAG4AdABlAHIAZgBhAGMAZQBzAC4ASQBVAGQAbwBuAFYAYQByAGkAYQBiAGwAZQAsACAAVgBSAEMALgBVAGQAbwBuAC4AQwBvAG0AbQBvAG4AXQBdACwAIABtAHMAYwBvAHIAbABpAGIAAQEJAAAAVgBhAHIAaQBhAGIAbABlAHMALwEAAAABaAAAAFMAeQBzAHQAZQBtAC4AQwBvAGwAbABlAGMAdABpAG8AbgBzAC4ARwBlAG4AZQByAGkAYwAuAEwAaQBzAHQAYAAxAFsAWwBWAFIAQwAuAFUAZABvAG4ALgBDAG8AbQBtAG8AbgAuAEkAbgB0AGUAcgBmAGEAYwBlAHMALgBJAFUAZABvAG4AVgBhAHIAaQBhAGIAbABlACwAIABWAFIAQwAuAFUAZABvAG4ALgBDAG8AbQBtAG8AbgBdAF0ALAAgAG0AcwBjAG8AcgBsAGkAYgABAAAABgMAAAAAAAAAAi8CAAAAAUkAAABWAFIAQwAuAFUAZABvAG4ALgBDAG8AbQBtAG8AbgAuAFUAZABvAG4AVgBhAHIAaQBhAGIAbABlAGAAMQBbAFsAUwB5AHMAdABlAG0ALgBJAG4AdAAzADIALAAgAG0AcwBjAG8AcgBsAGkAYgBdAF0ALAAgAFYAUgBDAC4AVQBkAG8AbgAuAEMAbwBtAG0AbwBuAAIAAAAGAgAAAAAAAAAnAQQAAAB0AHkAcABlAAEXAAAAUwB5AHMAdABlAG0ALgBTAHQAcgBpAG4AZwAsACAAbQBzAGMAbwByAGwAaQBiACcBCgAAAFMAeQBtAGIAbwBsAE4AYQBtAGUAAR8AAABfAF8AXwBVAGQAbwBuAFMAaABhAHIAcABCAGUAaABhAHYAaQBvAHUAcgBWAGUAcgBzAGkAbwBuAF8AXwBfACcBBAAAAHQAeQBwAGUAARYAAABTAHkAcwB0AGUAbQAuAEkAbgB0ADMAMgAsACAAbQBzAGMAbwByAGwAaQBiABcBBQAAAFYAYQBsAHUAZQACAAAABwUCLwMAAAABYwAAAFYAUgBDAC4AVQBkAG8AbgAuAEMAbwBtAG0AbwBuAC4AVQBkAG8AbgBWAGEAcgBpAGEAYgBsAGUAYAAxAFsAWwBVAG4AaQB0AHkARQBuAGcAaQBuAGUALgBNAGUAcwBoAFIAZQBuAGQAZQByAGUAcgAsACAAVQBuAGkAdAB5AEUAbgBnAGkAbgBlAC4AQwBvAHIAZQBNAG8AZAB1AGwAZQBdAF0ALAAgAFYAUgBDAC4AVQBkAG8AbgAuAEMAbwBtAG0AbwBuAAMAAAAGAgAAAAAAAAAnAQQAAAB0AHkAcABlAAEXAAAAUwB5AHMAdABlAG0ALgBTAHQAcgBpAG4AZwAsACAAbQBzAGMAbwByAGwAaQBiACcBCgAAAFMAeQBtAGIAbwBsAE4AYQBtAGUAAQ4AAABzAG8AcgB0AGUAZABSAGUAbgBkAGUAcgBlAHIAJwEEAAAAdAB5AHAAZQABMAAAAFUAbgBpAHQAeQBFAG4AZwBpAG4AZQAuAE0AZQBzAGgAUgBlAG4AZABlAHIAZQByACwAIABVAG4AaQB0AHkARQBuAGcAaQBuAGUALgBDAG8AcgBlAE0AbwBkAHUAbABlAAsBBQAAAFYAYQBsAHUAZQAAAAAABwUCMAIAAAAEAAAABgIAAAAAAAAAJwEEAAAAdAB5AHAAZQABFwAAAFMAeQBzAHQAZQBtAC4AUwB0AHIAaQBuAGcALAAgAG0AcwBjAG8AcgBsAGkAYgAnAQoAAABTAHkAbQBiAG8AbABOAGEAbQBlAAEJAAAAbQBhAHgAUwBoAEIAYQBuAGQAJwEEAAAAdAB5AHAAZQABFgAAAFMAeQBzAHQAZQBtAC4ASQBuAHQAMwAyACwAIABtAHMAYwBvAHIAbABpAGIAFwEFAAAAVgBhAGwAdQBlAAMAAAAHBQcFBwU=
-  publicVariablesUnityEngineObjects:
-  - {fileID: 6521079187055050775}
+  programSource: {fileID: 11400000, guid: ac07771fb8825614cbec6e1c864a6205, type: 2}
+  serializedPublicVariablesBytesString: Ai8AAAAAATIAAABWAFIAQwAuAFUAZABvAG4ALgBDAG8AbQBtAG8AbgAuAFUAZABvAG4AVgBhAHIAaQBhAGIAbABlAFQAYQBiAGwAZQAsACAAVgBSAEMALgBVAGQAbwBuAC4AQwBvAG0AbQBvAG4AAAAAAAYBAAAAAAAAACcBBAAAAHQAeQBwAGUAAWgAAABTAHkAcwB0AGUAbQAuAEMAbwBsAGwAZQBjAHQAaQBvAG4AcwAuAEcAZQBuAGUAcgBpAGMALgBMAGkAcwB0AGAAMQBbAFsAVgBSAEMALgBVAGQAbwBuAC4AQwBvAG0AbQBvAG4ALgBJAG4AdABlAHIAZgBhAGMAZQBzAC4ASQBVAGQAbwBuAFYAYQByAGkAYQBiAGwAZQAsACAAVgBSAEMALgBVAGQAbwBuAC4AQwBvAG0AbQBvAG4AXQBdACwAIABtAHMAYwBvAHIAbABpAGIAAQEJAAAAVgBhAHIAaQBhAGIAbABlAHMALwEAAAABaAAAAFMAeQBzAHQAZQBtAC4AQwBvAGwAbABlAGMAdABpAG8AbgBzAC4ARwBlAG4AZQByAGkAYwAuAEwAaQBzAHQAYAAxAFsAWwBWAFIAQwAuAFUAZABvAG4ALgBDAG8AbQBtAG8AbgAuAEkAbgB0AGUAcgBmAGEAYwBlAHMALgBJAFUAZABvAG4AVgBhAHIAaQBhAGIAbABlACwAIABWAFIAQwAuAFUAZABvAG4ALgBDAG8AbQBtAG8AbgBdAF0ALAAgAG0AcwBjAG8AcgBsAGkAYgABAAAABgEAAAAAAAAAAi8CAAAAAUkAAABWAFIAQwAuAFUAZABvAG4ALgBDAG8AbQBtAG8AbgAuAFUAZABvAG4AVgBhAHIAaQBhAGIAbABlAGAAMQBbAFsAUwB5AHMAdABlAG0ALgBJAG4AdAAzADIALAAgAG0AcwBjAG8AcgBsAGkAYgBdAF0ALAAgAFYAUgBDAC4AVQBkAG8AbgAuAEMAbwBtAG0AbwBuAAIAAAAGAgAAAAAAAAAnAQQAAAB0AHkAcABlAAEXAAAAUwB5AHMAdABlAG0ALgBTAHQAcgBpAG4AZwAsACAAbQBzAGMAbwByAGwAaQBiACcBCgAAAFMAeQBtAGIAbwBsAE4AYQBtAGUAAR8AAABfAF8AXwBVAGQAbwBuAFMAaABhAHIAcABCAGUAaABhAHYAaQBvAHUAcgBWAGUAcgBzAGkAbwBuAF8AXwBfACcBBAAAAHQAeQBwAGUAARYAAABTAHkAcwB0AGUAbQAuAEkAbgB0ADMAMgAsACAAbQBzAGMAbwByAGwAaQBiABcBBQAAAFYAYQBsAHUAZQACAAAABwUHBQcF
+  publicVariablesUnityEngineObjects: []
   publicVariablesSerializationDataFormat: 0

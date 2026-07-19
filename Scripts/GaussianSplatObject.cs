@@ -7,49 +7,88 @@ using UnityEditor;
 
 namespace GaussianSplatting
 {
+    [UdonBehaviourSyncMode(BehaviourSyncMode.None)]
     public class GaussianSplatObject : UdonSharpBehaviour
     {
-        [SerializeField] public GaussianSplatRenderer gaussianSplatRenderer;
-        [SerializeField] public GameObject sortedObject;
-        [SerializeField] public MeshRenderer sortedRenderer;
+        public const float MAX_LOD_ALPHA_LOG2 = 100.0f;
+
+        [SerializeField, HideInInspector] public GaussianSplatRenderer gaussianSplatRenderer;
         [SerializeField] public string splatName;
         [TextArea(1, 2)] [SerializeField] public string description;
-        [SerializeField] int maxShBand = -1;
+        [SerializeField, HideInInspector] public string importMetadataJson;   // JSON import settings for re-import (editor)
+
+        [Header("LOD Selection")]
+        [SerializeField, HideInInspector] public int chunkSize = 4096;
+        [SerializeField, HideInInspector] public int chunkCount;
+        [SerializeField, HideInInspector] public int totalSplatCount;
+        [SerializeField, HideInInspector] public bool usePackedPositions;
+        [SerializeField, HideInInspector] public int lodReusePercent = 50;
+        [SerializeField, HideInInspector] public float lodZeroOffset = 2.0f;
+        [SerializeField, HideInInspector] public float lodSplatRadius = 1.0f;
+        [SerializeField, HideInInspector] public float smallestChunkSize = 1.0f;
+        [SerializeField, HideInInspector] public Vector3 boundsMin;
+        [SerializeField, HideInInspector] public Vector3 boundsMax;
+
+        [Header("Source Textures")]
+        [SerializeField, HideInInspector] public Texture2D[] positions;
+        [SerializeField, HideInInspector] public Texture2D[] colors;
+        [SerializeField, HideInInspector] public Texture2D[] rotations;
+        [SerializeField, HideInInspector] public Texture2D[] scales;
+        [SerializeField, HideInInspector] public Texture2D[] sh;
+        [SerializeField, HideInInspector] public int[] fileSplatCounts;
+        [SerializeField, HideInInspector] public int[] fileShCoeffCounts;
+        [SerializeField, HideInInspector] public int[] fileShCoeffStrides;
+        [SerializeField, HideInInspector] public Vector4[] fileShMins;
+        [SerializeField, HideInInspector] public Vector4[] fileShRanges;
+
+        [Header("Chunk Metadata")]
+        [SerializeField, HideInInspector] public Texture2D chunkBoundsMinTexture;
+        [SerializeField, HideInInspector] public Texture2D chunkBoundsMaxTexture;
+        [SerializeField, HideInInspector] public Texture2D chunkRangeTexture;
+        [SerializeField, HideInInspector] public Vector4 chunkTextureLayout;
 
 #if UNITY_EDITOR && !COMPILER_UDONSHARP
         void Reset()
         {
-            EnsureSceneRenderer(false);
+            gaussianSplatRenderer = GaussianSplatRenderer.FindExistingSceneRenderer(gameObject.scene);
         }
 
         void OnValidate()
         {
-            GaussianSplatRenderer.RequestEditorRefresh();
-        }
-
-        void EnsureSceneRenderer(bool createIfMissing)
-        {
-            if (EditorUtility.IsPersistent(this))
+            chunkSize = Mathf.Max(1, chunkSize);
+            chunkCount = Mathf.Max(0, chunkCount);
+            totalSplatCount = Mathf.Max(0, totalSplatCount);
+            lodReusePercent = NormalizeLodReusePercent(lodReusePercent);
+            lodZeroOffset = Mathf.Max(0.0f, lodZeroOffset);
+            lodSplatRadius = Mathf.Max(0.001f, lodSplatRadius);
+            smallestChunkSize = Mathf.Max(0.001f, smallestChunkSize);
+            // OnValidate also fires when Unity loads/deserializes a prefab ASSET (e.g. selecting it in the
+            // Project window). A persistent asset is not in any scene, so skip the scene refresh - it is pure
+            // waste there and contributes to slow asset selection.
+            if (!EditorUtility.IsPersistent(this))
             {
-                return;
-            }
-
-            GaussianSplatRenderer sceneRenderer = createIfMissing
-                ? GaussianSplatRenderer.EnsureSceneRendererExists(gameObject.scene)
-                : GaussianSplatRenderer.FindExistingSceneRenderer(gameObject.scene);
-
-            if (sceneRenderer == null)
-            {
-                return;
-            }
-
-            if (createIfMissing && gaussianSplatRenderer != sceneRenderer)
-            {
-                gaussianSplatRenderer = sceneRenderer;
-                EditorUtility.SetDirty(this);
+                GaussianSplatRenderer.RequestEditorRefresh();
             }
         }
 #endif
+
+        void Start()
+        {
+            NotifyRendererEnabled();
+        }
+
+        void OnEnable()
+        {
+            NotifyRendererEnabled();
+        }
+
+        void OnDisable()
+        {
+            if (gaussianSplatRenderer != null)
+            {
+                gaussianSplatRenderer.NotifyLODObjectDisabled(this);
+            }
+        }
 
         GaussianSplatRenderer ResolveSceneRendererReference()
         {
@@ -73,154 +112,70 @@ namespace GaussianSplatting
 #endif
         }
 
-        void Start()
-        {
-            NotifyRendererEnabled();
-        }
-
-        void OnEnable()
-        {
-            NotifyRendererEnabled();
-        }
-
-        void OnDisable()
-        {
-            // Do NOT resolve via GameObject.Find here: calling Find during OnDisable
-            // triggers Unity's 'go.IsActive()' assertion. Use the reference cached
-            // while the object was enabled instead.
-            if (gaussianSplatRenderer != null)
-            {
-                gaussianSplatRenderer.NotifySplatObjectDisabled(this);
-            }
-        }
-
         public void NotifyRendererEnabled()
         {
             GaussianSplatRenderer sceneRenderer = ResolveSceneRendererReference();
             if (sceneRenderer != null && gameObject.activeInHierarchy)
             {
-                sceneRenderer.NotifySplatObjectEnabled(this);
+                sceneRenderer.NotifyLODObjectEnabled(this);
             }
         }
 
-        GameObject ResolveChildObject(GameObject childObject, string childName)
+        public bool IsRenderable()
         {
-            if (childObject != null)
-            {
-                return childObject;
-            }
-
-            Transform child = transform.Find(childName);
-            if (child != null)
-            {
-                return child.gameObject;
-            }
-
-            return null;
+            int fileCount = positions != null ? positions.Length : 0;
+            return chunkSize > 0
+                && chunkCount > 0
+                && totalSplatCount > 0
+                && positions != null
+                && colors != null
+                && rotations != null
+                && scales != null
+                && fileSplatCounts != null
+                && chunkBoundsMinTexture != null
+                && chunkBoundsMaxTexture != null
+                && chunkRangeTexture != null
+                && chunkTextureLayout.z >= chunkCount
+                && colors.Length >= fileCount
+                && rotations.Length >= fileCount
+                && scales.Length >= fileCount
+                && fileSplatCounts.Length >= fileCount;
         }
 
-        MeshRenderer ResolveRenderer(MeshRenderer renderer, GameObject childObject, string childName)
+        public int GetChunkCount()
         {
-            if (renderer != null)
-            {
-                return renderer;
-            }
-
-            GameObject resolvedChildObject = ResolveChildObject(childObject, childName);
-            if (resolvedChildObject != null)
-            {
-                MeshRenderer childRenderer = (MeshRenderer)resolvedChildObject.GetComponent(typeof(MeshRenderer));
-                if (childRenderer != null)
-                {
-                    return childRenderer;
-                }
-            }
-
-            return (MeshRenderer)GetComponent(typeof(MeshRenderer));
+            return chunkCount > 0 ? chunkCount : Mathf.RoundToInt(chunkTextureLayout.z);
         }
 
-        public MeshRenderer GetSortedRenderer()
+        public int GetFileCount()
         {
-            sortedObject = ResolveChildObject(sortedObject, "Sorted");
-            sortedRenderer = ResolveRenderer(sortedRenderer, sortedObject, "Sorted");
-            return sortedRenderer;
+            return positions != null ? positions.Length : 0;
         }
 
-        public void SetSortedRendererEnabled(bool enabled)
+        public Texture GetPositions(int fileIndex) { return positions != null && fileIndex >= 0 && fileIndex < positions.Length ? positions[fileIndex] : null; }
+        public Texture GetColors(int fileIndex) { return colors != null && fileIndex >= 0 && fileIndex < colors.Length ? colors[fileIndex] : null; }
+        public Texture GetRotations(int fileIndex) { return rotations != null && fileIndex >= 0 && fileIndex < rotations.Length ? rotations[fileIndex] : null; }
+        public Texture GetScales(int fileIndex) { return scales != null && fileIndex >= 0 && fileIndex < scales.Length ? scales[fileIndex] : null; }
+        public Texture GetSH(int fileIndex) { return sh != null && fileIndex >= 0 && fileIndex < sh.Length ? sh[fileIndex] : null; }
+        public int GetFileSplatCount(int fileIndex) { return fileSplatCounts != null && fileIndex >= 0 && fileIndex < fileSplatCounts.Length ? fileSplatCounts[fileIndex] : 0; }
+        public int GetFileSHCoeffCount(int fileIndex) { return fileShCoeffCounts != null && fileIndex >= 0 && fileIndex < fileShCoeffCounts.Length ? fileShCoeffCounts[fileIndex] : 0; }
+        public int GetFileSHCoeffStride(int fileIndex) { return fileShCoeffStrides != null && fileIndex >= 0 && fileIndex < fileShCoeffStrides.Length ? fileShCoeffStrides[fileIndex] : 0; }
+        public Vector4 GetFileSHMin(int fileIndex) { return fileShMins != null && fileIndex >= 0 && fileIndex < fileShMins.Length ? fileShMins[fileIndex] : Vector4.zero; }
+        public Vector4 GetFileSHRange(int fileIndex) { return fileShRanges != null && fileIndex >= 0 && fileIndex < fileShRanges.Length ? fileShRanges[fileIndex] : Vector4.one; }
+
+        public int GetMaxLOD0SplatCount()
         {
-            MeshRenderer renderer = GetSortedRenderer();
-            if (renderer != null)
-            {
-                renderer.enabled = enabled;
-            }
+            return totalSplatCount;
         }
 
-        int InferMaxSHBandFromMaterial(Material material)
+        public int GetLodReusePercent()
         {
-            if (material == null)
-            {
-                return 0;
-            }
-
-            if (!material.HasProperty("_GS_SH") || material.GetTexture("_GS_SH") == null || !material.HasProperty("_GS_SH_CoeffCount"))
-            {
-                return 0;
-            }
-
-            int coeffCount = material.GetInt("_GS_SH_CoeffCount");
-            if (coeffCount >= 15)
-            {
-                return 3;
-            }
-
-            if (coeffCount >= 8)
-            {
-                return 2;
-            }
-
-            if (coeffCount >= 3)
-            {
-                return 1;
-            }
-
-            return 0;
+            return NormalizeLodReusePercent(lodReusePercent);
         }
 
-        public int GetMaxSHBand()
+        static int NormalizeLodReusePercent(int value)
         {
-            MeshRenderer renderer = GetSortedRenderer();
-            if (renderer == null)
-            {
-                return 0;
-            }
-
-            Material[] materials = renderer.sharedMaterials;
-            if (materials == null)
-            {
-                return 0;
-            }
-
-            int inferredMax = 0;
-            for (int i = 0; i < materials.Length; i++)
-            {
-                int materialMax = InferMaxSHBandFromMaterial(materials[i]);
-                if (materialMax > inferredMax)
-                {
-                    inferredMax = materialMax;
-                }
-            }
-
-            if (inferredMax >= 0)
-            {
-                maxShBand = inferredMax;
-            }
-
-            return inferredMax;
-        }
-
-        public void SetMaxSHBand(int value)
-        {
-            maxShBand = Mathf.Clamp(value, 0, 3);
+            return value <= 0 ? 50 : Mathf.Clamp(value, 1, 99);
         }
 
         public string GetDisplayName()
@@ -228,34 +183,28 @@ namespace GaussianSplatting
             return !string.IsNullOrEmpty(splatName) ? splatName : gameObject.name;
         }
 
-        public string GetDescription()
+        // Max SH band carried by this object's source, from its stored coeff count (3->SH1, 8->SH2, 15->SH3).
+        public int GetMaxSHBand()
         {
-            return description;
+            int coeff = GetFileSHCoeffCount(0);
+            if (coeff >= 15) return 3;
+            if (coeff >= 8) return 2;
+            if (coeff >= 3) return 1;
+            return 0;
         }
 
-        public void ShowSorted()
+#if UNITY_EDITOR && !COMPILER_UDONSHARP
+        public bool TryGetLocalBounds(out Bounds bounds)
         {
-            sortedObject = ResolveChildObject(sortedObject, "Sorted");
-            if (sortedObject != null)
+            Vector3 size = boundsMax - boundsMin;
+            if (size.x > 0.0f && size.y > 0.0f && size.z > 0.0f)
             {
-                sortedObject.SetActive(true);
+                bounds = new Bounds((boundsMin + boundsMax) * 0.5f, size);
+                return true;
             }
-
-            SetSortedRendererEnabled(true);
-
-            for (int i = 0; i < transform.childCount; i++)
-            {
-                Transform child = transform.GetChild(i);
-                if (child == null || (sortedObject != null && child.gameObject == sortedObject))
-                {
-                    continue;
-                }
-
-                if (child.GetComponent(typeof(Renderer)) != null || child.GetComponent(typeof(MeshFilter)) != null)
-                {
-                    child.gameObject.SetActive(false);
-                }
-            }
+            bounds = new Bounds(Vector3.zero, Vector3.zero);
+            return false;
         }
+#endif
     }
 }

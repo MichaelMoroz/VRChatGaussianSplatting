@@ -21,7 +21,6 @@ namespace GaussianSplatting.Editor
             {
                 return false;
             }
-            bool combinedMode = renderer.IsCombinedRenderingMode();
             GameObject combinedObject = parentRenderer.gameObject;
             Material[] combinedMaterials = parentRenderer.sharedMaterials;
             if (combinedMaterials == null || combinedMaterials.Length == 0)
@@ -41,9 +40,9 @@ namespace GaussianSplatting.Editor
                 EditorUtility.SetDirty(combinedTransform);
             }
             Bounds combinedBounds = HugeBounds();
-            string combinedFolderPath = PlySplatImporter.GetSceneTempResourceFolderPath(renderer.gameObject.scene, "RTs/Combined");
-            string assetPrefix = PlySplatImporter.SanitizeAssetName(renderer.name);
-            PlySplatImporter.EnsureFolderExists(combinedFolderPath);
+            string combinedFolderPath = GaussianSplatImporter.GetSceneTempResourceFolderPath(renderer.gameObject.scene, "RTs/Combined");
+            string assetPrefix = GaussianSplatImporter.SanitizeAssetName(renderer.name);
+            GaussianSplatImporter.EnsureFolderExists(combinedFolderPath);
             List<Material> parentMaterials = new List<Material>();
             int cursor = 0;
             if (IsShader(combinedMaterials[0], "VRChatGaussianSplatting/ToSRGB"))
@@ -58,7 +57,7 @@ namespace GaussianSplatting.Editor
                 parentMaterials.Add(combinedMaterials[end]);
             }
             bool changed = false;
-            Mesh parentMesh = PlySplatImporter.CreateOrReplaceAsset(CreateMesh(parentMaterials.Count, 0, combinedBounds), combinedFolderPath + "/" + assetPrefix + "_CombinedConversionMesh.asset");
+            Mesh parentMesh = GaussianSplatImporter.CreateOrReplaceAsset(CreateMesh(parentMaterials.Count, 0, combinedBounds), combinedFolderPath + "/" + assetPrefix + "_CombinedConversionMesh.asset");
             MeshFilter parentFilter = parentRenderer.GetComponent<MeshFilter>();
             if (parentFilter != null && (parentFilter.sharedMesh != parentMesh || !BoundsApproximatelyEqual(parentMesh.bounds, combinedBounds)))
             {
@@ -79,7 +78,7 @@ namespace GaussianSplatting.Editor
             }
             if (cursor >= end)
             {
-                changed = SetCombinedActive(combinedObject, combinedMode, changed);
+                changed = SetCombinedActive(combinedObject, true, changed);
                 if (changed)
                 {
                     EditorUtility.SetDirty(parentRenderer);
@@ -156,20 +155,14 @@ namespace GaussianSplatting.Editor
                 chunkRenderer.reflectionProbeUsage = parentRenderer.reflectionProbeUsage;
                 chunkRenderer.motionVectorGenerationMode = parentRenderer.motionVectorGenerationMode;
                 chunkRenderer.allowOcclusionWhenDynamic = parentRenderer.allowOcclusionWhenDynamic;
-                int splatCount = Mathf.Max(0, splatMaterial.GetInt("_SplatCount"));
-                string chunkMeshPath = combinedFolderPath + "/" + assetPrefix + (chunkCount > 0 ? $"_CombinedPass{chunkCount}" : "_CombinedMain") + "_Mesh.asset";
-                bool chunkMeshMatches = ChunkMeshMatches(chunkFilter.sharedMesh, splatCount, alphaMask != null, combinedBounds);
-                if (!chunkMeshMatches && AssetDatabase.LoadAssetAtPath<Mesh>(chunkMeshPath) != null)
-                {
-                    AssetDatabase.DeleteAsset(chunkMeshPath);
-                }
-                Mesh chunkMesh = PlySplatImporter.CreateOrReplaceAsset(CreateMesh(0, splatCount, combinedBounds, alphaMask != null), chunkMeshPath);
-                if (chunkFilter.sharedMesh != chunkMesh || !chunkMeshMatches)
+                // Shared geometric pass mesh (one per pass index, reused across every object/scene) instead of a
+                // per-scene chunk mesh. The pass material's _SplatCount matches the pass mesh capacity.
+                Mesh chunkMesh = GaussianSplatRTPool.LoadPassMesh(chunkCount);
+                if (chunkFilter.sharedMesh != chunkMesh)
                 {
                     Undo.RecordObject(chunkFilter, "Update Combined Gaussian Splat Chunk Mesh");
                     chunkFilter.sharedMesh = chunkMesh;
                     EditorUtility.SetDirty(chunkFilter);
-                    EditorUtility.SetDirty(chunkMesh);
                     changed = true;
                 }
                 Material[] chunkMaterials = alphaMask != null ? new[] { alphaMask, splatMaterial } : new[] { splatMaterial };
@@ -205,7 +198,7 @@ namespace GaussianSplatting.Editor
                     childIndex--;
                 }
             }
-            changed = SetCombinedActive(combinedObject, combinedMode, changed);
+            changed = SetCombinedActive(combinedObject, true, changed);
             if (changed)
             {
                 EditorUtility.SetDirty(parentRenderer);
@@ -271,30 +264,10 @@ namespace GaussianSplatting.Editor
             Bounds combinedBounds = new Bounds();
             bool hasBounds = false;
             bool forceHugeBounds = false;
-            GaussianSplatObject[] splats = FindSceneObjects<GaussianSplatObject>(scene);
-            for (int i = 0; i < splats.Length; i++)
-            {
-                GaussianSplatObject splat = splats[i];
-                if (splat == null || !splat.gameObject.activeInHierarchy)
-                {
-                    continue;
-                }
-                MeshRenderer sourceRenderer = splat.GetSortedRenderer();
-                if (sourceRenderer == null)
-                {
-                    continue;
-                }
-                if (sourceRenderer.transform == combinedTransform || sourceRenderer.transform.IsChildOf(combinedTransform))
-                {
-                    continue;
-                }
-                EncapsulateWorldBounds(sourceRenderer.bounds, combinedTransform, ref combinedBounds, ref hasBounds);
-            }
-
-            GaussianSplatLODObject[] lodObjects = FindSceneObjects<GaussianSplatLODObject>(scene);
+            GaussianSplatObject[] lodObjects = FindSceneObjects<GaussianSplatObject>(scene);
             for (int i = 0; i < lodObjects.Length; i++)
             {
-                GaussianSplatLODObject lodObject = lodObjects[i];
+                GaussianSplatObject lodObject = lodObjects[i];
                 if (lodObject == null || !lodObject.gameObject.activeInHierarchy || !lodObject.IsRenderable())
                 {
                     continue;
@@ -389,15 +362,6 @@ namespace GaussianSplatting.Editor
                 && (left.size - right.size).sqrMagnitude <= epsilon * epsilon;
         }
 
-        static bool ChunkMeshMatches(Mesh mesh, int splatCount, bool hasAlphaMask, Bounds bounds)
-        {
-            int splatSubMesh = hasAlphaMask ? 1 : 0;
-            return mesh != null
-                && mesh.subMeshCount > splatSubMesh
-                && mesh.GetTopology(splatSubMesh) == MeshTopology.Points
-                && mesh.GetIndexCount(splatSubMesh) == (uint)((splatCount + 31) / 32)
-                && BoundsApproximatelyEqual(mesh.bounds, bounds);
-        }
         static Mesh CreateMesh(int conversionPassCount, int splatCount, Bounds bounds, bool hasAlphaMask = false)
         {
             List<int> indexCounts = new List<int>();
@@ -409,13 +373,13 @@ namespace GaussianSplatting.Editor
             }
             if (splatCount > 0)
             {
-                PlySplatImporter.AppendMeshLayout(
+                GaussianSplatImporter.AppendMeshLayout(
                     indexCounts,
                     topologies,
-                    new[] { new PlySplatImporter.PassInfo(0, 0, splatCount, hasAlphaMask) },
+                    new[] { new GaussianSplatImporter.PassInfo(0, 0, splatCount, hasAlphaMask) },
                     false);
             }
-            return PlySplatImporter.CreateMultiPassMesh(indexCounts, topologies, bounds);
+            return GaussianSplatImporter.CreateMultiPassMesh(indexCounts, topologies, bounds);
         }
 
     }

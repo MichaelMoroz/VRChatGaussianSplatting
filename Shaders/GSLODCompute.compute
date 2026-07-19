@@ -1,0 +1,704 @@
+#pragma kernel ClearKMeansAccum
+#pragma kernel ComputeChunkNorms
+#pragma kernel InitializeCenters
+#pragma kernel AssignAndAccumulate
+#pragma kernel NormalizeCenters
+#pragma kernel MergeClusters
+
+#include "GaussianTransform.cginc"
+
+#define GSLOD_KMEANS_DIMS 13
+#define GSLOD_THREADS 256
+#define GSLOD_CLUSTER_TILE_SIZE 256
+#define GSLOD_CLUSTER_TILE_SHIFT 8
+
+struct BucketRecord
+{
+    uint key;
+    float px, py, pz;
+    float cr, cg, cb;
+    float opacity;
+    float sx, sy, sz;
+    float rx, ry, rz, rw;
+    float importance;
+    uint sourceIndex;
+};
+
+StructuredBuffer<BucketRecord> _Splats;
+StructuredBuffer<int> _ChunkCounts;
+RWStructuredBuffer<float4> _ChunkNorms;
+RWStructuredBuffer<float> _Centers;
+RWStructuredBuffer<int> _Assignments;
+RWStructuredBuffer<int> _FeatureSums;
+RWStructuredBuffer<int> _ClusterCounts;
+RWStructuredBuffer<BucketRecord> _Merged;
+// Per-splat raw SH aligned with _Splats: [splatIndex*_ShCoeffCount*3 + coeff*3 + ch]. Merged output
+// [mergedSlot*_ShCoeffCount*3 + coeff*3 + ch]. Only accessed when _ShCoeffCount > 0.
+StructuredBuffer<float> _SplatSH;
+RWStructuredBuffer<float> _MergedSH;
+
+int _ChunkSize;
+int _BatchChunkCount;
+int _Level;
+int _MaxClusterCount;
+int _ReusePercent;
+int _ClusterCountOverride;
+int _ClusterCountPercentOverride;
+int _SourceStartOverride;
+int _ShCoeffCount;
+float _FeatureAtomicScale;
+
+groupshared int gsFeatureSums[GSLOD_CLUSTER_TILE_SIZE * GSLOD_KMEANS_DIMS];
+groupshared int gsClusterCounts[GSLOD_CLUSTER_TILE_SIZE];
+groupshared float gsReduce[GSLOD_THREADS];
+groupshared float gsReduceX[GSLOD_THREADS];
+groupshared float gsReduceY[GSLOD_THREADS];
+groupshared float gsReduceZ[GSLOD_THREADS];
+groupshared float gsReduceR[GSLOD_THREADS];
+groupshared float gsReduceG[GSLOD_THREADS];
+groupshared float gsReduceB[GSLOD_THREADS];
+groupshared float gsCov00[GSLOD_THREADS];
+groupshared float gsCov01[GSLOD_THREADS];
+groupshared float gsCov02[GSLOD_THREADS];
+groupshared float gsCov11[GSLOD_THREADS];
+groupshared float gsCov12[GSLOD_THREADS];
+groupshared float gsCov22[GSLOD_THREADS];
+groupshared float gsShared[8];
+
+int NormalizeReusePercent()
+{
+    return _ReusePercent <= 0 ? 50 : min(max(_ReusePercent, 1), 99);
+}
+
+int ComputeLodOutputCount(int lod0Count, int level)
+{
+    if (level <= 0)
+    {
+        return max(0, lod0Count);
+    }
+
+    int divisor = 1 << min(30, level);
+    return min(max((int)floor((float)lod0Count / (float)divisor + 0.5), 0), lod0Count);
+}
+
+int ComputeLodClusterCount(int lod0Count, int level)
+{
+    if (level <= 0)
+    {
+        return max(0, lod0Count);
+    }
+
+    int outputCount = ComputeLodOutputCount(lod0Count, level);
+    int reuseCount = min(max((int)floor((float)outputCount * ((float)NormalizeReusePercent() / 100.0) + 0.5), 0), outputCount);
+    int clusterCount = outputCount - reuseCount;
+    if (clusterCount < 1 || clusterCount >= lod0Count)
+    {
+        return 0;
+    }
+    return clusterCount;
+}
+
+int ComputeClusterCount(int lod0Count, int level)
+{
+    if (_ClusterCountPercentOverride > 0)
+    {
+        int clusterCount = (int)floor((float)lod0Count * ((float)_ClusterCountPercentOverride / 100.0) + 0.5);
+        clusterCount = min(max(clusterCount, 1), lod0Count);
+        return clusterCount < lod0Count ? clusterCount : 0;
+    }
+
+    if (_ClusterCountOverride > 0)
+    {
+        int clusterCount = min(_ClusterCountOverride, lod0Count);
+        return clusterCount < lod0Count ? clusterCount : 0;
+    }
+
+    return ComputeLodClusterCount(lod0Count, level);
+}
+
+int ComputeSourceStart(int lod0Count, int level)
+{
+    if (_ClusterCountOverride > 0 || _ClusterCountPercentOverride > 0)
+    {
+        return min(max(_SourceStartOverride, 0), lod0Count);
+    }
+
+    if (level <= 0)
+    {
+        return max(0, lod0Count);
+    }
+
+    int clusterCount = ComputeLodClusterCount(lod0Count, level);
+    if (clusterCount <= 0)
+    {
+        return lod0Count;
+    }
+
+    int outputCount = ComputeLodOutputCount(lod0Count, level);
+    return min(max(outputCount - clusterCount, 0), lod0Count);
+}
+
+uint HashUInt(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+float EllipsoidSurface(float3 scale)
+{
+    return max(1e-8, abs(scale.x * scale.y) + abs(scale.x * scale.z) + abs(scale.y * scale.z));
+}
+
+float MergeWeight(BucketRecord splat)
+{
+    return max(0.0, splat.opacity) * EllipsoidSurface(float3(splat.sx, splat.sy, splat.sz));
+}
+
+float3 SplatPosition(BucketRecord splat)
+{
+    return float3(splat.px, splat.py, splat.pz);
+}
+
+float4 SplatRotation(BucketRecord splat)
+{
+    float4 q = float4(splat.rx, splat.ry, splat.rz, splat.rw);
+    float lenSq = dot(q, q);
+    return lenSq > 1e-16 ? q * rsqrt(lenSq) : float4(0.0, 0.0, 0.0, 1.0);
+}
+
+float3x3 SplatCovariance(BucketRecord splat)
+{
+    float4 q = SplatRotation(splat);
+    float3x3 r = q2m(q);
+    float3 s = max(abs(float3(splat.sx, splat.sy, splat.sz)), 1e-6);
+    float3x3 scaleSq = float3x3(
+        s.x * s.x, 0.0, 0.0,
+        0.0, s.y * s.y, 0.0,
+        0.0, 0.0, s.z * s.z);
+    return mul(r, mul(scaleSq, transpose(r)));
+}
+
+float SplatSqrtCovarianceMax(BucketRecord splat)
+{
+    float4 q = SplatRotation(splat);
+    float3x3 r = q2m(q);
+    float3 s = max(abs(float3(splat.sx, splat.sy, splat.sz)), 1e-6);
+    float3x3 sqrtCov = mul(r, mul(float3x3(
+        s.x, 0.0, 0.0,
+        0.0, s.y, 0.0,
+        0.0, 0.0, s.z), transpose(r)));
+
+    return max(
+        max(max(abs(sqrtCov[0][0]), abs(sqrtCov[0][1])), max(abs(sqrtCov[0][2]), abs(sqrtCov[1][1]))),
+        max(abs(sqrtCov[1][2]), abs(sqrtCov[2][2])));
+}
+
+void BuildFeature(BucketRecord splat, float4 norm, out float features[GSLOD_KMEANS_DIMS])
+{
+    float4 q = SplatRotation(splat);
+    float3x3 r = q2m(q);
+    float3 s = max(abs(float3(splat.sx, splat.sy, splat.sz)), 1e-6);
+    float3x3 sqrtCov = mul(r, mul(float3x3(
+        s.x, 0.0, 0.0,
+        0.0, s.y, 0.0,
+        0.0, 0.0, s.z), transpose(r)));
+
+    features[0] = (splat.px - norm.x) * norm.w;
+    features[1] = (splat.py - norm.y) * norm.w;
+    features[2] = (splat.pz - norm.z) * norm.w;
+    features[3] = saturate(splat.cr);
+    features[4] = saturate(splat.cg);
+    features[5] = saturate(splat.cb);
+    features[6] = saturate(splat.opacity);
+    features[7] = sqrtCov[0][0] * norm.w;
+    features[8] = sqrtCov[0][1] * norm.w;
+    features[9] = sqrtCov[0][2] * norm.w;
+    features[10] = sqrtCov[1][1] * norm.w;
+    features[11] = sqrtCov[1][2] * norm.w;
+    features[12] = sqrtCov[2][2] * norm.w;
+}
+
+void ReduceSharedFloat(inout float value, uint threadIndex)
+{
+    gsReduce[threadIndex] = value;
+    GroupMemoryBarrierWithGroupSync();
+    [unroll]
+    for (uint stride = GSLOD_THREADS / 2; stride > 0; stride >>= 1)
+    {
+        if (threadIndex < stride)
+        {
+            gsReduce[threadIndex] += gsReduce[threadIndex + stride];
+        }
+        GroupMemoryBarrierWithGroupSync();
+    }
+    value = gsReduce[0];
+}
+
+void ReduceSharedTriplet(inout float3 value, uint threadIndex)
+{
+    gsReduceX[threadIndex] = value.x;
+    gsReduceY[threadIndex] = value.y;
+    gsReduceZ[threadIndex] = value.z;
+    GroupMemoryBarrierWithGroupSync();
+    [unroll]
+    for (uint stride = GSLOD_THREADS / 2; stride > 0; stride >>= 1)
+    {
+        if (threadIndex < stride)
+        {
+            gsReduceX[threadIndex] += gsReduceX[threadIndex + stride];
+            gsReduceY[threadIndex] += gsReduceY[threadIndex + stride];
+            gsReduceZ[threadIndex] += gsReduceZ[threadIndex + stride];
+        }
+        GroupMemoryBarrierWithGroupSync();
+    }
+    value = float3(gsReduceX[0], gsReduceY[0], gsReduceZ[0]);
+}
+
+void ReduceSharedMinTriplet(inout float3 value, uint threadIndex)
+{
+    gsReduceX[threadIndex] = value.x;
+    gsReduceY[threadIndex] = value.y;
+    gsReduceZ[threadIndex] = value.z;
+    GroupMemoryBarrierWithGroupSync();
+    [unroll]
+    for (uint stride = GSLOD_THREADS / 2; stride > 0; stride >>= 1)
+    {
+        if (threadIndex < stride)
+        {
+            gsReduceX[threadIndex] = min(gsReduceX[threadIndex], gsReduceX[threadIndex + stride]);
+            gsReduceY[threadIndex] = min(gsReduceY[threadIndex], gsReduceY[threadIndex + stride]);
+            gsReduceZ[threadIndex] = min(gsReduceZ[threadIndex], gsReduceZ[threadIndex + stride]);
+        }
+        GroupMemoryBarrierWithGroupSync();
+    }
+    value = float3(gsReduceX[0], gsReduceY[0], gsReduceZ[0]);
+}
+
+void ReduceSharedMaxTriplet(inout float3 value, uint threadIndex)
+{
+    gsReduceX[threadIndex] = value.x;
+    gsReduceY[threadIndex] = value.y;
+    gsReduceZ[threadIndex] = value.z;
+    GroupMemoryBarrierWithGroupSync();
+    [unroll]
+    for (uint stride = GSLOD_THREADS / 2; stride > 0; stride >>= 1)
+    {
+        if (threadIndex < stride)
+        {
+            gsReduceX[threadIndex] = max(gsReduceX[threadIndex], gsReduceX[threadIndex + stride]);
+            gsReduceY[threadIndex] = max(gsReduceY[threadIndex], gsReduceY[threadIndex + stride]);
+            gsReduceZ[threadIndex] = max(gsReduceZ[threadIndex], gsReduceZ[threadIndex + stride]);
+        }
+        GroupMemoryBarrierWithGroupSync();
+    }
+    value = float3(gsReduceX[0], gsReduceY[0], gsReduceZ[0]);
+}
+
+void ReduceSharedMaxFloat(inout float value, uint threadIndex)
+{
+    gsReduce[threadIndex] = value;
+    GroupMemoryBarrierWithGroupSync();
+    [unroll]
+    for (uint stride = GSLOD_THREADS / 2; stride > 0; stride >>= 1)
+    {
+        if (threadIndex < stride)
+        {
+            gsReduce[threadIndex] = max(gsReduce[threadIndex], gsReduce[threadIndex + stride]);
+        }
+        GroupMemoryBarrierWithGroupSync();
+    }
+    value = gsReduce[0];
+}
+
+void ReduceSharedCovariance(inout float3x3 covariance, uint threadIndex)
+{
+    gsCov00[threadIndex] = covariance[0][0];
+    gsCov01[threadIndex] = covariance[0][1];
+    gsCov02[threadIndex] = covariance[0][2];
+    gsCov11[threadIndex] = covariance[1][1];
+    gsCov12[threadIndex] = covariance[1][2];
+    gsCov22[threadIndex] = covariance[2][2];
+    GroupMemoryBarrierWithGroupSync();
+    [unroll]
+    for (uint stride = GSLOD_THREADS / 2; stride > 0; stride >>= 1)
+    {
+        if (threadIndex < stride)
+        {
+            gsCov00[threadIndex] += gsCov00[threadIndex + stride];
+            gsCov01[threadIndex] += gsCov01[threadIndex + stride];
+            gsCov02[threadIndex] += gsCov02[threadIndex + stride];
+            gsCov11[threadIndex] += gsCov11[threadIndex + stride];
+            gsCov12[threadIndex] += gsCov12[threadIndex + stride];
+            gsCov22[threadIndex] += gsCov22[threadIndex + stride];
+        }
+        GroupMemoryBarrierWithGroupSync();
+    }
+    covariance = float3x3(
+        gsCov00[0], gsCov01[0], gsCov02[0],
+        gsCov01[0], gsCov11[0], gsCov12[0],
+        gsCov02[0], gsCov12[0], gsCov22[0]);
+}
+
+[numthreads(GSLOD_THREADS, 1, 1)]
+void ClearKMeansAccum(uint3 id : SV_DispatchThreadID)
+{
+    uint slot = id.x;
+    uint totalSlots = (uint)(_BatchChunkCount * _MaxClusterCount);
+    if (slot >= totalSlots)
+    {
+        return;
+    }
+
+    _ClusterCounts[slot] = 0;
+    uint featureBase = slot * GSLOD_KMEANS_DIMS;
+    [unroll]
+    for (uint d = 0; d < GSLOD_KMEANS_DIMS; d++)
+    {
+        _FeatureSums[featureBase + d] = 0;
+    }
+}
+
+[numthreads(GSLOD_THREADS, 1, 1)]
+void ComputeChunkNorms(uint3 groupId : SV_GroupID, uint groupIndex : SV_GroupIndex)
+{
+    uint chunk = groupId.x;
+    int chunkCount = _ChunkCounts[chunk];
+    int clusterCount = ComputeClusterCount(chunkCount, _Level);
+    if (clusterCount <= 0)
+    {
+        if (groupIndex == 0)
+        {
+            _ChunkNorms[chunk] = float4(0.0, 0.0, 0.0, 1.0);
+        }
+        return;
+    }
+
+    int lowerStart = ComputeSourceStart(chunkCount, _Level);
+    float3 minPos = float3(3.402823e38, 3.402823e38, 3.402823e38);
+    float3 maxPos = float3(-3.402823e38, -3.402823e38, -3.402823e38);
+    float maxSqrtCov = 1e-6;
+
+    for (int local = lowerStart + (int)groupIndex; local < chunkCount; local += GSLOD_THREADS)
+    {
+        BucketRecord splat = _Splats[chunk * (uint)_ChunkSize + (uint)local];
+        float3 pos = SplatPosition(splat);
+        minPos = min(minPos, pos);
+        maxPos = max(maxPos, pos);
+        maxSqrtCov = max(maxSqrtCov, SplatSqrtCovarianceMax(splat));
+    }
+
+    ReduceSharedMinTriplet(minPos, groupIndex);
+    ReduceSharedMaxTriplet(maxPos, groupIndex);
+    ReduceSharedMaxFloat(maxSqrtCov, groupIndex);
+
+    if (groupIndex == 0)
+    {
+        float3 center = (minPos + maxPos) * 0.5;
+        float3 extent = max(abs(maxPos - center), abs(minPos - center));
+        float maxSpatial = max(max(max(extent.x, extent.y), extent.z), maxSqrtCov);
+        _ChunkNorms[chunk] = float4(center, 5.0 / max(maxSpatial, 1e-6));
+    }
+}
+
+[numthreads(GSLOD_THREADS, 1, 1)]
+void InitializeCenters(uint3 groupId : SV_GroupID, uint groupIndex : SV_GroupIndex)
+{
+    uint chunk = groupId.y;
+    int chunkCount = _ChunkCounts[chunk];
+    int clusterCount = ComputeClusterCount(chunkCount, _Level);
+    uint cluster = groupId.x * GSLOD_THREADS + groupIndex;
+    if (cluster >= (uint)clusterCount || clusterCount <= 0)
+    {
+        return;
+    }
+
+    int lowerStart = ComputeSourceStart(chunkCount, _Level);
+    int lowerCount = chunkCount - lowerStart;
+    uint seed = HashUInt((chunk + 1u) * 73856093u ^ ((uint)_Level + 1u) * 19349663u ^ (cluster + 1u) * 83492791u ^ (uint)chunkCount);
+    uint local = (uint)lowerStart + seed % (uint)max(1, lowerCount);
+    BucketRecord splat = _Splats[chunk * (uint)_ChunkSize + local];
+    float feature[GSLOD_KMEANS_DIMS];
+    BuildFeature(splat, _ChunkNorms[chunk], feature);
+
+    uint centerBase = (chunk * (uint)_MaxClusterCount + cluster) * GSLOD_KMEANS_DIMS;
+    [unroll]
+    for (uint d = 0; d < GSLOD_KMEANS_DIMS; d++)
+    {
+        _Centers[centerBase + d] = feature[d];
+    }
+}
+
+[numthreads(GSLOD_THREADS, 1, 1)]
+void AssignAndAccumulate(uint3 groupId : SV_GroupID, uint groupIndex : SV_GroupIndex)
+{
+    uint chunk = groupId.y;
+    int chunkCount = _ChunkCounts[chunk];
+    int clusterCount = ComputeClusterCount(chunkCount, _Level);
+    if (clusterCount <= 0)
+    {
+        return;
+    }
+
+    int lowerStart = ComputeSourceStart(chunkCount, _Level);
+    int localIndex = lowerStart + (int)groupId.x * GSLOD_THREADS + (int)groupIndex;
+    int nearest = -1;
+    float feature[GSLOD_KMEANS_DIMS];
+    if (localIndex < chunkCount)
+    {
+        uint splatIndex = chunk * (uint)_ChunkSize + (uint)localIndex;
+        BucketRecord splat = _Splats[splatIndex];
+        BuildFeature(splat, _ChunkNorms[chunk], feature);
+
+        nearest = 0;
+        float nearestDistance = 3.402823e38;
+        for (int cluster = 0; cluster < clusterCount; cluster++)
+        {
+            uint centerBase = (chunk * (uint)_MaxClusterCount + (uint)cluster) * GSLOD_KMEANS_DIMS;
+            float distance = 0.0;
+            [unroll]
+            for (uint d = 0; d < GSLOD_KMEANS_DIMS; d++)
+            {
+                float delta = feature[d] - _Centers[centerBase + d];
+                distance += delta * delta;
+            }
+            if (distance < nearestDistance)
+            {
+                nearestDistance = distance;
+                nearest = cluster;
+            }
+        }
+
+        _Assignments[splatIndex] = nearest;
+    }
+
+    int tileCount = (clusterCount + GSLOD_CLUSTER_TILE_SIZE - 1) >> GSLOD_CLUSTER_TILE_SHIFT;
+    for (int tile = 0; tile < tileCount; tile++)
+    {
+        int tileStart = tile << GSLOD_CLUSTER_TILE_SHIFT;
+        int tileClusterCount = min(GSLOD_CLUSTER_TILE_SIZE, clusterCount - tileStart);
+        for (uint clearFeatureIndex = groupIndex; clearFeatureIndex < (uint)(GSLOD_CLUSTER_TILE_SIZE * GSLOD_KMEANS_DIMS); clearFeatureIndex += GSLOD_THREADS)
+        {
+            gsFeatureSums[clearFeatureIndex] = 0;
+        }
+        gsClusterCounts[groupIndex] = 0;
+        GroupMemoryBarrierWithGroupSync();
+
+        if (nearest >= tileStart && nearest < tileStart + tileClusterCount)
+        {
+            int localCluster = nearest - tileStart;
+            [unroll]
+            for (uint d = 0; d < GSLOD_KMEANS_DIMS; d++)
+            {
+                InterlockedAdd(gsFeatureSums[localCluster * GSLOD_KMEANS_DIMS + d], (int)round(feature[d] * _FeatureAtomicScale));
+            }
+            InterlockedAdd(gsClusterCounts[localCluster], 1);
+        }
+
+        GroupMemoryBarrierWithGroupSync();
+
+        for (uint flushFeatureIndex = groupIndex; flushFeatureIndex < (uint)(tileClusterCount * GSLOD_KMEANS_DIMS); flushFeatureIndex += GSLOD_THREADS)
+        {
+            uint localCluster = flushFeatureIndex / GSLOD_KMEANS_DIMS;
+            uint d = flushFeatureIndex - localCluster * GSLOD_KMEANS_DIMS;
+            uint cluster = (uint)tileStart + localCluster;
+            uint dst = (chunk * (uint)_MaxClusterCount + cluster) * GSLOD_KMEANS_DIMS + d;
+            InterlockedAdd(_FeatureSums[dst], gsFeatureSums[flushFeatureIndex]);
+        }
+        for (uint localCluster = groupIndex; localCluster < (uint)tileClusterCount; localCluster += GSLOD_THREADS)
+        {
+            uint cluster = (uint)tileStart + localCluster;
+            uint dst = chunk * (uint)_MaxClusterCount + cluster;
+            InterlockedAdd(_ClusterCounts[dst], gsClusterCounts[localCluster]);
+        }
+        GroupMemoryBarrierWithGroupSync();
+    }
+}
+
+[numthreads(GSLOD_THREADS, 1, 1)]
+void NormalizeCenters(uint3 id : SV_DispatchThreadID)
+{
+    uint slot = id.x;
+    uint totalSlots = (uint)(_BatchChunkCount * _MaxClusterCount);
+    if (slot >= totalSlots)
+    {
+        return;
+    }
+
+    int count = _ClusterCounts[slot];
+    if (count <= 0)
+    {
+        return;
+    }
+
+    uint featureBase = slot * GSLOD_KMEANS_DIMS;
+    float inv = 1.0 / ((float)count * _FeatureAtomicScale);
+    [unroll]
+    for (uint d = 0; d < GSLOD_KMEANS_DIMS; d++)
+    {
+        _Centers[featureBase + d] = (float)_FeatureSums[featureBase + d] * inv;
+    }
+}
+
+[numthreads(GSLOD_THREADS, 1, 1)]
+void MergeClusters(uint3 groupId : SV_GroupID, uint groupIndex : SV_GroupIndex)
+{
+    uint cluster = groupId.x;
+    uint chunk = groupId.y;
+    int chunkCount = _ChunkCounts[chunk];
+    int clusterCount = ComputeClusterCount(chunkCount, _Level);
+    if (cluster >= (uint)clusterCount || clusterCount <= 0)
+    {
+        return;
+    }
+
+    int lowerStart = ComputeSourceStart(chunkCount, _Level);
+    int lowerCount = chunkCount - lowerStart;
+    float rawWeight = 0.0;
+    float3 weightedMean = 0.0;
+    float3 weightedColor = 0.0;
+
+    for (int local = lowerStart + (int)groupIndex; local < chunkCount; local += GSLOD_THREADS)
+    {
+        uint splatIndex = chunk * (uint)_ChunkSize + (uint)local;
+        if (_Assignments[splatIndex] != (int)cluster)
+        {
+            continue;
+        }
+
+        BucketRecord splat = _Splats[splatIndex];
+        float weight = MergeWeight(splat);
+        rawWeight += weight;
+        weightedMean += SplatPosition(splat) * weight;
+        weightedColor += float3(splat.cr, splat.cg, splat.cb) * weight;
+    }
+
+    float totalWeight = rawWeight;
+    ReduceSharedFloat(totalWeight, groupIndex);
+    ReduceSharedTriplet(weightedMean, groupIndex);
+    ReduceSharedTriplet(weightedColor, groupIndex);
+
+    if (groupIndex == 0)
+    {
+        float invWeight = totalWeight > 1e-8 ? rcp(totalWeight) : 0.0;
+        gsShared[0] = totalWeight;
+        gsShared[1] = weightedMean.x * invWeight;
+        gsShared[2] = weightedMean.y * invWeight;
+        gsShared[3] = weightedMean.z * invWeight;
+        gsShared[4] = weightedColor.x * invWeight;
+        gsShared[5] = weightedColor.y * invWeight;
+        gsShared[6] = weightedColor.z * invWeight;
+    }
+    GroupMemoryBarrierWithGroupSync();
+
+    totalWeight = gsShared[0];
+    float3 parentMean = float3(gsShared[1], gsShared[2], gsShared[3]);
+    float3 parentColor = float3(gsShared[4], gsShared[5], gsShared[6]);
+    float3x3 covariance = float3x3(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+
+    if (totalWeight > 1e-8)
+    {
+        for (int local = lowerStart + (int)groupIndex; local < chunkCount; local += GSLOD_THREADS)
+        {
+            uint splatIndex = chunk * (uint)_ChunkSize + (uint)local;
+            if (_Assignments[splatIndex] != (int)cluster)
+            {
+                continue;
+            }
+
+            BucketRecord splat = _Splats[splatIndex];
+            float weight = MergeWeight(splat) / totalWeight;
+            float3 delta = SplatPosition(splat) - parentMean;
+            covariance += weight * (SplatCovariance(splat) + float3x3(
+                delta.x * delta.x, delta.x * delta.y, delta.x * delta.z,
+                delta.y * delta.x, delta.y * delta.y, delta.y * delta.z,
+                delta.z * delta.x, delta.z * delta.y, delta.z * delta.z));
+        }
+    }
+
+    ReduceSharedCovariance(covariance, groupIndex);
+
+    // Weighted-mean SH per cluster (same MergeWeight as pos/color). One group reduction per coeff; thread 0
+    // writes the merged slot. Fallback (empty cluster) copies the representative splat's SH.
+    if (_ShCoeffCount > 0)
+    {
+        uint shFallbackLocal = (uint)(lowerStart + min(max(0, lowerCount - 1), (int)cluster));
+        uint mergedSlotSH = chunk * (uint)_MaxClusterCount + cluster;
+        for (int shCoeff = 0; shCoeff < _ShCoeffCount; shCoeff++)
+        {
+            float3 shSum = 0.0;
+            if (totalWeight > 1e-8)
+            {
+                for (int localSH = lowerStart + (int)groupIndex; localSH < chunkCount; localSH += GSLOD_THREADS)
+                {
+                    uint si = chunk * (uint)_ChunkSize + (uint)localSH;
+                    if (_Assignments[si] != (int)cluster) continue;
+                    uint b = (si * (uint)_ShCoeffCount + (uint)shCoeff) * 3u;
+                    shSum += float3(_SplatSH[b], _SplatSH[b + 1u], _SplatSH[b + 2u]) * MergeWeight(_Splats[si]);
+                }
+            }
+            ReduceSharedTriplet(shSum, groupIndex);
+            if (groupIndex == 0)
+            {
+                float3 shMean;
+                if (totalWeight > 1e-8)
+                {
+                    shMean = shSum / totalWeight;
+                }
+                else
+                {
+                    uint fb = ((chunk * (uint)_ChunkSize + shFallbackLocal) * (uint)_ShCoeffCount + (uint)shCoeff) * 3u;
+                    shMean = float3(_SplatSH[fb], _SplatSH[fb + 1u], _SplatSH[fb + 2u]);
+                }
+                uint o = (mergedSlotSH * (uint)_ShCoeffCount + (uint)shCoeff) * 3u;
+                _MergedSH[o] = shMean.x; _MergedSH[o + 1u] = shMean.y; _MergedSH[o + 2u] = shMean.z;
+            }
+            GroupMemoryBarrierWithGroupSync();
+        }
+    }
+
+    if (groupIndex != 0)
+    {
+        return;
+    }
+
+    uint fallbackLocal = (uint)(lowerStart + min(max(0, lowerCount - 1), (int)cluster));
+    BucketRecord fallback = _Splats[chunk * (uint)_ChunkSize + fallbackLocal];
+    BucketRecord result = fallback;
+    if (totalWeight > 1e-8)
+    {
+        // Enlarge the merged covariance by sqrt(2) so the representative LOD splat keeps coverage of the
+        // splats it replaces (the weighted member covariance + spread under-covers; this offsets holes /
+        // aliasing between LOD levels). Scales each axis std by 2^(1/4).
+        covariance = covariance * 1.4142135623730951;
+        float3x3 eigenvectors;
+        float3 eigenvalues;
+        GSDiagonalizeSymmetricCovariance(covariance, eigenvectors, eigenvalues);
+        float3 scale = sqrt(max(eigenvalues, 1e-12));
+        float4 rotation = m2q(eigenvectors);
+        if (rotation.w < 0.0)
+        {
+            rotation = -rotation;
+        }
+
+        result.px = parentMean.x;
+        result.py = parentMean.y;
+        result.pz = parentMean.z;
+        result.cr = parentColor.x;
+        result.cg = parentColor.y;
+        result.cb = parentColor.z;
+        result.opacity = totalWeight / EllipsoidSurface(scale);
+        result.sx = max(1e-6, scale.x);
+        result.sy = max(1e-6, scale.y);
+        result.sz = max(1e-6, scale.z);
+        result.rx = rotation.x;
+        result.ry = rotation.y;
+        result.rz = rotation.z;
+        result.rw = rotation.w;
+        result.importance = 0.0;
+    }
+    _Merged[chunk * (uint)_MaxClusterCount + cluster] = result;
+}

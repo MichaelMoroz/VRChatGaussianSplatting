@@ -16,53 +16,216 @@ namespace GaussianSplatting
 
 /// <summary>
 /// Owns the "combine all scene splats into one sorted render object" subsystem. The combined object
-/// behaves like a single GaussianSplatObject (SH0) so the renderer can drive it through the same
-/// single-splat sort/render path. The renderer delegates all combine work to this component.
+/// behaves like a single GaussianSplatObject (SH0) that the renderer drives through its sort/render
+/// path. The renderer delegates all combine work to this component.
 /// </summary>
 [UdonBehaviourSyncMode(BehaviourSyncMode.None)]
 public partial class GaussianSplatCombiner : UdonSharpBehaviour
 {
-    const int COMBINED_SOURCE_BATCH_SIZE_DESKTOP = 8;
-    const int COMBINED_SOURCE_BATCH_SIZE_GLES = 1;
-    const int LOD_SOURCE_BATCH_SIZE = 2;
     const int MAX_COMBINED_SPLAT_COUNT = 1 << 24;
-    const int DEFAULT_COMBINED_SPLATS_PER_PASS = 3 * 256 * 1024;
-    const int DEFAULT_COMBINED_MAX_ALPHA_MASK_COUNT = 1;
 
     [SerializeField] GaussianSplatRenderer gaussianSplatRenderer;
     [SerializeField] MeshRenderer combinedSortedRenderer;
-    [SerializeField] Material combineDataMaterial;
-    [SerializeField] Material lodChunkSelectMaterial;
-    [SerializeField] Material lodCombineDataMaterial;
     [SerializeField] RenderTextureFormat combinedPositionsFormat = RenderTextureFormat.ARGBFloat, combinedRotationsFormat = RenderTextureFormat.ARGB32, combinedScalesFormat = RenderTextureFormat.ARGBHalf, combinedColorsFormat = RenderTextureFormat.ARGB32, combinedColorsCameraFormat = RenderTextureFormat.ARGB32;
     [SerializeField, HideInInspector] bool combinedTextureFormatsInitialized = true;
     [SerializeField] int combinedStartRenderQueue = 4050;
-    [SerializeField] RenderTexture combinedPositions, combinedRotations, combinedScales, combinedColors, combinedColorsCamera;
-    [SerializeField] RenderTexture lodChunkSelection;
+    // Per-frame output holders are rebound from the serialized bucket arrays; never serialize these.
+    [System.NonSerialized] RenderTexture combinedPositions, combinedRotations, combinedScales, combinedColors, combinedColorsCamera;
+    [SerializeField, HideInInspector] RenderTexture[] combinedPositionsByBucket, combinedRotationsByBucket, combinedScalesByBucket, combinedColorsByBucket, combinedColorsCameraByBucket;
     [SerializeField] RenderTexture lodAlphaState;
     [SerializeField] RenderTexture lodAlphaStateScratch;
+    // Ping-pong state swaps these holders only; the serialized refs above stay canonical.
+    [System.NonSerialized] RenderTexture _lodAlphaFront;
+    [System.NonSerialized] RenderTexture _lodAlphaBack;
     [SerializeField] int builtCombinedElementCount;
+
+    // Content signature of the last unified fuse bake (object set + source textures + counts). The fuse
+    // does heavy GPU readbacks, so the bake must run ONLY when its signature changes — never every refresh.
+    // lodFusedSignature is the per-instance LAYOUT signature (object set + per-instance chunk metadata);
+    // lodFusedSourceSignature hashes only the UNIQUE source set, which is all the heavy fused source
+    // textures depend on (instances dedup). A duplicate add/remove changes layout but not source, so the
+    // ~GB GPU source concat is skipped and only the small metadata textures rebuild.
+    [SerializeField, HideInInspector] int lodFusedSignature;
+    [SerializeField, HideInInspector] int lodFusedSourceSignature;
+    // The pending-rebake queue (membership + target signature + debounce time) is transient editor-only state,
+    // held in static maps in the editor partial; it must NOT be serialized or it dirties the scene on save.
+    const int FUSED_TRANSFORM_ROWS = 9; // per-object transform-table rows (shared by the unified path)
+
+    // The unified fused source set baked by GaussianSplatFuse.CreateFuseLODJob: every scene splat concatenated into
+    // one source, rendered by a single scene-global selection (2D mip pyramid -> one alpha = scene budget)
+    // + a single combine, reading a per-frame per-object param texture (camera-in-object-space) + a 9-row
+    // transform texture. lodFusedObjects = [non-LOD then LOD] in objId order.
+    [SerializeField] Material lodUnifiedSelectMaterial, lodUnifiedCombineMaterial;
+    [SerializeField] Texture2D lodFusedPositions, lodFusedColors, lodFusedRotations, lodFusedScales;
+    [SerializeField] Texture2D lodGlobalBounds, lodGlobalRange, lodFileBase;
+    [SerializeField] GameObject[] lodFusedObjects;
+    [SerializeField] int lodFusedObjectCount, lodTotalChunks, lodMetaWidth, lodSelectionSide, lodFusedCoordShift, lodFusedCoordMask;
+    // Every fused object is a GaussianSplatObject (1..N levels); its chunks feed the unified selection.
+    [SerializeField] Texture2D lodUnifiedSH, lodShParams;
+    [SerializeField] int lodUnifiedShCoordShift, lodUnifiedShCoordMask;
+    [SerializeField] int lodTotalSourceCount;   // total splats baked into the fused set (all objects, all levels)
+    [SerializeField] int lodShDroppedObjects;   // objects whose SH overflowed the single fused SH texture (render DC-only)
+    // Per fused object (objId order) debug stats for the inspector table.
+    [SerializeField, HideInInspector] int[] lodObjSplatCount;
+    [SerializeField, HideInInspector] int[] lodObjFileCount;
+    [SerializeField, HideInInspector] int[] lodObjChunkCount;
+    [SerializeField, HideInInspector] int[] lodObjShCoeff;
+    [SerializeField, HideInInspector] bool[] lodObjShDropped;
+    [SerializeField] RenderTexture lodUnifiedSelection; // POT-square, mip-chained (2D pyramid)
+    [System.NonSerialized] Texture2D _lodParamTex;
+    [System.NonSerialized] Color[] _lodParamPixels;
+    [System.NonSerialized] Texture2D _lodUnifiedTransformTex;
+    [System.NonSerialized] Color[] _lodUnifiedTransformPixels;
+    const int LOD_PARAM_COLS = 5;
 
     const float LOD_ALPHA_ADAPT_RATE = 0.5f;
 
     [System.NonSerialized] int _combinedActualSplatCount;
     [System.NonSerialized] float _lodSplatTargetScale = 1.0f;
     [System.NonSerialized] float _lodDirectionalBias = 2.0f;
+    [System.NonSerialized] int _lodShBand = 3;
     [System.NonSerialized] int[] _lodOutputCounts;
 #if UNITY_EDITOR && !COMPILER_UDONSHARP
+    // Editor-only LOD debug preview flag. Must be static (not an instance field) so it stays out
+    // of UdonSharp's proxy->Udon serialization surface: as an instance field UdonSharp's formatter
+    // tried to serialize it despite [NonSerialized] and the Udon program (compiled without this
+    // editor-only block) has no symbol for it, throwing "Field for System.Boolean does not exist"
+    // on every play-mode enter. Static matches the adjacent editor-only readback dictionaries and
+    // is fine here (one combiner per scene; set every sort before use).
+    static bool _debugLodColors;
     static readonly Dictionary<GaussianSplatCombiner, int> _editorReadbackRenderedSplatCounts = new Dictionary<GaussianSplatCombiner, int>();
     static readonly Dictionary<GaussianSplatCombiner, int> _editorReadbackReservedSplatCounts = new Dictionary<GaussianSplatCombiner, int>();
     static readonly Dictionary<GaussianSplatCombiner, float> _editorReadbackAlphas = new Dictionary<GaussianSplatCombiner, float>();
-    static readonly Dictionary<GaussianSplatLODObject, Color[]> _editorLodChunkStates = new Dictionary<GaussianSplatLODObject, Color[]>();
 #endif
-    [System.NonSerialized] GaussianSplatObject[] _sceneSplats = new GaussianSplatObject[0];
-    [System.NonSerialized] GaussianSplatLODObject[] _sceneLods = new GaussianSplatLODObject[0];
+    [System.NonSerialized] GaussianSplatObject[] _sceneLods = new GaussianSplatObject[0];
 
     public MeshRenderer GetCombinedSortedRenderer() { return combinedSortedRenderer; }
     public GameObject GetCombinedObject() { return combinedSortedRenderer != null ? combinedSortedRenderer.gameObject : null; }
-    public string GetCombinedObjectName() { return combinedSortedRenderer != null ? combinedSortedRenderer.gameObject.name : "Combined"; }
+    public bool UseBucketResources(int tier)
+    {
+        if (!TryGetTierTexture(combinedPositionsByBucket, tier, out RenderTexture positions)
+            || !TryGetTierTexture(combinedRotationsByBucket, tier, out RenderTexture rotations)
+            || !TryGetTierTexture(combinedScalesByBucket, tier, out RenderTexture scales)
+            || !TryGetTierTexture(combinedColorsByBucket, tier, out RenderTexture colors)
+            || !TryGetTierTexture(combinedColorsCameraByBucket, tier, out RenderTexture colorsCamera))
+        {
+            return false;
+        }
+
+        combinedPositions = positions;
+        combinedRotations = rotations;
+        combinedScales = scales;
+        combinedColors = colors;
+        combinedColorsCamera = colorsCamera;
+        return true;
+    }
+
+    public bool BindDefaultBucketResources()
+    {
+        if (combinedPositions != null && combinedRotations != null && combinedScales != null && combinedColors != null && combinedColorsCamera != null)
+        {
+            return true;
+        }
+        int maxTier = combinedPositionsByBucket != null ? combinedPositionsByBucket.Length - 1 : -1;
+        for (int tier = maxTier; tier >= 0; tier--)
+        {
+            if (UseBucketResources(tier))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+    // Pure check (no mutation) used by the renderer to verify a tier is fully baked before committing a swap.
+    public bool HasBucketResources(int tier)
+    {
+        return TryGetTierTexture(combinedPositionsByBucket, tier, out RenderTexture positions)
+            && TryGetTierTexture(combinedRotationsByBucket, tier, out RenderTexture rotations)
+            && TryGetTierTexture(combinedScalesByBucket, tier, out RenderTexture scales)
+            && TryGetTierTexture(combinedColorsByBucket, tier, out RenderTexture colors)
+            && TryGetTierTexture(combinedColorsCameraByBucket, tier, out RenderTexture colorsCamera);
+    }
+    [System.NonSerialized] int _activePassCount = -1;
+
+    // Geometric pass ladder: cumulative capacity after pass k == 512K << k (512K,1M,2M,4M,8M,16M). Must match
+    // GaussianSplatRTPool. Smallest pass prefix whose cumulative covers renderedCount.
+    // (internal so the test assembly can verify it matches the editor pool's PassesToCover.)
+    internal static int PassesToCover(int count)
+    {
+        if (count <= 0)
+        {
+            return 0;
+        }
+        for (int k = 0; k < 6; k++)
+        {
+            if (((512 * 1024) << k) >= count)
+            {
+                return k + 1;
+            }
+        }
+        return 6;
+    }
+
+    // Enable the minimal prefix of combined pass chunks that covers renderedCount and disable the rest, so the
+    // draw processes only as many splats as are actually selected. Only does work when the prefix length
+    // changes (the per-chunk name lookup would otherwise allocate a string every frame).
+    public void UpdateActivePassCount(int renderedCount)
+    {
+        if (combinedSortedRenderer == null)
+        {
+            return;
+        }
+        int passes = PassesToCover(renderedCount);
+        if (passes == _activePassCount)
+        {
+            return;
+        }
+        _activePassCount = passes;
+        Transform parent = combinedSortedRenderer.transform;
+        for (int i = 0; i < 6; i++)
+        {
+            Transform chunk = parent.Find("CombinedChunk" + i);
+            if (chunk == null)
+            {
+                continue;
+            }
+            bool shouldBeActive = i < passes;
+            if (chunk.gameObject.activeSelf != shouldBeActive)
+            {
+                chunk.gameObject.SetActive(shouldBeActive);
+            }
+        }
+    }
+
+    static bool TryGetTierTexture(RenderTexture[] textures, int tier, out RenderTexture texture)
+    {
+        texture = textures != null && tier >= 0 && tier < textures.Length ? textures[tier] : null;
+        return texture != null;
+    }
+    public bool ContainsFusedLODObject(GameObject splatObject)
+    {
+        if (splatObject == null || lodFusedObjects == null)
+        {
+            return false;
+        }
+        int count = Mathf.Min(lodFusedObjectCount, lodFusedObjects.Length);
+        for (int i = 0; i < count; i++)
+        {
+            if (lodFusedObjects[i] == splatObject)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     public void SetLodSplatTargetScale(float value) { _lodSplatTargetScale = Mathf.Clamp(value, 0.01f, 1.0f); }
     public void SetLodDirectionalBias(float value) { _lodDirectionalBias = Mathf.Clamp(value, 1.0f, 16.0f); }
+    public void SetLodShBand(int value) { _lodShBand = Mathf.Clamp(value, 0, 3); }
+    public int GetFusedShDroppedObjectCount() { return lodShDroppedObjects; }
+#if UNITY_EDITOR && !COMPILER_UDONSHARP
+    public void SetEditorDebugLodColors(bool value) { _debugLodColors = value; }
+#endif
 
     void ResetLODOutputCounts(int count)
     {
@@ -86,6 +249,15 @@ public partial class GaussianSplatCombiner : UdonSharpBehaviour
         return Mathf.Clamp(Mathf.FloorToInt(hardBudget * Mathf.Clamp(targetScale, 0.01f, 1.0f)), 1, hardBudget);
     }
 
+    static Vector4 LODComputedParams(GaussianSplatObject lodObject)
+    {
+        return new Vector4(
+            1.0f,
+            1.0f,
+            lodObject != null ? lodObject.GetLodReusePercent() : 50.0f,
+            0.0f);
+    }
+
     GaussianSplatRenderer GetOwnerRenderer()
     {
 #if UNITY_EDITOR && !COMPILER_UDONSHARP
@@ -106,17 +278,6 @@ public partial class GaussianSplatCombiner : UdonSharpBehaviour
         return gaussianSplatRenderer;
     }
 
-    static int ResolveActualSplatCount(Material material, Texture positionsTexture)
-    {
-        if (material == null || positionsTexture == null)
-        {
-            return 0;
-        }
-        int textureElementCount = positionsTexture.width * positionsTexture.height;
-        int actualSplatCount = material.HasProperty("_ActualSplatCount") ? material.GetInt("_ActualSplatCount") : 0;
-        return actualSplatCount > 0 && actualSplatCount <= textureElementCount ? actualSplatCount : textureElementCount;
-    }
-
     static int ComputeTextureCoordShift(int width)
     {
         int shift = 0;
@@ -129,36 +290,10 @@ public partial class GaussianSplatCombiner : UdonSharpBehaviour
         return shift;
     }
 
-    static Material ResolvePrimarySplatMaterial(Material[] materials)
-    {
-        if (materials == null)
-        {
-            return null;
-        }
-        for (int i = 0; i < materials.Length; i++)
-        {
-            Material material = materials[i];
-            if (material != null && material.HasProperty("_GS_Positions"))
-            {
-                return material;
-            }
-        }
-        return null;
-    }
-
-    static bool TryGetSplatSource(GaussianSplatObject splat, out MeshRenderer renderer, out Material primaryMaterial, out Texture positions, out int count)
-    {
-        renderer = splat != null ? splat.GetSortedRenderer() : null;
-        primaryMaterial = ResolvePrimarySplatMaterial(renderer != null ? renderer.sharedMaterials : null);
-        positions = primaryMaterial != null ? primaryMaterial.GetTexture("_GS_Positions") : null;
-        count = ResolveActualSplatCount(primaryMaterial, positions);
-        return renderer != null && primaryMaterial != null && positions != null && count > 0;
-    }
-
     static bool TryGetCombinedChunkBinding(Transform child, out MeshRenderer renderer, out int offset)
     {
         renderer = child != null ? child.GetComponent<MeshRenderer>() : null;
-        Material primaryMaterial = ResolvePrimarySplatMaterial(renderer != null ? renderer.sharedMaterials : null);
+        Material primaryMaterial = GaussianSplatSource.ResolvePrimarySplatMaterial(renderer != null ? renderer.sharedMaterials : null);
         offset = primaryMaterial != null && primaryMaterial.HasProperty("_SplatOffset") ? primaryMaterial.GetInt("_SplatOffset") : 0;
         return renderer != null && primaryMaterial != null && primaryMaterial.HasProperty("_SplatCount");
     }
@@ -210,134 +345,48 @@ public partial class GaussianSplatCombiner : UdonSharpBehaviour
         return false;
     }
 
-    bool EnsureLODMaterials()
+    bool IsLodObjectActive(int index)
     {
-#if UNITY_EDITOR && !COMPILER_UDONSHARP
-        if (lodChunkSelectMaterial == null)
-        {
-            Shader shader = Shader.Find("Hidden/GaussianSplatting/LODChunkSelect");
-            if (shader != null)
-            {
-                lodChunkSelectMaterial = new Material(shader);
-                lodChunkSelectMaterial.name = "LODChunkSelect_Runtime";
-            }
-        }
-        if (lodCombineDataMaterial == null)
-        {
-            Shader shader = Shader.Find("Hidden/GaussianSplatting/LODCombineData");
-            if (shader != null)
-            {
-                lodCombineDataMaterial = new Material(shader);
-                lodCombineDataMaterial.name = "LODCombineData_Runtime";
-            }
-        }
-#endif
-        return lodChunkSelectMaterial != null && lodCombineDataMaterial != null;
+        return index >= 0 && index < _sceneLods.Length
+            && _sceneLods[index] != null
+            && _sceneLods[index].gameObject.activeInHierarchy
+            && (_sceneLods[index].IsRenderable() || ContainsFusedLODObject(_sceneLods[index].gameObject));
     }
 
-    bool EnsureLODChunkTextures(GaussianSplatLODObject lodObject)
+    bool IsLodObjectGPUReady(GaussianSplatObject lodObject)
     {
-        int chunkCount = lodObject != null ? lodObject.GetChunkCount() : 0;
-        if (chunkCount <= 0)
+        if (lodObject == null)
         {
             return false;
         }
-        int selectionWidth = Mathf.NextPowerOfTwo(Mathf.Max(1, chunkCount));
-        bool selectionReady = lodChunkSelection != null
-            && lodChunkSelection.width >= selectionWidth
-            && lodChunkSelection.height == 1
-            && lodChunkSelection.format == RenderTextureFormat.ARGBFloat
-            && EnsureRenderTextureCreated(lodChunkSelection, "LOD chunk selection");
-        bool alphaReady = lodAlphaState != null
-            && lodAlphaState.width == 1
-            && lodAlphaState.height == 1
-            && lodAlphaState.format == RenderTextureFormat.ARGBFloat
-            && EnsureRenderTextureCreated(lodAlphaState, "LOD alpha state")
-            && lodAlphaStateScratch != null
-            && lodAlphaStateScratch.width == 1
-            && lodAlphaStateScratch.height == 1
-            && lodAlphaStateScratch.format == RenderTextureFormat.ARGBFloat
-            && EnsureRenderTextureCreated(lodAlphaStateScratch, "LOD alpha state scratch");
-        if (selectionReady && alphaReady)
+        if (ContainsFusedLODObject(lodObject.gameObject))
         {
             return true;
         }
-
-#if UNITY_EDITOR && !COMPILER_UDONSHARP
-        if (lodChunkSelection != null && lodChunkSelection.IsCreated())
-        {
-            lodChunkSelection.Release();
-        }
-        lodChunkSelection = new RenderTexture(selectionWidth, 1, 0, RenderTextureFormat.ARGBFloat, RenderTextureReadWrite.Linear);
-        lodChunkSelection.name = "LODChunkSelection_Runtime";
-        lodChunkSelection.wrapMode = TextureWrapMode.Clamp;
-        lodChunkSelection.filterMode = FilterMode.Point;
-        lodChunkSelection.useMipMap = true;
-        lodChunkSelection.autoGenerateMips = false;
-
-        if (lodAlphaState != null && lodAlphaState.IsCreated())
-        {
-            lodAlphaState.Release();
-        }
-        lodAlphaState = CreateAlphaStateRT("LODAlphaState_Runtime");
-        if (lodAlphaStateScratch != null && lodAlphaStateScratch.IsCreated())
-        {
-            lodAlphaStateScratch.Release();
-        }
-        lodAlphaStateScratch = CreateAlphaStateRT("LODAlphaStateScratch_Runtime");
-        return EnsureRenderTextureCreated(lodChunkSelection, "LOD chunk selection")
-            && EnsureRenderTextureCreated(lodAlphaState, "LOD alpha state")
-            && EnsureRenderTextureCreated(lodAlphaStateScratch, "LOD alpha state scratch");
-#else
-        Debug.LogError("LOD chunk RenderTextures are missing or have the wrong size. Refresh the GaussianSplatRenderer resources in the editor.");
-        return false;
-#endif
-    }
-
-#if UNITY_EDITOR && !COMPILER_UDONSHARP
-    RenderTexture CreateAlphaStateRT(string name)
-    {
-        RenderTexture texture = new RenderTexture(1, 1, 0, RenderTextureFormat.ARGBFloat, RenderTextureReadWrite.Linear);
-        texture.name = name;
-        texture.wrapMode = TextureWrapMode.Clamp;
-        texture.filterMode = FilterMode.Point;
-        texture.useMipMap = false;
-        texture.autoGenerateMips = false;
-        return texture;
-    }
-#endif
-
-    bool IsSourceActive(int index)
-    {
-        return index >= 0 && index < _sceneSplats.Length && _sceneSplats[index] != null && _sceneSplats[index].gameObject.activeInHierarchy;
-    }
-
-    bool IsLodObjectActive(int index)
-    {
-        return index >= 0 && index < _sceneLods.Length && _sceneLods[index] != null && _sceneLods[index].gameObject.activeInHierarchy && _sceneLods[index].IsRenderable();
-    }
-
-    bool IsLodObjectGPUReady(GaussianSplatLODObject lodObject)
-    {
-        return lodObject != null
-            && lodObject.IsRenderable()
+        return lodObject.IsRenderable()
             && lodObject.chunkBoundsMinTexture != null
             && lodObject.chunkBoundsMaxTexture != null
             && lodObject.chunkRangeTexture != null;
     }
 
-    int GetCombinedSourceBatchSize()
+    void SwapLODAlphaStateBuffers()
     {
-#if UNITY_EDITOR && !COMPILER_UDONSHARP
-        UnityEngine.Rendering.GraphicsDeviceType graphicsDevice = SystemInfo.graphicsDeviceType;
-        return graphicsDevice == UnityEngine.Rendering.GraphicsDeviceType.OpenGLES2 || graphicsDevice == UnityEngine.Rendering.GraphicsDeviceType.OpenGLES3
-            ? COMBINED_SOURCE_BATCH_SIZE_GLES
-            : COMBINED_SOURCE_BATCH_SIZE_DESKTOP;
-#elif UNITY_ANDROID
-        return COMBINED_SOURCE_BATCH_SIZE_GLES;
-#else
-        return COMBINED_SOURCE_BATCH_SIZE_DESKTOP;
-#endif
+        RenderTexture tmp = _lodAlphaFront;
+        _lodAlphaFront = _lodAlphaBack;
+        _lodAlphaBack = tmp;
+    }
+
+    bool BindLODAlphaStateBuffers()
+    {
+        bool frontIsCanonical = _lodAlphaFront == lodAlphaState || _lodAlphaFront == lodAlphaStateScratch;
+        bool backIsCanonical = _lodAlphaBack == lodAlphaState || _lodAlphaBack == lodAlphaStateScratch;
+        bool hasPair = _lodAlphaFront != null && _lodAlphaBack != null && _lodAlphaFront != _lodAlphaBack && frontIsCanonical && backIsCanonical;
+        if (!hasPair)
+        {
+            _lodAlphaFront = lodAlphaState;
+            _lodAlphaBack = lodAlphaStateScratch;
+        }
+        return _lodAlphaFront != null && _lodAlphaBack != null && _lodAlphaFront != _lodAlphaBack;
     }
 
     void Blit(Texture source, RenderTexture target, bool useEditorOps)
@@ -366,6 +415,9 @@ public partial class GaussianSplatCombiner : UdonSharpBehaviour
 
     void SetRenderOrderOnMaterials(Material[] materials, int actualCount, RenderTexture splatRenderOrder, RenderTexture splatRenderOrderPhoto)
     {
+        int positionBlocksPerRow = Mathf.Max(1, combinedPositions != null ? combinedPositions.width >> 2 : 1);
+        int positionCoordMask = positionBlocksPerRow - 1;
+        int positionCoordShift = ComputeTextureCoordShift(positionBlocksPerRow);
         for (int i = 0; i < materials.Length; i++)
         {
             Material material = materials[i];
@@ -376,17 +428,24 @@ public partial class GaussianSplatCombiner : UdonSharpBehaviour
             if (material.HasProperty("_GS_RenderOrder")) material.SetTexture("_GS_RenderOrder", splatRenderOrder);
             if (material.HasProperty("_GS_RenderOrderPhoto")) material.SetTexture("_GS_RenderOrderPhoto", splatRenderOrderPhoto);
             if (material.HasProperty("_ActualSplatCount")) material.SetInt("_ActualSplatCount", actualCount);
+            if (material.HasProperty("_GS_Positions")) material.SetTexture("_GS_Positions", combinedPositions);
+            if (material.HasProperty("_GS_Rotations")) material.SetTexture("_GS_Rotations", combinedRotations);
+            if (material.HasProperty("_GS_Scales")) material.SetTexture("_GS_Scales", combinedScales);
+            if (material.HasProperty("_GS_Colors")) material.SetTexture("_GS_Colors", combinedColors);
+            if (material.HasProperty("_GS_ColorsCamera")) material.SetTexture("_GS_ColorsCamera", combinedColorsCamera);
+            if (material.HasProperty("_GS_Positions_CoordMask")) material.SetInt("_GS_Positions_CoordMask", positionCoordMask);
+            if (material.HasProperty("_GS_Positions_CoordShift")) material.SetInt("_GS_Positions_CoordShift", positionCoordShift);
         }
     }
 
     public bool EnsureResourcesCreated()
     {
+        BindDefaultBucketResources();
         return (combinedPositions == null || EnsureRenderTextureCreated(combinedPositions, "Combined positions"))
             && (combinedRotations == null || EnsureRenderTextureCreated(combinedRotations, "Combined rotations"))
             && (combinedScales == null || EnsureRenderTextureCreated(combinedScales, "Combined scales"))
             && (combinedColors == null || EnsureRenderTextureCreated(combinedColors, "Combined colors"))
-            && (combinedColorsCamera == null || EnsureRenderTextureCreated(combinedColorsCamera, "Combined camera colors"))
-            && (CountActiveGPULODObjects() == 0 || EnsureLODMaterials());
+            && (combinedColorsCamera == null || EnsureRenderTextureCreated(combinedColorsCamera, "Combined camera colors"));
     }
 
     public void SetRendererEnabled(bool enabled)
@@ -405,94 +464,6 @@ public partial class GaussianSplatCombiner : UdonSharpBehaviour
         }
     }
 
-    void SetCombinedSourceSlot(int slot, int sourceIndex, int sourceOffset)
-    {
-        string suffix = slot.ToString();
-        if (sourceIndex < 0)
-        {
-            combineDataMaterial.SetTexture("_GS_SourcePositions" + suffix, null);
-            combineDataMaterial.SetTexture("_GS_SourceColors" + suffix, null);
-            combineDataMaterial.SetTexture("_GS_SourceRotations" + suffix, null);
-            combineDataMaterial.SetTexture("_GS_SourceScales" + suffix, null);
-            combineDataMaterial.SetTexture("_GS_SourceSH" + suffix, null);
-            combineDataMaterial.SetVector("_GS_SourceLayout" + suffix, Vector4.zero);
-            combineDataMaterial.SetVector("_GS_SourceShLayout" + suffix, Vector4.zero);
-            combineDataMaterial.SetVector("_GS_SourceDecode" + suffix, Vector4.zero);
-            combineDataMaterial.SetVector("_GS_SourceShMin" + suffix, Vector4.zero);
-            combineDataMaterial.SetVector("_GS_SourceShRange" + suffix, Vector4.one);
-            combineDataMaterial.SetMatrix("_GS_SourceLocalToWorld" + suffix, Matrix4x4.identity);
-            combineDataMaterial.SetMatrix("_GS_SourceWorldToLocal" + suffix, Matrix4x4.identity);
-            combineDataMaterial.SetVector("_GS_SourceTransformRotation" + suffix, new Vector4(0.0f, 0.0f, 0.0f, 1.0f));
-            combineDataMaterial.SetVector("_GS_SourceTransformScale" + suffix, new Vector4(1.0f, 1.0f, 1.0f, 0.0f));
-            return;
-        }
-        if (!TryGetSplatSource(_sceneSplats[sourceIndex], out MeshRenderer sourceRenderer, out Material sourceMaterial, out Texture positions, out int sourceCount))
-        {
-            SetCombinedSourceSlot(slot, -1, 0);
-            return;
-        }
-        combineDataMaterial.SetTexture("_GS_SourcePositions" + suffix, positions);
-        combineDataMaterial.SetTexture("_GS_SourceColors" + suffix, sourceMaterial.GetTexture("_GS_Colors"));
-        combineDataMaterial.SetTexture("_GS_SourceRotations" + suffix, sourceMaterial.GetTexture("_GS_Rotations"));
-        combineDataMaterial.SetTexture("_GS_SourceScales" + suffix, sourceMaterial.GetTexture("_GS_Scales"));
-        combineDataMaterial.SetTexture("_GS_SourceSH" + suffix, sourceMaterial.GetTexture("_GS_SH"));
-        combineDataMaterial.SetVector("_GS_SourceLayout" + suffix, new Vector4(
-            sourceMaterial.HasProperty("_GS_Positions_CoordMask") ? sourceMaterial.GetInt("_GS_Positions_CoordMask") : 0,
-            sourceMaterial.HasProperty("_GS_Positions_CoordShift") ? sourceMaterial.GetInt("_GS_Positions_CoordShift") : 0,
-            sourceOffset,
-            sourceCount));
-        combineDataMaterial.SetVector("_GS_SourceShLayout" + suffix, new Vector4(
-            sourceMaterial.HasProperty("_GS_SH_CoeffCount") ? sourceMaterial.GetInt("_GS_SH_CoeffCount") : 0,
-            sourceMaterial.HasProperty("_GS_SH_CoeffStride") ? sourceMaterial.GetInt("_GS_SH_CoeffStride") : 0,
-            sourceMaterial.HasProperty("_GS_SH_CoordMask") ? sourceMaterial.GetInt("_GS_SH_CoordMask") : 0,
-            sourceMaterial.HasProperty("_GS_SH_CoordShift") ? sourceMaterial.GetInt("_GS_SH_CoordShift") : 0));
-        combineDataMaterial.SetVector("_GS_SourceDecode" + suffix, new Vector4(
-            sourceMaterial.HasProperty("_Log2MinScale") ? sourceMaterial.GetFloat("_Log2MinScale") : -15.0f,
-            sourceMaterial.HasProperty("_Opacity") ? sourceMaterial.GetFloat("_Opacity") : 1.0f,
-            sourceMaterial.HasProperty("_SHBand") ? sourceMaterial.GetFloat("_SHBand") : 0.0f,
-            0.0f));
-        combineDataMaterial.SetVector("_GS_SourceShMin" + suffix, sourceMaterial.HasProperty("_GS_SH_Min") ? sourceMaterial.GetVector("_GS_SH_Min") : Vector4.zero);
-        combineDataMaterial.SetVector("_GS_SourceShRange" + suffix, sourceMaterial.HasProperty("_GS_SH_Range") ? sourceMaterial.GetVector("_GS_SH_Range") : Vector4.one);
-        if (sourceRenderer != null)
-        {
-            Transform sourceTransform = sourceRenderer.transform;
-            Quaternion sourceRotation = sourceTransform.rotation;
-            Vector3 sourceScale = sourceTransform.lossyScale;
-            combineDataMaterial.SetMatrix("_GS_SourceLocalToWorld" + suffix, sourceTransform.localToWorldMatrix);
-            combineDataMaterial.SetMatrix("_GS_SourceWorldToLocal" + suffix, sourceTransform.worldToLocalMatrix);
-            // The shader-side qrot convention uses the conjugated Unity quaternion.
-            combineDataMaterial.SetVector("_GS_SourceTransformRotation" + suffix, new Vector4(-sourceRotation.x, -sourceRotation.y, -sourceRotation.z, sourceRotation.w));
-            combineDataMaterial.SetVector("_GS_SourceTransformScale" + suffix, new Vector4(sourceScale.x, sourceScale.y, sourceScale.z, 0.0f));
-        }
-        else
-        {
-            combineDataMaterial.SetMatrix("_GS_SourceLocalToWorld" + suffix, Matrix4x4.identity);
-            combineDataMaterial.SetMatrix("_GS_SourceWorldToLocal" + suffix, Matrix4x4.identity);
-            combineDataMaterial.SetVector("_GS_SourceTransformRotation" + suffix, new Vector4(0.0f, 0.0f, 0.0f, 1.0f));
-            combineDataMaterial.SetVector("_GS_SourceTransformScale" + suffix, new Vector4(1.0f, 1.0f, 1.0f, 0.0f));
-        }
-    }
-
-    int CountActiveNormalSplatSources(out int splatCount)
-    {
-        splatCount = 0;
-        int sourceCount = 0;
-        for (int i = 0; i < _sceneSplats.Length; i++)
-        {
-            if (!IsSourceActive(i))
-            {
-                continue;
-            }
-            if (!TryGetSplatSource(_sceneSplats[i], out MeshRenderer renderer, out Material material, out Texture positions, out int count))
-            {
-                continue;
-            }
-            splatCount = Mathf.Min(MAX_COMBINED_SPLAT_COUNT, splatCount + count);
-            sourceCount++;
-        }
-        return sourceCount;
-    }
-
     int CountActiveGPULODObjects()
     {
         int count = 0;
@@ -506,344 +477,173 @@ public partial class GaussianSplatCombiner : UdonSharpBehaviour
         return count;
     }
 
-    int LODSelectionMaxMip()
+    int CountActiveGPULODMaxSplatCount()
     {
-        int width = Mathf.Max(1, lodChunkSelection != null ? lodChunkSelection.width : 1);
-        return Mathf.Max(0, ComputeTextureCoordShift(width));
-    }
-
-    Vector4 LODChunkLayout(GaussianSplatLODObject lodObject)
-    {
-        int width = Mathf.Max(1, lodChunkSelection != null ? lodChunkSelection.width : Mathf.NextPowerOfTwo(Mathf.Max(1, lodObject.GetChunkCount())));
-        return new Vector4(width, 1.0f / width, lodObject.GetChunkCount(), LODSelectionMaxMip());
-    }
-
-    void BindLODSelection(Material material, GaussianSplatLODObject lodObject, Vector3 cameraPosWorld, Vector3 cameraForwardWorld, int outputBudget, bool adaptAlpha)
-    {
-        Transform sourceTransform = lodObject.transform;
-        int width = Mathf.Max(1, lodChunkSelection != null ? lodChunkSelection.width : Mathf.NextPowerOfTwo(Mathf.Max(1, lodObject.GetChunkCount())));
-        material.SetTexture("_LODChunkBoundsMin", lodObject.chunkBoundsMinTexture);
-        material.SetTexture("_LODChunkBoundsMax", lodObject.chunkBoundsMaxTexture);
-        material.SetTexture("_LODChunkSelection", lodChunkSelection);
-        material.SetTexture("_LODAlphaState", lodAlphaState);
-        material.SetVector("_LODChunkLayout", LODChunkLayout(lodObject));
-        material.SetVector("_LODSelectionParams", new Vector4(GaussianSplatLODObject.MAX_LOD_ALPHA_LOG2, width, LODSelectionMaxMip(), adaptAlpha ? LOD_ALPHA_ADAPT_RATE : 0.0f));
-        material.SetVector("_LODDistanceParams", new Vector4(
-            Mathf.Max(0.0f, lodObject.lodZeroOffset),
-            Mathf.Max(0.001f, lodObject.lodSplatRadius),
-            Mathf.Max(0.001f, lodObject.smallestChunkSize),
-            Mathf.Max(1.0f, _lodDirectionalBias)));
-        material.SetVector("_LODBudgetParams", new Vector4(outputBudget, 0.0f, 0.0f, 0.0f));
-        material.SetVector("_LODCameraPosObject", sourceTransform.InverseTransformPoint(cameraPosWorld));
-        material.SetVector("_LODCameraForwardObject", sourceTransform.InverseTransformDirection(cameraForwardWorld.normalized));
-    }
-
-    void ClearLODSourceSlot(Material material, int slot)
-    {
-        string suffix = slot.ToString();
-        material.SetTexture("_LODSourcePositions" + suffix, null);
-        material.SetTexture("_LODSourceColors" + suffix, null);
-        material.SetTexture("_LODSourceRotations" + suffix, null);
-        material.SetTexture("_LODSourceScales" + suffix, null);
-        material.SetTexture("_LODSourceSH" + suffix, null);
-        material.SetVector("_LODSourceLayout" + suffix, Vector4.zero);
-        material.SetVector("_LODSourceShLayout" + suffix, Vector4.zero);
-        material.SetVector("_LODSourceShMin" + suffix, Vector4.zero);
-        material.SetVector("_LODSourceShRange" + suffix, Vector4.one);
-    }
-
-    bool BindLODSourceBatch(Material material, GaussianSplatLODObject lodObject, int firstTextureSet, int batchCount)
-    {
-        bool anyValid = false;
-        if (lodObject.usePackedPositions)
+        int count = 0;
+        for (int i = 0; i < _sceneLods.Length; i++)
         {
-            material.EnableKeyword("_LOD_PACKED_POSITIONS_ON");
-        }
-        else
-        {
-            material.DisableKeyword("_LOD_PACKED_POSITIONS_ON");
-        }
-        for (int slot = 0; slot < LOD_SOURCE_BATCH_SIZE; slot++)
-        {
-            int textureSetIndex = firstTextureSet + slot;
-            if (slot >= batchCount)
+            GaussianSplatObject lodObject = _sceneLods[i];
+            if (IsLodObjectActive(i) && IsLodObjectGPUReady(lodObject))
             {
-                ClearLODSourceSlot(material, slot);
-                continue;
+                count = Mathf.Min(MAX_COMBINED_SPLAT_COUNT, count + lodObject.GetMaxLOD0SplatCount());
             }
-
-            Texture positions = lodObject.GetPositions(textureSetIndex);
-            Texture colors = lodObject.GetColors(textureSetIndex);
-            Texture rotations = lodObject.GetRotations(textureSetIndex);
-            Texture scales = lodObject.GetScales(textureSetIndex);
-            if (positions == null || colors == null || rotations == null || scales == null)
-            {
-                ClearLODSourceSlot(material, slot);
-                continue;
-            }
-
-            string suffix = slot.ToString();
-            int positionBlocksPerRow = Mathf.Max(1, positions.width >> 2);
-            Texture shTexture = lodObject.GetSH(textureSetIndex);
-            int shBlocksPerRow = Mathf.Max(1, shTexture != null ? shTexture.width >> 2 : 1);
-            material.SetTexture("_LODSourcePositions" + suffix, positions);
-            material.SetTexture("_LODSourceColors" + suffix, colors);
-            material.SetTexture("_LODSourceRotations" + suffix, rotations);
-            material.SetTexture("_LODSourceScales" + suffix, scales);
-            material.SetTexture("_LODSourceSH" + suffix, shTexture);
-            material.SetVector("_LODSourceLayout" + suffix, new Vector4(
-                positionBlocksPerRow - 1,
-                ComputeTextureCoordShift(positionBlocksPerRow),
-                1.0f,
-                0.0f));
-            material.SetVector("_LODSourceShLayout" + suffix, new Vector4(
-                lodObject.GetFileSHCoeffCount(textureSetIndex),
-                lodObject.GetFileSHCoeffStride(textureSetIndex),
-                shTexture != null ? shBlocksPerRow - 1 : 0,
-                shTexture != null ? ComputeTextureCoordShift(shBlocksPerRow) : 0));
-            material.SetVector("_LODSourceShMin" + suffix, lodObject.GetFileSHMin(textureSetIndex));
-            material.SetVector("_LODSourceShRange" + suffix, lodObject.GetFileSHRange(textureSetIndex));
-            anyValid = true;
         }
-        return anyValid;
+        return count;
     }
 
-    void BindLODTransform(Material material, GaussianSplatLODObject lodObject, Vector3 cameraPosWorld, int outputStart, int outputCount, int firstTextureSet, int textureSetBatchCount, int combinedCoordShift)
+    // Runs the scene-global selection (2D mip pyramid -> single alpha = scene budget) then the combine over
+    // the whole fused set, writing the selection-compacted output [0, selected): every object's chunks flow
+    // through the same selection pass. selectionTarget drives the alpha adapt. Returns false if nothing baked.
+    bool UpdateFusedLOD(Vector3 screenCameraPos, Vector3 lodCameraPos, Vector3 lodCameraForward, int lodRegionStart, int combinedCoordShift, int selectionTarget, Vector4 lodScreenParams, bool adaptLodSelection, bool forceMinLodAlpha, bool useEditorOps)
     {
-        Transform sourceTransform = lodObject.transform;
-        Quaternion sourceRotation = sourceTransform.rotation;
-        Vector3 sourceScale = sourceTransform.lossyScale;
-        material.SetTexture("_LODChunkSelection", lodChunkSelection);
-        material.SetTexture("_LODChunkBoundsMin", lodObject.chunkBoundsMinTexture);
-        material.SetTexture("_LODChunkBoundsMax", lodObject.chunkBoundsMaxTexture);
-        material.SetTexture("_LODChunkRange", lodObject.chunkRangeTexture);
-        material.SetVector("_LODChunkLayout", LODChunkLayout(lodObject));
-        material.SetVector("_LODOutputParams", new Vector4(outputStart, outputCount, firstTextureSet, combinedCoordShift));
-        material.SetVector("_LODSourceBatchParams", new Vector4(firstTextureSet, textureSetBatchCount, 0.0f, 0.0f));
-        material.SetMatrix("_LODLocalToWorld", sourceTransform.localToWorldMatrix);
-        material.SetMatrix("_LODWorldToLocal", sourceTransform.worldToLocalMatrix);
-        material.SetVector("_LODTransformRotation", new Vector4(-sourceRotation.x, -sourceRotation.y, -sourceRotation.z, sourceRotation.w));
-        material.SetVector("_LODTransformScale", new Vector4(sourceScale.x, sourceScale.y, sourceScale.z, 0.0f));
-        material.SetVector("_CameraPosWorld", cameraPosWorld);
-    }
-
-    bool RunLODChunkSelection(GaussianSplatLODObject lodObject, Vector3 cameraPosWorld, Vector3 cameraForwardWorld, int outputBudget, bool adaptAlpha, bool useEditorOps)
-    {
-        if (outputBudget <= 0 || !EnsureLODMaterials() || !EnsureLODChunkTextures(lodObject))
+        if (lodFusedObjectCount <= 0 || lodUnifiedSelectMaterial == null || lodUnifiedCombineMaterial == null
+            || lodFusedPositions == null || lodUnifiedSelection == null || lodFusedObjects == null
+            || !BindLODAlphaStateBuffers())
         {
             return false;
         }
-        BindLODSelection(lodChunkSelectMaterial, lodObject, cameraPosWorld, cameraForwardWorld, outputBudget, adaptAlpha);
-        Blit(lodChunkSelection, lodChunkSelectMaterial, 0, useEditorOps);
-        lodChunkSelection.GenerateMips();
-        if (adaptAlpha)
+        // The unified combine writes the selection-compacted output [0, selected): every object's chunks
+        // flow through the same selection pass. Computed-LOD objects descend the pyramid by distance/budget;
+        // single-level (Normal) objects always emit their full LOD0 count.
+        int n = lodFusedObjectCount;
+        if (_lodParamTex == null || _lodParamTex.width != LOD_PARAM_COLS || _lodParamTex.height != n)
         {
-            lodChunkSelectMaterial.SetTexture("_LODChunkSelection", lodChunkSelection);
-            lodChunkSelectMaterial.SetTexture("_LODAlphaState", lodAlphaState);
-            Blit(lodAlphaStateScratch, lodChunkSelectMaterial, 1, useEditorOps);
+            _lodParamTex = new Texture2D(LOD_PARAM_COLS, n, TextureFormat.RGBAFloat, false, true);
+            _lodParamTex.filterMode = FilterMode.Point; _lodParamTex.wrapMode = TextureWrapMode.Clamp;
+            _lodParamPixels = new Color[LOD_PARAM_COLS * n];
+        }
+        if (_lodUnifiedTransformTex == null || _lodUnifiedTransformTex.width != n || _lodUnifiedTransformTex.height != FUSED_TRANSFORM_ROWS)
+        {
+            _lodUnifiedTransformTex = new Texture2D(n, FUSED_TRANSFORM_ROWS, TextureFormat.RGBAFloat, false, true);
+            _lodUnifiedTransformTex.filterMode = FilterMode.Point; _lodUnifiedTransformTex.wrapMode = TextureWrapMode.Clamp;
+            _lodUnifiedTransformPixels = new Color[n * FUSED_TRANSFORM_ROWS];
+        }
+        for (int k = 0; k < n; k++)
+        {
+            GameObject go = k < lodFusedObjects.Length ? lodFusedObjects[k] : null;
+            // Every fused object is a GaussianSplatObject (1..N levels); resolve its transform + LOD params.
+            float log2min = -15.0f, opacity = 1.0f, shband = 0.0f;
+            GaussianSplatObject lo = go != null ? go.GetComponent<GaussianSplatObject>() : null;
+            bool active = lo != null && go.activeInHierarchy;
+            Transform tr = lo != null ? lo.transform : null;
+            // Selection params (per-object): camera-in-object-space + distance/computed params.
+            Vector3 camObj = active && lo != null ? tr.InverseTransformPoint(lodCameraPos) : Vector3.zero;
+            Vector3 fwdObj = active && lo != null ? tr.InverseTransformDirection(lodCameraForward.normalized) : Vector3.forward;
+            _lodParamPixels[k * LOD_PARAM_COLS + 0] = new Color(camObj.x, camObj.y, camObj.z, 0.0f);
+            _lodParamPixels[k * LOD_PARAM_COLS + 1] = new Color(fwdObj.x, fwdObj.y, fwdObj.z, 0.0f);
+            float zeroOffset = lo != null ? lo.lodZeroOffset : 0.0f;
+            float radius = lo != null ? lo.lodSplatRadius : 1.0f;
+            float smallest = lo != null ? lo.smallestChunkSize : 1.0f;
+            _lodParamPixels[k * LOD_PARAM_COLS + 2] = new Color(zeroOffset, radius, smallest, _lodDirectionalBias);
+            float computed = 1.0f;
+            float reuse = lo != null ? lo.GetLodReusePercent() : 50.0f;
+            _lodParamPixels[k * LOD_PARAM_COLS + 3] = new Color(computed, 1.0f, reuse, active ? 1.0f : 0.0f);
+            // World lossyScale, so the selection can convert local chunk bounds + local camera distance into
+            // world-space size/distance (chunk bbox is object-local; the metric must be scale-agnostic).
+            Vector3 pscl = active && tr != null ? tr.lossyScale : Vector3.one;
+            _lodParamPixels[k * LOD_PARAM_COLS + 4] = new Color(pscl.x, pscl.y, pscl.z, 0.0f);
+            Matrix4x4 l2w = active ? tr.localToWorldMatrix : Matrix4x4.identity;
+            Matrix4x4 w2l = active ? tr.worldToLocalMatrix : Matrix4x4.identity;
+            _lodUnifiedTransformPixels[0 * n + k] = new Color(l2w.m00, l2w.m01, l2w.m02, l2w.m03);
+            _lodUnifiedTransformPixels[1 * n + k] = new Color(l2w.m10, l2w.m11, l2w.m12, l2w.m13);
+            _lodUnifiedTransformPixels[2 * n + k] = new Color(l2w.m20, l2w.m21, l2w.m22, l2w.m23);
+            _lodUnifiedTransformPixels[3 * n + k] = new Color(w2l.m00, w2l.m01, w2l.m02, w2l.m03);
+            _lodUnifiedTransformPixels[4 * n + k] = new Color(w2l.m10, w2l.m11, w2l.m12, w2l.m13);
+            _lodUnifiedTransformPixels[5 * n + k] = new Color(w2l.m20, w2l.m21, w2l.m22, w2l.m23);
+            Quaternion q = active ? tr.rotation : Quaternion.identity;
+            _lodUnifiedTransformPixels[6 * n + k] = new Color(-q.x, -q.y, -q.z, q.w);
+            Vector3 ls = active ? tr.lossyScale : Vector3.one;
+            _lodUnifiedTransformPixels[7 * n + k] = new Color(ls.x, ls.y, ls.z, active ? 1.0f : 0.0f);
+            _lodUnifiedTransformPixels[8 * n + k] = new Color(log2min, opacity, shband, 0.0f);
+        }
+        _lodParamTex.SetPixels(_lodParamPixels); _lodParamTex.Apply(false, false);
+        _lodUnifiedTransformTex.SetPixels(_lodUnifiedTransformPixels); _lodUnifiedTransformTex.Apply(false, false);
+
+        int side = lodSelectionSide;
+        float maxMip = Mathf.RoundToInt(Mathf.Log(Mathf.Max(1, side), 2.0f));
+        // .y carries log2(metaWidth) (metaWidth is a power of two) so shaders decode chunk->texel with
+        // shifts/masks instead of % / ÷.
+        int lodMetaShift = Mathf.RoundToInt(Mathf.Log(Mathf.Max(1, lodMetaWidth), 2f));
+        Vector4 unifiedLayout = new Vector4(side, lodMetaShift, lodTotalChunks, maxMip);
+        int metaWidth = Mathf.Max(1, lodMetaWidth);
+        int metaHeight = (Mathf.Max(1, lodTotalChunks) + metaWidth - 1) / metaWidth;
+        Vector4 rangeStatsParams = new Vector4(lodGlobalRange != null && lodGlobalRange.height >= metaHeight * 2 ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f);
+
+        lodUnifiedSelectMaterial.SetTexture("_LODChunkBounds", lodGlobalBounds);
+        lodUnifiedSelectMaterial.SetTexture("_LODChunkRange", lodGlobalRange);
+        lodUnifiedSelectMaterial.SetTexture("_LODObjectParams", _lodParamTex);
+        lodUnifiedSelectMaterial.SetTexture("_LODAlphaState", _lodAlphaFront);
+        lodUnifiedSelectMaterial.SetVector("_LODUnifiedLayout", unifiedLayout);
+        lodUnifiedSelectMaterial.SetVector("_LODRangeStatsParams", rangeStatsParams);
+        lodUnifiedSelectMaterial.SetVector("_LODSelectionParams", new Vector4(GaussianSplatObject.MAX_LOD_ALPHA_LOG2, lodScreenParams.x, maxMip, adaptLodSelection ? LOD_ALPHA_ADAPT_RATE : 0.0f));
+        lodUnifiedSelectMaterial.SetVector("_LODBudgetParams", new Vector4(selectionTarget, forceMinLodAlpha ? 1.0f : 0.0f, 0.0f, 0.0f));
+        Blit(lodUnifiedSelection, lodUnifiedSelectMaterial, 0, useEditorOps);
+        lodUnifiedSelection.GenerateMips();
+        if (adaptLodSelection)
+        {
+            lodUnifiedSelectMaterial.SetTexture("_LODChunkSelection", lodUnifiedSelection);
+            lodUnifiedSelectMaterial.SetTexture("_LODAlphaState", _lodAlphaFront);
+            Blit(_lodAlphaBack, lodUnifiedSelectMaterial, 1, useEditorOps);
             SwapLODAlphaStateBuffers();
-            BindLODSelection(lodChunkSelectMaterial, lodObject, cameraPosWorld, cameraForwardWorld, outputBudget, false);
-            Blit(lodChunkSelection, lodChunkSelectMaterial, 0, useEditorOps);
-            lodChunkSelection.GenerateMips();
+            lodUnifiedSelectMaterial.SetTexture("_LODAlphaState", _lodAlphaFront);
+            Blit(lodUnifiedSelection, lodUnifiedSelectMaterial, 0, useEditorOps);
+            lodUnifiedSelection.GenerateMips();
         }
-        return true;
-    }
 
-    public void SwapLODAlphaStateBuffers()
-    {
-        RenderTexture swap = lodAlphaState;
-        lodAlphaState = lodAlphaStateScratch;
-        lodAlphaStateScratch = swap;
-    }
-
+        lodUnifiedCombineMaterial.SetTexture("_LODChunkSelection", lodUnifiedSelection);
+        lodUnifiedCombineMaterial.SetTexture("_LODChunkBounds", lodGlobalBounds);
+        lodUnifiedCombineMaterial.SetTexture("_LODChunkRange", lodGlobalRange);
+        lodUnifiedCombineMaterial.SetTexture("_LODFileBase", lodFileBase);
+        lodUnifiedCombineMaterial.SetTexture("_LODObjectParams", _lodParamTex);
+        lodUnifiedCombineMaterial.SetTexture("_LODFusedPositions", lodFusedPositions);
+        lodUnifiedCombineMaterial.SetTexture("_LODFusedColors", lodFusedColors);
+        lodUnifiedCombineMaterial.SetTexture("_LODFusedRotations", lodFusedRotations);
+        lodUnifiedCombineMaterial.SetTexture("_LODFusedScales", lodFusedScales);
+        lodUnifiedCombineMaterial.SetTexture("_LODFusedTransforms", _lodUnifiedTransformTex);
+        lodUnifiedCombineMaterial.SetVector("_LODUnifiedLayout", unifiedLayout);
+        lodUnifiedCombineMaterial.SetInt("_LODFusedCoordShift", lodFusedCoordShift);
+        lodUnifiedCombineMaterial.SetInt("_LODFusedCoordMask", lodFusedCoordMask);
+        // Fused SH set (view-dependent; _LODCameraPosWorld is the actual view camera). Every object's chunks
+        // are filled by the selection descent - there is no separate identity region.
+        lodUnifiedCombineMaterial.SetTexture("_LODShParams", lodShParams != null ? lodShParams : Texture2D.blackTexture);
+        lodUnifiedCombineMaterial.SetTexture("_LODFusedSH", lodUnifiedSH != null ? lodUnifiedSH : Texture2D.blackTexture);
+        lodUnifiedCombineMaterial.SetInt("_LODFusedShCoordShift", lodUnifiedShCoordShift);
+        lodUnifiedCombineMaterial.SetInt("_LODFusedShCoordMask", lodUnifiedShCoordMask);
+        lodUnifiedCombineMaterial.SetFloat("_SHBand", _lodShBand);
+        lodUnifiedCombineMaterial.SetVector("_LODCameraPosWorld", screenCameraPos);
 #if UNITY_EDITOR && !COMPILER_UDONSHARP
-    int ReadbackLODActualSplatCount(GaussianSplatLODObject lodObject, out float alpha)
-    {
-        alpha = 0.0f;
-        int chunkCount = lodObject != null ? lodObject.GetChunkCount() : 0;
-        if (chunkCount <= 0 || lodChunkSelection == null)
-        {
-            return 0;
-        }
-
-        RenderTexture previous = RenderTexture.active;
-        Texture2D readback = null;
-        Texture2D alphaReadback = null;
-        int total = 0;
-        Color[] chunkStates = new Color[chunkCount];
-        try
-        {
-            RenderTexture.active = lodChunkSelection;
-            readback = new Texture2D(lodChunkSelection.width, lodChunkSelection.height, TextureFormat.RGBAFloat, false, true);
-            readback.ReadPixels(new Rect(0, 0, lodChunkSelection.width, lodChunkSelection.height), 0, 0, false);
-            readback.Apply(false, false);
-            Color[] pixels = readback.GetPixels();
-            for (int chunkIndex = 0; chunkIndex < chunkCount; chunkIndex++)
-            {
-                if (chunkIndex >= 0 && chunkIndex < pixels.Length)
-                {
-                    Color pixel = pixels[chunkIndex];
-                    chunkStates[chunkIndex] = pixel;
-                    int count = Mathf.Max(0, Mathf.RoundToInt(pixel.r));
-                    total += count;
-                }
-            }
-
-            if (lodAlphaState != null)
-            {
-                RenderTexture.active = lodAlphaState;
-                alphaReadback = new Texture2D(1, 1, TextureFormat.RGBAFloat, false, true);
-                alphaReadback.ReadPixels(new Rect(0, 0, 1, 1), 0, 0, false);
-                alphaReadback.Apply(false, false);
-                alpha = alphaReadback.GetPixel(0, 0).r;
-            }
-        }
-        finally
-        {
-            RenderTexture.active = previous;
-            if (readback != null)
-            {
-                DestroyImmediate(readback);
-            }
-            if (alphaReadback != null)
-            {
-                DestroyImmediate(alphaReadback);
-            }
-        }
-        _editorLodChunkStates[lodObject] = chunkStates;
-        return total;
-    }
+        lodUnifiedCombineMaterial.SetInt("_LODDebugColors", _debugLodColors ? 1 : 0);
+#else
+        lodUnifiedCombineMaterial.SetInt("_LODDebugColors", 0);
 #endif
-
-    bool RunLODCombineObject(GaussianSplatLODObject lodObject, Vector3 screenCameraPos, int outputStart, int outputBudget, int combinedCoordShift, bool useEditorOps)
-    {
-        if (outputBudget <= 0 || lodCombineDataMaterial == null || lodChunkSelection == null)
-        {
-            return false;
-        }
-
-        int fileCount = lodObject.GetFileCount();
-        for (int fileIndex = 0; fileIndex < fileCount; fileIndex += LOD_SOURCE_BATCH_SIZE)
-        {
-            int batchCount = Mathf.Min(LOD_SOURCE_BATCH_SIZE, fileCount - fileIndex);
-            if (!BindLODSourceBatch(lodCombineDataMaterial, lodObject, fileIndex, batchCount))
-            {
-                continue;
-            }
-            BindLODTransform(lodCombineDataMaterial, lodObject, screenCameraPos, outputStart, outputBudget, fileIndex, batchCount, combinedCoordShift);
-            Blit(combinedPositions, lodCombineDataMaterial, 0, useEditorOps);
-            Blit(combinedRotations, lodCombineDataMaterial, 1, useEditorOps);
-            Blit(combinedScales, lodCombineDataMaterial, 2, useEditorOps);
-            Blit(combinedColors, lodCombineDataMaterial, 3, useEditorOps);
-        }
+        lodUnifiedCombineMaterial.SetVector("_LODCombineOutputParams", new Vector4(lodRegionStart, combinedCoordShift, 0.0f, 0.0f));
+        Blit(combinedPositions, lodUnifiedCombineMaterial, 0, useEditorOps);
+        Blit(combinedRotations, lodUnifiedCombineMaterial, 1, useEditorOps);
+        Blit(combinedScales, lodUnifiedCombineMaterial, 2, useEditorOps);
+        Blit(combinedColors, lodUnifiedCombineMaterial, 3, useEditorOps);
         return true;
     }
 
-    bool RunLODPhotoColorObject(GaussianSplatLODObject lodObject, Vector3 photoCameraPos, int outputStart, int outputBudget, int combinedCoordShift)
+    public bool UpdateTextures(GaussianSplatObject[] sceneLods, Vector3 screenCameraPos, Vector3 lodCameraPos, Vector3 lodCameraForward, Vector3 photoCameraPos, bool updatePhotoCameraColors, int lodSplatBudget, Vector4 lodScreenParams, bool adaptLodSelection, bool forceMinLodAlpha, bool useEditorOps)
     {
-        if (outputBudget <= 0 || lodCombineDataMaterial == null || lodChunkSelection == null)
-        {
-            return false;
-        }
-
-        int fileCount = lodObject.GetFileCount();
-        for (int fileIndex = 0; fileIndex < fileCount; fileIndex += LOD_SOURCE_BATCH_SIZE)
-        {
-            int batchCount = Mathf.Min(LOD_SOURCE_BATCH_SIZE, fileCount - fileIndex);
-            if (!BindLODSourceBatch(lodCombineDataMaterial, lodObject, fileIndex, batchCount))
-            {
-                continue;
-            }
-            BindLODTransform(lodCombineDataMaterial, lodObject, photoCameraPos, outputStart, outputBudget, fileIndex, batchCount, combinedCoordShift);
-            Blit(combinedColorsCamera, lodCombineDataMaterial, 3, false);
-        }
-        return true;
-    }
-
-    bool BindCombinedBatch(ref int sourceCursor, ref int combinedOffset, int positionCapacity, int colorCapacity)
-    {
-        MeshRenderer ignoredRenderer;
-        Material ignoredMaterial;
-        Texture ignoredPositions;
-        int boundCount = 0;
-        int batchSize = GetCombinedSourceBatchSize();
-        for (int slot = 0; slot < batchSize; slot++)
-        {
-            while (sourceCursor < _sceneSplats.Length && !IsSourceActive(sourceCursor))
-            {
-                sourceCursor++;
-            }
-            if (sourceCursor < _sceneSplats.Length)
-            {
-                if (!TryGetSplatSource(_sceneSplats[sourceCursor], out ignoredRenderer, out ignoredMaterial, out ignoredPositions, out int sourceCount))
-                {
-                    sourceCursor++;
-                    slot--;
-                    continue;
-                }
-                if (combinedOffset + sourceCount > positionCapacity || combinedOffset + sourceCount > colorCapacity)
-                {
-                    _combinedActualSplatCount = 0;
-                    SetRendererEnabled(false);
-#if !UNITY_EDITOR || COMPILER_UDONSHARP
-                    Debug.LogError("Combined Gaussian splat resources are too small for the active scene splats. Refresh the renderer resources in the editor.");
-#endif
-                    return false;
-                }
-                SetCombinedSourceSlot(slot, sourceCursor, combinedOffset);
-                combinedOffset += sourceCount;
-                sourceCursor++;
-                boundCount++;
-                continue;
-            }
-
-            SetCombinedSourceSlot(slot, -1, 0);
-        }
-        return boundCount > 0;
-    }
-
-    public bool UpdateTextures(GaussianSplatObject[] sceneSplats, Vector3 screenCameraPos, Vector3 photoCameraPos, bool useEditorOps)
-    {
-        return UpdateTexturesWithPhotoFlag(sceneSplats, null, screenCameraPos, screenCameraPos, photoCameraPos, false, 0, true, useEditorOps);
-    }
-
-    public bool UpdateTextures(GaussianSplatObject[] sceneSplats, GaussianSplatLODObject[] sceneLods, Vector3 screenCameraPos, Vector3 lodCameraPos, Vector3 photoCameraPos, int lodSplatBudget, bool adaptLodSelection, bool useEditorOps)
-    {
-        return UpdateTexturesWithPhotoFlag(sceneSplats, sceneLods, screenCameraPos, lodCameraPos, Vector3.forward, photoCameraPos, true, lodSplatBudget, adaptLodSelection, useEditorOps);
-    }
-
-    public bool UpdateTexturesWithPhotoFlag(GaussianSplatObject[] sceneSplats, GaussianSplatLODObject[] sceneLods, Vector3 screenCameraPos, Vector3 lodCameraPos, Vector3 photoCameraPos, bool updatePhotoCameraColors, int lodSplatBudget, bool adaptLodSelection, bool useEditorOps)
-    {
-        return UpdateTexturesWithPhotoFlag(sceneSplats, sceneLods, screenCameraPos, lodCameraPos, Vector3.forward, photoCameraPos, updatePhotoCameraColors, lodSplatBudget, adaptLodSelection, useEditorOps);
-    }
-
-    public bool UpdateTexturesWithPhotoFlag(GaussianSplatObject[] sceneSplats, GaussianSplatLODObject[] sceneLods, Vector3 screenCameraPos, Vector3 lodCameraPos, Vector3 lodCameraForward, Vector3 photoCameraPos, bool updatePhotoCameraColors, int lodSplatBudget, bool adaptLodSelection, bool useEditorOps)
-    {
-        _sceneSplats = sceneSplats != null ? sceneSplats : new GaussianSplatObject[0];
-        _sceneLods = sceneLods != null ? sceneLods : new GaussianSplatLODObject[0];
+        _sceneLods = sceneLods != null ? sceneLods : new GaussianSplatObject[0];
         ResetLODOutputCounts(_sceneLods.Length);
         float lodTargetScale = lodSplatBudget > 0 ? Mathf.Clamp(_lodSplatTargetScale, 0.01f, 1.0f) : 1.0f;
 #if UNITY_EDITOR && !COMPILER_UDONSHARP
         SetEditorReadback(0, 0, 0.0f);
-        for (int i = 0; i < _sceneLods.Length; i++)
-        {
-            if (_sceneLods[i] != null)
-            {
-                _editorLodChunkStates.Remove(_sceneLods[i]);
-            }
-        }
 #endif
-        if (combinedSortedRenderer == null || combinedPositions == null || combinedRotations == null || combinedScales == null || combinedColors == null || combinedColorsCamera == null || combineDataMaterial == null)
+        if (combinedSortedRenderer == null || combinedPositions == null || combinedRotations == null || combinedScales == null || combinedColors == null || combinedColorsCamera == null)
+        {
+            BindDefaultBucketResources();
+        }
+        if (combinedSortedRenderer == null || combinedPositions == null || combinedRotations == null || combinedScales == null || combinedColors == null || combinedColorsCamera == null)
         {
 #if !UNITY_EDITOR || COMPILER_UDONSHARP
-            Debug.LogError("Combined rendering mode is missing generated resources. Refresh the GaussianSplatRenderer in the editor.");
+            Debug.LogError("Gaussian splat renderer is missing generated resources. Refresh the GaussianSplatRenderer in the editor.");
 #endif
             return false;
         }
-        int normalSplatCount;
-        int activeSourceCount = CountActiveNormalSplatSources(out normalSplatCount);
-        int activeLodObjectCount = CountActiveGPULODObjects();
-        activeSourceCount += activeLodObjectCount;
+        int activeSourceCount = CountActiveGPULODObjects();
         if (activeSourceCount == 0)
         {
             _combinedActualSplatCount = 0;
@@ -852,7 +652,6 @@ public partial class GaussianSplatCombiner : UdonSharpBehaviour
         }
         int combinedBlocksPerRow = Mathf.Max(1, combinedPositions.width >> 2);
         int combinedCoordShift = ComputeTextureCoordShift(combinedBlocksPerRow);
-        combineDataMaterial.SetInt("_CombinedCoordShift", combinedCoordShift);
         int positionCapacity = combinedPositions.width * combinedPositions.height;
         int colorCapacity = combinedColors.width * combinedColors.height;
         int combinedCapacity = Mathf.Min(positionCapacity, colorCapacity);
@@ -860,86 +659,62 @@ public partial class GaussianSplatCombiner : UdonSharpBehaviour
         Blit(Texture2D.blackTexture, combinedRotations, useEditorOps);
         Blit(Texture2D.blackTexture, combinedScales, useEditorOps);
         Blit(Texture2D.blackTexture, combinedColors, useEditorOps);
-        int sourceCursor = 0;
         int combinedOffset = 0;
-        while (true)
-        {
-            combineDataMaterial.SetVector("_CameraPosWorld", Vector3.zero);
-            int batchStartOffset = combinedOffset;
-            bool hasBatch = BindCombinedBatch(ref sourceCursor, ref combinedOffset, positionCapacity, colorCapacity);
-            if (!hasBatch)
-            {
-                break;
-            }
-            Blit(combinedPositions, combineDataMaterial, 0, useEditorOps);
-            Blit(combinedRotations, combineDataMaterial, 1, useEditorOps);
-            Blit(combinedScales, combineDataMaterial, 2, useEditorOps);
-            combineDataMaterial.SetVector("_CameraPosWorld", screenCameraPos);
-            Blit(combinedColors, combineDataMaterial, 3, useEditorOps);
-            if (combinedOffset == batchStartOffset)
-            {
-                break;
-            }
-        }
-
 #if UNITY_EDITOR && !COMPILER_UDONSHARP
-        int editorReadbackCount = combinedOffset;
+        int editorReadbackCount = 0;
         float editorReadbackAlpha = 0.0f;
 #endif
-        int lodRemainingBudget = lodSplatBudget > 0 ? Mathf.Max(0, lodSplatBudget - normalSplatCount) : 0;
-        for (int lodIndex = 0; lodIndex < _sceneLods.Length; lodIndex++)
+        // ONE PATH: the unified combine (GSLODCombine) renders ALL combined content via the selection
+        // descent in a single pass set. Unpacked (un-migrated / stale) content is not in the fused set and
+        // simply does not render. The output has no fixed identity region (every object is selection-compacted).
         {
-            GaussianSplatLODObject lodObject = _sceneLods[lodIndex];
-            if (!IsLodObjectActive(lodIndex) || !IsLodObjectGPUReady(lodObject))
+            int bakedNonLodCount = 0;
+            if (bakedNonLodCount > combinedCapacity)
             {
-                continue;
-            }
-
-            int remainingCapacity = combinedCapacity - combinedOffset;
-            if (remainingCapacity <= 0)
-            {
-                break;
-            }
-
-            int objectHardBudget = lodSplatBudget > 0 ? lodRemainingBudget : lodObject.GetMaxLOD0SplatCount();
-            objectHardBudget = Mathf.Min(Mathf.Max(0, objectHardBudget), remainingCapacity);
-            int objectSelectionTarget = lodSplatBudget > 0 ? ComputeLODTargetBudget(objectHardBudget, lodTargetScale) : objectHardBudget;
-            if (objectHardBudget <= 0 || objectSelectionTarget <= 0)
-            {
-                continue;
-            }
-
-            if (RunLODChunkSelection(lodObject, lodCameraPos, lodCameraForward, objectSelectionTarget, adaptLodSelection, useEditorOps))
-            {
-                int lodOutputCount = objectHardBudget;
-#if UNITY_EDITOR && !COMPILER_UDONSHARP
-                if (useEditorOps)
-                {
-                    int lodActualCount = ReadbackLODActualSplatCount(lodObject, out float lodAlpha);
-                    lodOutputCount = Mathf.Min(lodOutputCount, Mathf.Max(0, lodActualCount));
-                    editorReadbackCount = Mathf.Min(MAX_COMBINED_SPLAT_COUNT, editorReadbackCount + lodOutputCount);
-                    if (lodActualCount > 0 && editorReadbackAlpha <= 0.0f)
-                    {
-                        editorReadbackAlpha = lodAlpha;
-                    }
-                }
-                else
-                {
-                    editorReadbackCount = Mathf.Min(MAX_COMBINED_SPLAT_COUNT, editorReadbackCount + lodOutputCount);
-                }
+                _combinedActualSplatCount = 0;
+                SetRendererEnabled(false);
+#if !UNITY_EDITOR || COMPILER_UDONSHARP
+                Debug.LogError("Combined Gaussian splat resources are too small for the baked non-LOD fused region. Refresh the renderer resources in the editor.");
 #endif
-                if (lodOutputCount <= 0)
-                {
-                    continue;
-                }
-                _lodOutputCounts[lodIndex] = lodOutputCount;
-                RunLODCombineObject(lodObject, lodCameraPos, combinedOffset, lodOutputCount, combinedCoordShift, useEditorOps);
-                combinedOffset += lodOutputCount;
-                if (lodSplatBudget > 0)
-                {
-                    lodRemainingBudget = Mathf.Max(0, lodRemainingBudget - lodOutputCount);
-                }
+                return false;
             }
+            int remainingCapacity = Mathf.Max(0, combinedCapacity - bakedNonLodCount);
+            int activeLodMaxSplatCount = CountActiveGPULODMaxSplatCount();
+            // Every object is a computed-LOD object: the whole active set is thinnable, so the budget caps the
+            // full scene-wide count. The runtime perf throttle (lodTargetScale) scales the selection target.
+            int sceneHardBudget;
+            int sceneSelectionTarget;
+            if (lodSplatBudget > 0)
+            {
+                int thinnableCap = Mathf.Min(activeLodMaxSplatCount, Mathf.Max(0, lodSplatBudget));
+                sceneHardBudget = Mathf.Min(remainingCapacity, thinnableCap);
+                int thinnableTarget = ComputeLODTargetBudget(thinnableCap, lodTargetScale);
+                sceneSelectionTarget = Mathf.Min(remainingCapacity, thinnableTarget);
+            }
+            else
+            {
+                sceneHardBudget = Mathf.Min(remainingCapacity, activeLodMaxSplatCount);
+                sceneSelectionTarget = sceneHardBudget;
+            }
+            if (!UpdateFusedLOD(screenCameraPos, lodCameraPos, lodCameraForward, bakedNonLodCount, combinedCoordShift, sceneSelectionTarget, lodScreenParams, adaptLodSelection, forceMinLodAlpha, useEditorOps))
+            {
+                _combinedActualSplatCount = 0;
+                SetRendererEnabled(false);
+                return false;
+            }
+            combinedOffset = bakedNonLodCount + sceneHardBudget;
+#if UNITY_EDITOR && !COMPILER_UDONSHARP
+            if (useEditorOps)
+            {
+                int sel = ReadbackUnifiedLODSelected(out float ua, true);
+                editorReadbackCount = Mathf.Min(MAX_COMBINED_SPLAT_COUNT, bakedNonLodCount + Mathf.Max(0, sel));
+                editorReadbackAlpha = ua;
+            }
+            else
+            {
+                editorReadbackCount = Mathf.Min(MAX_COMBINED_SPLAT_COUNT, bakedNonLodCount + sceneSelectionTarget);
+            }
+#endif
         }
 
         if (combinedOffset <= 0)
@@ -948,9 +723,16 @@ public partial class GaussianSplatCombiner : UdonSharpBehaviour
             SetRendererEnabled(false);
             return false;
         }
-        _combinedActualSplatCount = combinedOffset;
+        int actualCombinedCount = combinedOffset;
 #if UNITY_EDITOR && !COMPILER_UDONSHARP
-        SetEditorReadback(useEditorOps ? editorReadbackCount : combinedOffset, combinedOffset, useEditorOps ? editorReadbackAlpha : 0.0f);
+        if (useEditorOps)
+        {
+            actualCombinedCount = Mathf.Min(combinedOffset, Mathf.Max(0, editorReadbackCount));
+        }
+#endif
+        _combinedActualSplatCount = actualCombinedCount;
+#if UNITY_EDITOR && !COMPILER_UDONSHARP
+        SetEditorReadback(useEditorOps ? actualCombinedCount : combinedOffset, combinedOffset, useEditorOps ? editorReadbackAlpha : 0.0f);
 #endif
 
 #if UNITY_EDITOR && !COMPILER_UDONSHARP
@@ -965,47 +747,14 @@ public partial class GaussianSplatCombiner : UdonSharpBehaviour
             return true;
         }
 
+        // Photo/mirror camera colors: re-run ONLY the unified combine's color pass with the photo camera
+        // (view-dependent SH differs per camera). Every other binding persists from this frame's combine,
+        // so the whole [0, selected) output is recolored in one blit into combinedColorsCamera.
         Blit(Texture2D.blackTexture, combinedColorsCamera, false);
-        sourceCursor = 0;
-        combinedOffset = 0;
-        int photoNormalEndOffset = 0;
-        while (true)
+        if (lodFusedObjectCount > 0 && lodUnifiedCombineMaterial != null)
         {
-            combineDataMaterial.SetVector("_CameraPosWorld", photoCameraPos);
-            int photoBatchStartOffset = combinedOffset;
-            bool hasPhotoBatch = BindCombinedBatch(ref sourceCursor, ref combinedOffset, positionCapacity, colorCapacity);
-            if (!hasPhotoBatch)
-            {
-                break;
-            }
-            Blit(combinedColorsCamera, combineDataMaterial, 3, false);
-            if (combinedOffset == photoBatchStartOffset)
-            {
-                break;
-            }
-        }
-        photoNormalEndOffset = combinedOffset;
-        int lodPhotoOffset = photoNormalEndOffset;
-        for (int lodIndex = 0; lodIndex < _sceneLods.Length; lodIndex++)
-        {
-            GaussianSplatLODObject lodObject = _sceneLods[lodIndex];
-            if (!IsLodObjectActive(lodIndex) || !IsLodObjectGPUReady(lodObject))
-            {
-                continue;
-            }
-            int remainingCapacity = combinedCapacity - lodPhotoOffset;
-            if (remainingCapacity <= 0)
-            {
-                break;
-            }
-            int lodOutputCount = _lodOutputCounts != null && lodIndex < _lodOutputCounts.Length ? _lodOutputCounts[lodIndex] : 0;
-            lodOutputCount = Mathf.Min(Mathf.Max(0, lodOutputCount), remainingCapacity);
-            if (lodOutputCount <= 0)
-            {
-                continue;
-            }
-            RunLODPhotoColorObject(lodObject, photoCameraPos, lodPhotoOffset, lodOutputCount, combinedCoordShift);
-            lodPhotoOffset += lodOutputCount;
+            lodUnifiedCombineMaterial.SetVector("_LODCameraPosWorld", photoCameraPos);
+            Blit(combinedColorsCamera, lodUnifiedCombineMaterial, 3, false);
         }
         return true;
     }
@@ -1018,6 +767,7 @@ public partial class GaussianSplatCombiner : UdonSharpBehaviour
     /// </summary>
     public bool BindRenderOrder(RenderTexture splatRenderOrder, RenderTexture splatRenderOrderPhoto, out MeshRenderer sortedRenderer, out Material primaryMaterial, out Texture positions, out int count)
     {
+        BindDefaultBucketResources();
         sortedRenderer = null;
         primaryMaterial = null;
         positions = combinedPositions;
@@ -1050,7 +800,7 @@ public partial class GaussianSplatCombiner : UdonSharpBehaviour
                 sortedRenderer = chunkRenderer;
             }
         }
-        primaryMaterial = ResolvePrimarySplatMaterial(GetRendererMaterialsForRead(sortedRenderer));
+        primaryMaterial = GaussianSplatSource.ResolvePrimarySplatMaterial(GetRendererMaterialsForRead(sortedRenderer));
         if (sortedRenderer == null || primaryMaterial == null)
         {
             SetRendererEnabled(false);
@@ -1077,15 +827,42 @@ public partial class GaussianSplatCombiner : UdonSharpBehaviour
         return _editorReadbackReservedSplatCounts.TryGetValue(this, out int value) ? value : 0;
     }
 
+    // Total splats baked into the fused set across every combined object (full non-LOD + all LOD levels),
+    // independent of the live per-frame LOD selection.
+    public int GetTotalBakedSplatCount()
+    {
+        // One splat per texel in the fused source (LODFusedCoord is a bijection), so the count is just the
+        // texture size. lodFusedPositions is a serialized reference, so this is available without a bake or
+        // reload having run this session.
+        return lodFusedPositions != null ? lodFusedPositions.width * lodFusedPositions.height : 0;
+    }
+
+    // Uncompressed byte size of the fused source textures (positions/colors/rotations/scales/SH) - the splat
+    // data the build ships. Summed from the serialized texture refs so it is available without a bake/reload.
+    public long GetBakedSplatDataBytes()
+    {
+        return FusedTextureBytes(lodFusedPositions) + FusedTextureBytes(lodFusedColors)
+            + FusedTextureBytes(lodFusedRotations) + FusedTextureBytes(lodFusedScales)
+            + FusedTextureBytes(lodUnifiedSH);
+    }
+
+    static long FusedTextureBytes(Texture2D tex)
+    {
+        // Shipped texel size (== the asset's m_CompleteImageSize). ComputeMipmapSize is correct for
+        // block-compressed formats too: the SH texture is BC7, so width*height*GetBlockSize would count
+        // the 16-byte 4x4 block as per-pixel (16x overcount). Profiler would also count the editor CPU copy.
+        if (tex == null)
+        {
+            return 0;
+        }
+        return (long)UnityEngine.Experimental.Rendering.GraphicsFormatUtility.ComputeMipmapSize(tex.width, tex.height, tex.graphicsFormat);
+    }
+
     public float GetEditorReadbackAlpha()
     {
         return _editorReadbackAlphas.TryGetValue(this, out float value) ? value : 0.0f;
     }
 
-    public Color[] GetEditorLODChunkStates(GaussianSplatLODObject lodObject)
-    {
-        return lodObject != null && _editorLodChunkStates.TryGetValue(lodObject, out Color[] states) ? states : null;
-    }
 #endif
 
     public void ApplyMaterialSettings()

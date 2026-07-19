@@ -23,16 +23,23 @@ Material:
   m_SavedProperties:
     serializedVersion: 3
     m_TexEnvs:
+    - _GS_ActiveCount:
+        m_Texture: {fileID: 0}
+        m_Scale: {x: 1, y: 1}
+        m_Offset: {x: 0, y: 0}
     - _GS_Positions:
-        m_Texture: {fileID: 2800000, guid: 87d95db448ad646488b9dc6854d6a36b, type: 2}
+        m_Texture: {fileID: 8400000, guid: 1203c434ec2e6c14f8dfa145d551f49f, type: 2}
         m_Scale: {x: 1, y: 1}
         m_Offset: {x: 0, y: 0}
     m_Ints: []
     m_Floats:
     - _CameraPosQuantization: 0.075
-    - _ElementCount: 500000
-    - _GS_Positions_CoordMask: 127
-    - _GS_Positions_CoordShift: 7
+    - _ElementCount: 1881947
+    - _GS_ColliderBoxHeight: 39.11367
+    - _GS_ColliderPlanarSort: 0
+    - _GS_Positions_CoordMask: 511
+    - _GS_Positions_CoordShift: 9
+    - _GS_UseActiveCount: 1
     m_Colors:
-    - _CameraPos: {r: -164.534, g: -177.90796, b: 530.38995, a: 0}
+    - _CameraPos: {r: -2.0712302, g: 2.2416956, b: 1.466736, a: 0}
   m_BuildTextureStacks: []

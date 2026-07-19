@@ -15,18 +15,72 @@ public class RadixSort : UdonSharpBehaviour
     [SerializeField] public Material radixSort;
     [SerializeField] public Material copySortedOrder;
 
-    [SerializeField] public RenderTexture keyValues0;
-    [SerializeField] public RenderTexture keyValues1;
-    [SerializeField] public RenderTexture histograms;
-    [SerializeField] public RenderTexture prefixSums;
+    // Per-sort scratch is rebound from the serialized bucket arrays; never serialize these holders.
+    [System.NonSerialized] public RenderTexture keyValues0;
+    [System.NonSerialized] public RenderTexture keyValues1;
+    [System.NonSerialized] public RenderTexture histograms;
+    [System.NonSerialized] public RenderTexture prefixSums;
+    [HideInInspector] [SerializeField] public RenderTexture[] keyValues0ByBucket;
+    [HideInInspector] [SerializeField] public RenderTexture[] keyValues1ByBucket;
+    [HideInInspector] [SerializeField] public RenderTexture[] histogramsByBucket;
+    [HideInInspector] [SerializeField] public RenderTexture[] prefixSumsByBucket;
 
-    [HideInInspector] [SerializeField] public int elementCount = 1024 * 1024;
+    [System.NonSerialized] public int elementCount = 1024 * 1024;
 
     public const int BitsPerPass = 4;
     public const int SortStartBit = 7;
     public const int MaxKeyBits = 31;
     public const int TotalSortPasses = 6;
     private const int groupSizeLog2 = 4;
+
+    public bool UseBucketResources(int tier)
+    {
+        if (!TryGetTierTexture(keyValues0ByBucket, tier, out RenderTexture kv0)
+            || !TryGetTierTexture(keyValues1ByBucket, tier, out RenderTexture kv1)
+            || !TryGetTierTexture(histogramsByBucket, tier, out RenderTexture hist)
+            || !TryGetTierTexture(prefixSumsByBucket, tier, out RenderTexture prefix))
+        {
+            return false;
+        }
+
+        keyValues0 = kv0;
+        keyValues1 = kv1;
+        histograms = hist;
+        prefixSums = prefix;
+        return true;
+    }
+
+    public bool BindDefaultBucketResources()
+    {
+        if (keyValues0 != null && keyValues1 != null && histograms != null && prefixSums != null)
+        {
+            return true;
+        }
+        int maxTier = keyValues0ByBucket != null ? keyValues0ByBucket.Length - 1 : -1;
+        for (int tier = maxTier; tier >= 0; tier--)
+        {
+            if (UseBucketResources(tier))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // Pure check (no mutation) used by the renderer to verify a tier is fully baked before committing a swap.
+    public bool HasBucketResources(int tier)
+    {
+        return TryGetTierTexture(keyValues0ByBucket, tier, out RenderTexture kv0)
+            && TryGetTierTexture(keyValues1ByBucket, tier, out RenderTexture kv1)
+            && TryGetTierTexture(histogramsByBucket, tier, out RenderTexture hist)
+            && TryGetTierTexture(prefixSumsByBucket, tier, out RenderTexture prefix);
+    }
+
+    static bool TryGetTierTexture(RenderTexture[] textures, int tier, out RenderTexture texture)
+    {
+        texture = textures != null && tier >= 0 && tier < textures.Length ? textures[tier] : null;
+        return texture != null;
+    }
 
 #if UNITY_EDITOR && !COMPILER_UDONSHARP
     static Material _editorCopySortedOrderMaterial;
@@ -35,7 +89,10 @@ public class RadixSort : UdonSharpBehaviour
     // Game: run a complete sort immediately and copy the order.
     public void RunFullSort(RenderTexture renderOrder, int slice)
     {
-        BeginSortInternal(false);
+        if (!BeginSortInternal(false))
+        {
+            return;
+        }
         RunSortPassesInternal(false);
         CopySortedOrderInternal(renderOrder, slice, false);
     }
@@ -44,14 +101,22 @@ public class RadixSort : UdonSharpBehaviour
     // Editor previews: full sort + copy every frame for the given camera slice.
     public void RunFullSortForEditor(RenderTexture renderOrder, int slice)
     {
-        BeginSortInternal(true);
+        if (!BeginSortInternal(true))
+        {
+            return;
+        }
         RunSortPassesInternal(true);
         CopySortedOrderInternal(renderOrder, slice, true);
     }
 #endif
 
-    void BeginSortInternal(bool useEditorOps)
+    bool BeginSortInternal(bool useEditorOps)
     {
+        if (!BindDefaultBucketResources())
+        {
+            Debug.LogError("RadixSort: generated sort resources are missing. Refresh the GaussianSplatRenderer in the editor.");
+            return false;
+        }
         // Runtime uniforms that vary each frame
         setStaticUniforms();
 
@@ -69,6 +134,7 @@ public class RadixSort : UdonSharpBehaviour
 
         radixSort.SetTexture("_PrefixSums", prefixSums);
         radixSort.SetTexture("_Histograms", histograms);
+        return true;
     }
 
     void RunSortPassesInternal(bool useEditorOps)

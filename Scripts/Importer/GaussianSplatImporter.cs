@@ -1,9 +1,9 @@
-﻿
+
 #if UNITY_EDITOR && !COMPILER_UDONSHARP
 using System;
-using Unity.Collections;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Text;
 using System.Threading;
@@ -30,16 +30,26 @@ namespace GaussianSplatting
     }
 
     /// <summary>
-    /// Parses a Gaussian‑splat *.ply (or .spz) file and packs the base attributes plus optional
+    /// Parses a Gaussian splat source file and packs the base attributes plus optional
     /// spherical harmonic coefficient textures ready for GPU upload. Only UnityEngine types are
     /// referenced so this class can also be used at runtime. Editor‑only helpers are wrapped in
     /// UNITY_EDITOR guards.
     /// </summary>
-    public static class PlySplatImporter
+    public static class GaussianSplatImporter
     {
         const int SHCoeffCount = 15;
-        const float SHNonZeroEpsilon = 1e-8f;
         const int MaxImportSplatCount = 4096 * 4096;
+        const string PlyExtension = ".ply";
+        const string SpzExtension = ".spz";
+        const uint SpzMagic = 0x5053474e; // "NGSP"
+        const uint SpzVersion = 2;
+        const int MaxSpzSplatCount = 10_000_000;
+        const int SpzBaseFloatCount = 14;
+        const int SpzRowsPerOutputChunk = 8192;
+        public static readonly string[] ImportFilePanelFilters =
+        {
+            "Gaussian splat files", "ply,spz"
+        };
 
         public readonly struct TextureLayout
         {
@@ -71,17 +81,17 @@ namespace GaussianSplatting
             }
         }
 
+        [System.Serializable]
         public struct ImportOptions
         {
             public bool computeBoundingBox;
             public int splatsPerPass;
-            public bool precomputeSorting;
+            public bool standalone;
             public int maxAlphaMaskCount;
             public bool useSRGB;
             public bool importSphericalHarmonics;
             public SHBand defaultSHBand;
-            public bool compressColorAlphaToBC7;
-            public bool compressSHToBC7;
+            public bool compressColorAlphaToBC7; // compress the color/alpha texture to BC7 (both LOD and non-LOD)
             public int startRenderQueue;
             public bool cropToBounds;
             public Bounds cropBounds;
@@ -90,6 +100,29 @@ namespace GaussianSplatting
             public Quaternion horizonRotation;
             public Vector3 horizonPivot;
             public bool lodUsePackedPositions;
+            public bool lodComputeSplats;
+            public int lodResamplePercent;
+            public int lodReusePercent;
+            public bool normalizeSize;        // scale splats so the floater-robust extent matches normalizeTargetSize
+            public float normalizeTargetSize; // target extent (world units) when normalizeSize is on; <=0 -> 1.0
+            public SHCompression shCompression; // SH texture format (both LOD and non-LOD): None (RGB565), BC1 (4bpp), BC7 (8bpp)
+        }
+
+        // SH texture storage format, shared by both import paths.
+        public enum SHCompression { None = 0, BC1 = 1, BC7 = 2 }
+
+        // Stored on each imported splat object (as JSON) so it can be re-imported exactly or with tweaked settings.
+        [System.Serializable]
+        public class ImportMetadata
+        {
+            public string sourcePath;     // original import source
+            public string prefabPath;     // imported prefab asset path (re-import target)
+            public bool importAsLOD;
+            public int lodChunkSize = 4096;
+            public ImportOptions options;
+
+            public static string ToJson(ImportMetadata m) => JsonUtility.ToJson(m);
+            public static ImportMetadata FromJson(string json) => string.IsNullOrEmpty(json) ? null : JsonUtility.FromJson<ImportMetadata>(json);
         }
 
         static uint Morton3D(float nx, float ny, float nz)
@@ -168,7 +201,8 @@ namespace GaussianSplatting
             return best;
         }
 
-        static void ApplyTexture(Texture2D texture, bool compressToBC7)
+        // Color/alpha texture: optional BC7 (shared by both import paths).
+        public static void ApplyTexture(Texture2D texture, bool compressToBC7)
         {
             if (!compressToBC7)
             {
@@ -181,19 +215,22 @@ namespace GaussianSplatting
             texture.Apply(false, true);
         }
 
+        // SH texture: None keeps the RGB565 source, BC1 -> DXT1 (4bpp), BC7 -> 8bpp. Shared by both import
+        // paths so SH storage format matches regardless of LOD/non-LOD.
+        public static void ApplyShTextureCompression(Texture2D texture, SHCompression mode)
+        {
+            if (mode == SHCompression.BC1 || mode == SHCompression.BC7)
+            {
+                texture.Apply(false, false);
+                TextureFormat fmt = mode == SHCompression.BC7 ? TextureFormat.BC7 : TextureFormat.DXT1;
+                EditorUtility.CompressTexture(texture, fmt, TextureCompressionQuality.Normal);
+            }
+            texture.Apply(false, true);
+        }
+
         static string GetSHPropertyName(int index)
         {
             return $"_GS_SH{(index + 1).ToString("X")}";
-        }
-
-        static Vector3 GetSHCoefficient(NativeArray<Vector3> shCoeffs, int shCoeffCount, int splatIndex, int coeffIndex)
-        {
-            if (!shCoeffs.IsCreated || shCoeffCount <= 0 || coeffIndex < 0 || coeffIndex >= shCoeffCount || splatIndex < 0)
-            {
-                return Vector3.zero;
-            }
-
-            return shCoeffs[splatIndex * shCoeffCount + coeffIndex];
         }
 
         internal static int ComputeTextureCoordShift(int width)
@@ -354,18 +391,7 @@ namespace GaussianSplatting
             return mesh;
         }
 
-        static SHBand ClampDefaultSHBand(SHBand requestedBand, bool[] hasNonZeroBand)
-        {
-            int requested = Mathf.Clamp((int)requestedBand, (int)SHBand.SH0, (int)SHBand.SH3);
-            for (int band = requested; band >= (int)SHBand.SH1; --band)
-            {
-                if (hasNonZeroBand[band])
-                    return (SHBand)band;
-            }
-            return SHBand.SH0;
-        }
-
-        static int SHCoeffCountForBand(SHBand band)
+        public static int SHCoeffCountForBand(SHBand band)
         {
             return band switch
             {
@@ -376,64 +402,323 @@ namespace GaussianSplatting
             };
         }
 
-        static void FilterSplatsByBounds(ref NativeArray<ImportSplatData> splats, ref NativeArray<Vector3> shCoeffs, int shCoeffCount, Bounds bounds, string sourceName)
+        public static bool IsSupportedImportSourcePath(string path)
         {
-            int[] included = new int[splats.Length];
-            int includedCount = 0;
-            for (int i = 0; i < splats.Length; i++)
+            string extension = Path.GetExtension(path);
+            return string.Equals(extension, PlyExtension, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(extension, SpzExtension, StringComparison.OrdinalIgnoreCase);
+        }
+
+        public static string ResolveSourceToPlyPath(string sourcePath, string tempFolder)
+        {
+            string extension = Path.GetExtension(sourcePath);
+            if (string.Equals(extension, PlyExtension, StringComparison.OrdinalIgnoreCase))
             {
-                if (bounds.Contains(splats[i].pos))
-                {
-                    included[includedCount++] = i;
-                }
+                return sourcePath;
+            }
+            if (string.Equals(extension, SpzExtension, StringComparison.OrdinalIgnoreCase))
+            {
+                Directory.CreateDirectory(tempFolder);
+                string tempPlyPath = Path.Combine(tempFolder, SanitizeAssetName(Path.GetFileNameWithoutExtension(sourcePath)) + ".ply");
+                WriteResolvedSpzPly(sourcePath, tempPlyPath);
+                return tempPlyPath;
             }
 
-            if (includedCount == splats.Length)
+            throw new IOException($"File {sourcePath} is not a supported splat import format. Expected .ply or .spz.");
+        }
+
+        struct SpzHeader
+        {
+            public int splatCount;
+            public int shLevel;
+            public int fractionalBits;
+        }
+
+        static void WriteResolvedSpzPly(string spzPath, string plyPath)
+        {
+            if (!BitConverter.IsLittleEndian)
             {
-                return;
-            }
-            if (includedCount == 0)
-            {
-                throw new InvalidOperationException($"Import aborted: crop bounds exclude all splats in '{sourceName}'.");
+                throw new PlatformNotSupportedException("SPZ import requires a little-endian editor platform.");
             }
 
-            NativeArray<ImportSplatData> filteredSplats = new NativeArray<ImportSplatData>(includedCount, Allocator.Persistent);
-            NativeArray<Vector3> filteredShCoeffs = shCoeffCount > 0 ? new NativeArray<Vector3>(includedCount * shCoeffCount, Allocator.Persistent, NativeArrayOptions.ClearMemory) : default;
-            for (int i = 0; i < includedCount; i++)
+            using FileStream input = new FileStream(spzPath, FileMode.Open, FileAccess.Read, FileShare.Read, 1024 * 1024, FileOptions.SequentialScan);
+            using GZipStream gzip = new GZipStream(input, CompressionMode.Decompress);
+            SpzHeader header = ReadSpzHeader(spzPath, gzip);
+            int shCoeffCount = SHCoeffCountForSpzLevel(header.shLevel);
+
+            byte[] packedPositions = new byte[checked(header.splatCount * 3 * 3)];
+            byte[] packedAlpha = new byte[header.splatCount];
+            byte[] packedColors = new byte[checked(header.splatCount * 3)];
+            byte[] packedScales = new byte[checked(header.splatCount * 3)];
+            byte[] packedRotations = new byte[checked(header.splatCount * 3)];
+            byte[] packedSh = new byte[checked(header.splatCount * shCoeffCount * 3)];
+
+            ReadExact(gzip, packedPositions, packedPositions.Length, spzPath);
+            ReadExact(gzip, packedAlpha, packedAlpha.Length, spzPath);
+            ReadExact(gzip, packedColors, packedColors.Length, spzPath);
+            ReadExact(gzip, packedScales, packedScales.Length, spzPath);
+            ReadExact(gzip, packedRotations, packedRotations.Length, spzPath);
+            ReadExact(gzip, packedSh, packedSh.Length, spzPath);
+
+            string outputFolder = Path.GetDirectoryName(plyPath);
+            if (!string.IsNullOrEmpty(outputFolder))
             {
-                int sourceIndex = included[i];
-                filteredSplats[i] = splats[sourceIndex];
-                if (shCoeffCount <= 0)
-                {
-                    continue;
-                }
+                Directory.CreateDirectory(outputFolder);
+            }
+            using FileStream output = new FileStream(plyPath, FileMode.Create, FileAccess.Write, FileShare.None, 1024 * 1024, FileOptions.SequentialScan);
+            WriteResolvedPlyHeader(output, header.splatCount, shCoeffCount);
+            WriteSpzRowsAsPly(output, header, shCoeffCount, packedPositions, packedAlpha, packedColors, packedScales, packedRotations, packedSh);
+        }
+
+        static SpzHeader ReadSpzHeader(string spzPath, Stream stream)
+        {
+            byte[] bytes = new byte[16];
+            ReadExact(stream, bytes, bytes.Length, spzPath);
+
+            uint magic = BitConverter.ToUInt32(bytes, 0);
+            uint version = BitConverter.ToUInt32(bytes, 4);
+            uint splatCountU = BitConverter.ToUInt32(bytes, 8);
+            uint packed = BitConverter.ToUInt32(bytes, 12);
+
+            if (magic != SpzMagic)
+            {
+                throw new IOException($"SPZ {spzPath} read error, header magic unexpected {magic}");
+            }
+            if (version != SpzVersion)
+            {
+                throw new IOException($"SPZ {spzPath} read error, header version unexpected {version}");
+            }
+            if (splatCountU > int.MaxValue)
+            {
+                throw new IOException($"SPZ {spzPath} read error, splat count exceeds supported range {splatCountU}");
+            }
+
+            int splatCount = (int)splatCountU;
+            int shLevel = (int)(packed & 0xFF);
+            int fractionalBits = (int)((packed >> 8) & 0xFF);
+
+            if (splatCount < 1 || splatCount > MaxSpzSplatCount)
+            {
+                throw new IOException($"SPZ {spzPath} read error, out of range splat count {splatCount}");
+            }
+            if (shLevel < 0 || shLevel > 3)
+            {
+                throw new IOException($"SPZ {spzPath} read error, out of range SH level {shLevel}");
+            }
+            if (fractionalBits < 0 || fractionalBits > 24)
+            {
+                throw new IOException($"SPZ {spzPath} read error, out of range fractional bits {fractionalBits}");
+            }
+
+            return new SpzHeader
+            {
+                splatCount = splatCount,
+                shLevel = shLevel,
+                fractionalBits = fractionalBits
+            };
+        }
+
+        static int SHCoeffCountForSpzLevel(int level)
+        {
+            switch (level)
+            {
+                case 0: return 0;
+                case 1: return 3;
+                case 2: return 8;
+                case 3: return 15;
+                default: return 0;
+            }
+        }
+
+        static void WriteResolvedPlyHeader(Stream output, int splatCount, int shCoeffCount)
+        {
+            StringBuilder sb = new StringBuilder(1024);
+            sb.AppendLine("ply");
+            sb.AppendLine("format binary_little_endian 1.0");
+            sb.AppendLine("comment Resolved by VRChatGaussianSplatting");
+            sb.Append("element vertex ").Append(splatCount).Append('\n');
+            sb.AppendLine("property float x");
+            sb.AppendLine("property float y");
+            sb.AppendLine("property float z");
+            sb.AppendLine("property float f_dc_0");
+            sb.AppendLine("property float f_dc_1");
+            sb.AppendLine("property float f_dc_2");
+            sb.AppendLine("property float opacity");
+            sb.AppendLine("property float scale_0");
+            sb.AppendLine("property float scale_1");
+            sb.AppendLine("property float scale_2");
+            sb.AppendLine("property float rot_0");
+            sb.AppendLine("property float rot_1");
+            sb.AppendLine("property float rot_2");
+            sb.AppendLine("property float rot_3");
+            for (int channel = 0; channel < 3; channel++)
+            {
                 for (int coeff = 0; coeff < shCoeffCount; coeff++)
                 {
-                    filteredShCoeffs[i * shCoeffCount + coeff] = shCoeffs[sourceIndex * shCoeffCount + coeff];
+                    sb.Append("property float f_rest_").Append(coeff + channel * 15).Append('\n');
                 }
             }
+            sb.AppendLine("end_header");
 
-            splats.Dispose();
-            if (shCoeffs.IsCreated)
-            {
-                shCoeffs.Dispose();
-            }
-            splats = filteredSplats;
-            shCoeffs = filteredShCoeffs;
+            byte[] headerBytes = Encoding.ASCII.GetBytes(sb.ToString());
+            output.Write(headerBytes, 0, headerBytes.Length);
         }
 
-        static void ApplyHorizonAlignment(NativeArray<ImportSplatData> splats, Quaternion rotation, Vector3 pivot)
+        static void WriteSpzRowsAsPly(
+            FileStream output,
+            SpzHeader header,
+            int shCoeffCount,
+            byte[] packedPositions,
+            byte[] packedAlpha,
+            byte[] packedColors,
+            byte[] packedScales,
+            byte[] packedRotations,
+            byte[] packedSh)
         {
-            for (int i = 0; i < splats.Length; i++)
+            int stride = (SpzBaseFloatCount + shCoeffCount * 3) * sizeof(float);
+            byte[] buffer = new byte[SpzRowsPerOutputChunk * stride];
+            float positionScale = 1.0f / (1 << header.fractionalBits);
+
+            int processed = 0;
+            while (processed < header.splatCount)
             {
-                ImportSplatData splat = splats[i];
-                splat.pos = rotation * (splat.pos - pivot);
-                splat.rot = rotation * splat.rot;
-                splats[i] = splat;
+                int rows = Math.Min(SpzRowsPerOutputChunk, header.splatCount - processed);
+                int writeOffset = 0;
+                for (int row = 0; row < rows; row++)
+                {
+                    int index = processed + row;
+                    WriteSpzSplatAsPlyRow(buffer, ref writeOffset, index, positionScale, shCoeffCount, packedPositions, packedAlpha, packedColors, packedScales, packedRotations, packedSh);
+                }
+                output.Write(buffer, 0, rows * stride);
+                processed += rows;
             }
         }
 
-        static int ComputePackedTextureIndex(int index, int width)
+        static void WriteSpzSplatAsPlyRow(
+            byte[] output,
+            ref int offset,
+            int index,
+            float positionScale,
+            int shCoeffCount,
+            byte[] packedPositions,
+            byte[] packedAlpha,
+            byte[] packedColors,
+            byte[] packedScales,
+            byte[] packedRotations,
+            byte[] packedSh)
+        {
+            WriteFloat(output, ref offset, UnpackSpzPosition(packedPositions, index * 3 + 0) * positionScale);
+            WriteFloat(output, ref offset, UnpackSpzPosition(packedPositions, index * 3 + 1) * positionScale);
+            WriteFloat(output, ref offset, UnpackSpzPosition(packedPositions, index * 3 + 2) * positionScale);
+
+            WriteFloat(output, ref offset, UnpackSpzColorDC(packedColors[index * 3 + 0]));
+            WriteFloat(output, ref offset, UnpackSpzColorDC(packedColors[index * 3 + 1]));
+            WriteFloat(output, ref offset, UnpackSpzColorDC(packedColors[index * 3 + 2]));
+            WriteFloat(output, ref offset, Logit(packedAlpha[index] / 255.0f));
+
+            WriteFloat(output, ref offset, UnpackSpzLogScale(packedScales[index * 3 + 0]));
+            WriteFloat(output, ref offset, UnpackSpzLogScale(packedScales[index * 3 + 1]));
+            WriteFloat(output, ref offset, UnpackSpzLogScale(packedScales[index * 3 + 2]));
+
+            Vector4 q = UnpackSpzRotationWXYZ(packedRotations, index);
+            WriteFloat(output, ref offset, q.x);
+            WriteFloat(output, ref offset, q.y);
+            WriteFloat(output, ref offset, q.z);
+            WriteFloat(output, ref offset, q.w);
+
+            int shBase = index * shCoeffCount * 3;
+            for (int channel = 0; channel < 3; channel++)
+            {
+                for (int coeff = 0; coeff < shCoeffCount; coeff++)
+                {
+                    WriteFloat(output, ref offset, UnpackSpzSH(packedSh[shBase + coeff * 3 + channel]));
+                }
+            }
+        }
+
+        static int UnpackSpzPosition(byte[] packedPositions, int componentIndex)
+        {
+            int baseIndex = componentIndex * 3;
+            int value = packedPositions[baseIndex + 0] | (packedPositions[baseIndex + 1] << 8) | (packedPositions[baseIndex + 2] << 16);
+            if ((value & 0x800000) != 0)
+            {
+                value |= unchecked((int)0xFF000000);
+            }
+            return value;
+        }
+
+        static float UnpackSpzColorDC(byte value)
+        {
+            return (value / 255.0f - 0.5f) / 0.15f;
+        }
+
+        static float UnpackSpzLogScale(byte value)
+        {
+            return value / 16.0f - 10.0f;
+        }
+
+        static Vector4 UnpackSpzRotationWXYZ(byte[] packedRotations, int index)
+        {
+            float x = packedRotations[index * 3 + 0] * (1.0f / 127.5f) - 1.0f;
+            float y = packedRotations[index * 3 + 1] * (1.0f / 127.5f) - 1.0f;
+            float z = packedRotations[index * 3 + 2] * (1.0f / 127.5f) - 1.0f;
+            float w = Mathf.Sqrt(Mathf.Max(0.0f, 1.0f - (x * x + y * y + z * z)));
+            float length = Mathf.Sqrt(w * w + x * x + y * y + z * z);
+            if (length <= 1e-8f)
+            {
+                return new Vector4(1.0f, 0.0f, 0.0f, 0.0f);
+            }
+
+            float invLength = 1.0f / length;
+            return new Vector4(w * invLength, x * invLength, y * invLength, z * invLength);
+        }
+
+        static float UnpackSpzSH(byte value)
+        {
+            return (value - 128.0f) / 128.0f;
+        }
+
+        static float Logit(float value)
+        {
+            const float epsilon = 1e-6f;
+            value = Mathf.Clamp(value, epsilon, 1.0f - epsilon);
+            return Mathf.Log(value / (1.0f - value));
+        }
+
+        static void ReadExact(Stream stream, byte[] buffer, int byteCount, string path)
+        {
+            int total = 0;
+            while (total < byteCount)
+            {
+                int read = stream.Read(buffer, total, byteCount - total);
+                if (read <= 0)
+                {
+                    throw new IOException($"SPZ {path} read error, expected {byteCount} bytes got {total}");
+                }
+                total += read;
+            }
+        }
+
+        static unsafe void WriteFloat(byte[] buffer, ref int offset, float value)
+        {
+            fixed (byte* ptr = &buffer[offset])
+            {
+                *(float*)ptr = value;
+            }
+            offset += sizeof(float);
+        }
+
+        // Single source of truth for the horizon-alignment transform, shared with the streamed reader.
+        public static ImportSplatData ApplyHorizonAlignment(ImportSplatData splat, Quaternion rotation, Vector3 pivot)
+        {
+            splat.pos = rotation * (splat.pos - pivot);
+            splat.rot = rotation * splat.rot;
+            return splat;
+        }
+
+        // Shared block-swizzle texel index used by both importers. The LOD importer carried an
+        // arithmetically identical copy (division instead of shift, equivalent for POT widths).
+        public static int ComputePackedTextureIndex(int index, int width)
         {
             int blocksPerRow = Mathf.Max(1, width >> 2);
             int blockIndex = index >> 4;
@@ -442,6 +727,28 @@ namespace GaussianSplatting
             int x = (blockX << 2) | (index & 3);
             int y = (blockY << 2) | ((index >> 2) & 3);
             return y * width + x;
+        }
+
+        // Shared 10-bit-per-axis position packing (chunk-bbox-normalized), used by the chunked/LOD
+        // importer and the non-LOD packed migration. Decode mirror lives in GSData.cginc /
+        // GSLODSelect.cginc / GSLODCombine.shader: lerp(min, max, q/1023).
+        public static Color32 EncodePosition10(Vector3 position, Vector3 boundsMin, Vector3 boundsMax)
+        {
+            Vector3 size = boundsMax - boundsMin;
+            uint x = QuantizePositionAxis10(position.x, boundsMin.x, size.x);
+            uint y = QuantizePositionAxis10(position.y, boundsMin.y, size.y);
+            uint z = QuantizePositionAxis10(position.z, boundsMin.z, size.z);
+            byte highBits = (byte)(((x >> 8) & 0x3u) | (((y >> 8) & 0x3u) << 2) | (((z >> 8) & 0x3u) << 4));
+            return new Color32((byte)(x & 0xFFu), (byte)(y & 0xFFu), (byte)(z & 0xFFu), highBits);
+        }
+
+        public static uint QuantizePositionAxis10(float value, float min, float size)
+        {
+            if (Mathf.Abs(size) <= 1e-8f)
+            {
+                return 0u;
+            }
+            return (uint)Mathf.Clamp(Mathf.RoundToInt(Mathf.Clamp01((value - min) / size) * 1023.0f), 0, 1023);
         }
 
         static MeshRenderer CreateRendererChild(Transform parent, string name, Mesh mesh, List<Material> materials)
@@ -460,7 +767,7 @@ namespace GaussianSplatting
             go.name = name;
             go.transform.localPosition = Vector3.zero;
             go.transform.localRotation = Quaternion.identity;
-            go.transform.localScale = new Vector3(1, -1, 1); // flip Y to match unity's coordinate system
+            go.transform.localScale = Vector3.one; // y-flip is baked into coordinates -> identity scale
 
             MeshFilter meshFilter = go.GetComponent<MeshFilter>();
             if (meshFilter == null)
@@ -473,21 +780,12 @@ namespace GaussianSplatting
             meshRenderer.sharedMaterials = materials.ToArray();
             meshRenderer.allowOcclusionWhenDynamic = false;
 
-            if (!addGaussianSplatObject)
-            {
-                GaussianSplatObject existingSplatObject = go.GetComponent<GaussianSplatObject>();
-                if (existingSplatObject != null)
-                    UnityEngine.Object.DestroyImmediate(existingSplatObject);
-                return;
-            }
-
-            GaussianSplatObject splatObject = go.GetComponent<GaussianSplatObject>();
-            if (splatObject == null)
-                splatObject = go.AddUdonSharpComponent<GaussianSplatObject>();
-            splatObject.gaussianSplatRenderer = null;
-            splatObject.sortedObject = null;
-            splatObject.sortedRenderer = meshRenderer;
-            splatObject.SetMaxSHBand(Mathf.Clamp(maxSHBand, 0, 3));
+            // Standalone splats are just a mesh + materials with no GaussianSplatObject component (the
+            // precomputed-sort shader renders them); combined splats use the array-based GaussianSplatObject
+            // emitted by the LOD import path. So the base import never attaches the component - strip any stale one.
+            GaussianSplatObject existingSplatObject = go.GetComponent<GaussianSplatObject>();
+            if (existingSplatObject != null)
+                UnityEngine.Object.DestroyImmediate(existingSplatObject);
         }
 
         public static GameObject CreatePrefab(List<Material> materials, Mesh mesh, string assetPath, string name, int maxSHBand = -1, bool addGaussianSplatObject = true)
@@ -505,19 +803,19 @@ namespace GaussianSplatting
             return prefab;
         }
 
-        public static void Import(string plyFile, string prefabOutputPath, bool computeBoundingBox, int splatsPerPass, bool precomputeSorting = false, int maxAlphaMaskCount = 1, bool useSRGB = true, bool importSphericalHarmonics = true, SHBand defaultSHBand = SHBand.SH1, bool compressColorAlphaToBC7 = false, bool compressSHToBC7 = true, int startRenderQueue = 4050)
+        public static void Import(string sourceFile, string prefabOutputPath, bool computeBoundingBox, int splatsPerPass, bool standalone = false, int maxAlphaMaskCount = 1, bool useSRGB = true, bool importSphericalHarmonics = true, SHBand defaultSHBand = SHBand.SH1, bool compressColorAlphaToBC7 = false, SHCompression shCompression = SHCompression.BC7, int startRenderQueue = 4050)
         {
-            Import(plyFile, prefabOutputPath, new ImportOptions
+            Import(sourceFile, prefabOutputPath, new ImportOptions
             {
                 computeBoundingBox = computeBoundingBox,
                 splatsPerPass = splatsPerPass,
-                precomputeSorting = precomputeSorting,
+                standalone = standalone,
                 maxAlphaMaskCount = maxAlphaMaskCount,
                 useSRGB = useSRGB,
                 importSphericalHarmonics = importSphericalHarmonics,
                 defaultSHBand = defaultSHBand,
                 compressColorAlphaToBC7 = compressColorAlphaToBC7,
-                compressSHToBC7 = compressSHToBC7,
+                shCompression = shCompression,
                 startRenderQueue = startRenderQueue,
                 cropToBounds = false,
                 cropBounds = new Bounds(Vector3.zero, Vector3.one),
@@ -528,305 +826,272 @@ namespace GaussianSplatting
             });
         }
 
-        public static void Import(string plyFile, string prefabOutputPath, ImportOptions options)
+        // Non-LOD import: the degenerate (single texture set, no LOD levels, no k-means) case of the shared
+        // streamed front-end. Reads/transforms/SH-stores/Hilbert-orders the resolved source exactly
+        // like the LOD path (so crop, horizon, y-flip bake, normalize and SH behave identically), then collects
+        // the ordered stream into a single packed texture set + multipass mesh prefab (GaussianSplatObject).
+        public static void Import(string sourceFile, string prefabOutputPath, ImportOptions options)
         {
-            if (!File.Exists(plyFile))
-                throw new FileNotFoundException(plyFile);
+            if (!File.Exists(sourceFile))
+                throw new FileNotFoundException(sourceFile);
 
-            // Read header to learn how many splats we need to allocate for.
-            int count = GaussianFileReader.ReadFileHeader(plyFile);
-            if (count == 0)
-                throw new Exception("Empty or unsupported splat file");
-            if (count > MaxImportSplatCount)
-                throw new InvalidOperationException($"Import aborted: '{Path.GetFileName(plyFile)}' contains {count:N0} splats, exceeding the importer limit of {MaxImportSplatCount:N0}.");
-
-            int requestedSHCoeffCount = options.importSphericalHarmonics ? SHCoeffCountForBand(options.defaultSHBand) : 0;
-            bool willAttemptBC7Compression = options.compressColorAlphaToBC7 || (options.compressSHToBC7 && requestedSHCoeffCount > 0);
-            if (willAttemptBC7Compression && !SystemInfo.SupportsTextureFormat(TextureFormat.BC7))
-                throw new InvalidOperationException("BC7 compression is not supported by the current editor graphics device. Disable BC7 compression or import on a system with BC7 support.");
-
-            GaussianFileReader.ReadFile(plyFile, requestedSHCoeffCount, out NativeArray<ImportSplatData> splats, out NativeArray<Vector3> shCoeffs);
+            string tempFolder = Path.Combine(Application.temporaryCachePath, "GaussianSplat_" + SanitizeAssetName(Path.GetFileNameWithoutExtension(sourceFile)) + "_" + DateTime.Now.Ticks.ToString());
+            Directory.CreateDirectory(tempFolder);
             try
             {
-                if (options.applyHorizonAlignment)
+                string resolvedPlyFile = ResolveSourceToPlyPath(sourceFile, tempFolder);
+                StreamedSplatReader.PLYLayout layout = StreamedSplatReader.ReadPLYLayout(resolvedPlyFile);
+                if (layout.count == 0)
+                    throw new Exception("Empty or unsupported splat file");
+                if (layout.count > MaxImportSplatCount)
+                    throw new InvalidOperationException($"Import aborted: '{Path.GetFileName(sourceFile)}' contains {layout.count:N0} splats, exceeding the importer limit of {MaxImportSplatCount:N0}.");
+
+                int requestedSHCoeffCount = options.importSphericalHarmonics ? SHCoeffCountForBand(options.defaultSHBand) : 0;
+                int importedSHCoeffCount = Mathf.Min(requestedSHCoeffCount, layout.shCoeffCount);
+                bool willAttemptBC7Compression = options.compressColorAlphaToBC7 || (options.shCompression == SHCompression.BC7 && importedSHCoeffCount > 0);
+                if (willAttemptBC7Compression && !SystemInfo.SupportsTextureFormat(TextureFormat.BC7))
+                    throw new InvalidOperationException("BC7 compression is not supported by the current editor graphics device. Disable BC7 compression or import on a system with BC7 support.");
+
+                // --- shared streamed front-end (crop / horizon / y-flip / normalize / raw-SH side-store) ---
+                Bounds bounds = StreamedSplatReader.StreamBounds(resolvedPlyFile, layout, options, out int n, out Vector3 centroid);
+                if (n <= 0)
+                    throw new InvalidOperationException($"Import aborted: crop bounds exclude all splats in '{Path.GetFileName(sourceFile)}'.");
+                float normalizeScale = 1.0f;
+                if (options.normalizeSize)
                 {
-                    ApplyHorizonAlignment(splats, options.horizonRotation, options.horizonPivot);
+                    normalizeScale = StreamedSplatReader.ComputeNormalizeScale(resolvedPlyFile, layout, options, centroid, bounds, n);
+                    bounds.SetMinMax((bounds.min - centroid) * normalizeScale + centroid, (bounds.max - centroid) * normalizeScale + centroid);
                 }
 
-                int originalSplatCount = splats.Length;
-                if (options.cropToBounds)
-                {
-                    FilterSplatsByBounds(ref splats, ref shCoeffs, requestedSHCoeffCount, options.cropBounds, Path.GetFileName(plyFile));
-                }
+                StreamedSplatReader.BigFloatBuffer shStore = importedSHCoeffCount > 0 ? new StreamedSplatReader.BigFloatBuffer((long)n * importedSHCoeffCount * 3) : null;
+                int bucketBits = StreamedSplatReader.ResolveStreamedBucketBits(n);
+                int bucketCount = 1 << bucketBits;
+                string[] bucketPaths = new string[bucketCount];
+                long[] bucketCounts = new long[bucketCount];
+                StreamedSplatReader.WriteHilbertBuckets(resolvedPlyFile, layout, bounds, options, tempFolder, bucketBits, bucketPaths, bucketCounts, importedSHCoeffCount, shStore, centroid, normalizeScale);
 
-                var shMinPerCoeff = requestedSHCoeffCount > 0 ? new Vector3[requestedSHCoeffCount] : Array.Empty<Vector3>();
-                var shRangePerCoeff = requestedSHCoeffCount > 0 ? new Vector3[requestedSHCoeffCount] : Array.Empty<Vector3>();
-                const float shRangeEpsilon = 1e-8f;
-                bool[] hasNonZeroBand = new bool[4];
-                if (requestedSHCoeffCount > 0)
+                // Collect the Hilbert-ordered stream (non-LOD is splat-count-capped, so in-memory is fine). The
+                // collected order IS the texture order, so no separate Morton sort is needed.
+                ImportSplatData[] splats = new ImportSplatData[n];
+                uint[] sourceIndices = new uint[n];   // stream index into shStore for each ordered splat
+                int filled = 0;
+                StreamedSplatReader.BucketKeyComparer keyComparer = new StreamedSplatReader.BucketKeyComparer();
+                StreamedSplatReader.BucketRecordConsumer consume = (records, recordCount) =>
                 {
-                    for (int coeff = 0; coeff < requestedSHCoeffCount; ++coeff)
+                    for (int i = 0; i < recordCount && filled < n; i++)
                     {
-                        Vector3 minCoeff = new Vector3(float.PositiveInfinity, float.PositiveInfinity, float.PositiveInfinity);
-                        Vector3 maxCoeff = new Vector3(float.NegativeInfinity, float.NegativeInfinity, float.NegativeInfinity);
-                        for (int i = 0; i < splats.Length; ++i)
-                        {
-                            Vector3 sh = GetSHCoefficient(shCoeffs, requestedSHCoeffCount, i, coeff);
-                            minCoeff = Vector3.Min(minCoeff, sh);
-                            maxCoeff = Vector3.Max(maxCoeff, sh);
-                        }
-
-                        if (splats.Length == 0)
-                        {
-                            minCoeff = Vector3.zero;
-                            maxCoeff = Vector3.zero;
-                        }
-
-                        shMinPerCoeff[coeff] = minCoeff;
-                        shRangePerCoeff[coeff] = maxCoeff - minCoeff;
-
-                        int band = coeff < 3 ? 1 : (coeff < 8 ? 2 : 3);
-                        if (!hasNonZeroBand[band])
-                        {
-                            Vector3 range = shRangePerCoeff[coeff];
-                            hasNonZeroBand[band] = range.x > SHNonZeroEpsilon || range.y > SHNonZeroEpsilon || range.z > SHNonZeroEpsilon;
-                        }
+                        splats[filled] = records[i].ToSplat();
+                        sourceIndices[filled] = records[i].sourceIndex;
+                        filled++;
                     }
+                };
+                for (int bucket = 0; bucket < bucketCount; bucket++)
+                {
+                    if (bucketCounts[bucket] <= 0) continue;
+                    EditorUtility.DisplayProgressBar("Import Gaussian Splat PLY",
+                        $"Ordering Hilbert bucket {bucket + 1:N0}/{bucketCount:N0}", 0.25f + 0.55f * (bucket / (float)bucketCount));
+                    StreamedSplatReader.ProcessSortedBucketFile(bucketPaths[bucket], bucketCounts[bucket], bucketBits, tempFolder, keyComparer, consume, bucket + 1, bucketCount);
                 }
-                SHBand effectiveDefaultSHBand = options.importSphericalHarmonics ? ClampDefaultSHBand(options.defaultSHBand, hasNonZeroBand) : SHBand.SH0;
-                int importedSHCoeffCount = options.importSphericalHarmonics ? SHCoeffCountForBand(effectiveDefaultSHBand) : 0;
+                n = filled;
+
                 Vector3 sharedShMin = Vector3.zero;
-                Vector3 sharedShMax = Vector3.zero;
+                Vector3 sharedShRange = Vector3.zero;
                 if (importedSHCoeffCount > 0)
                 {
-                    sharedShMin = new Vector3(float.PositiveInfinity, float.PositiveInfinity, float.PositiveInfinity);
-                    sharedShMax = new Vector3(float.NegativeInfinity, float.NegativeInfinity, float.NegativeInfinity);
-                    for (int coeff = 0; coeff < importedSHCoeffCount; ++coeff)
-                    {
-                        Vector3 coeffMin = shMinPerCoeff[coeff];
-                        Vector3 coeffMax = coeffMin + shRangePerCoeff[coeff];
-                        sharedShMin = Vector3.Min(sharedShMin, coeffMin);
-                        sharedShMax = Vector3.Max(sharedShMax, coeffMax);
-                    }
+                    StreamedSplatReader.ComputeSharedSHRange(shStore, out Vector4 mn4, out Vector4 rng4);
+                    sharedShMin = new Vector3(mn4.x, mn4.y, mn4.z);
+                    sharedShRange = new Vector3(rng4.x, rng4.y, rng4.z);
                 }
-                Vector3 sharedShRange = sharedShMax - sharedShMin;
+                const float shRangeEpsilon = 1e-8f;
+                SHBand effectiveDefaultSHBand = importedSHCoeffCount >= 15 ? SHBand.SH3
+                    : importedSHCoeffCount >= 8 ? SHBand.SH2
+                    : importedSHCoeffCount >= 3 ? SHBand.SH1 : SHBand.SH0;
 
-                int n = splats.Length;
                 TextureLayout splatLayout = ChoosePotTextureLayout(n);
                 TextureLayout shLayout = importedSHCoeffCount > 0
                     ? ChoosePotTextureLayout(n * importedSHCoeffCount)
                     : new TextureLayout(4, 4);
 
-                Debug.Log(options.cropToBounds
-                    ? $"Importing {n} / {originalSplatCount} cropped splats into {splatLayout.Width}x{splatLayout.Height} textures"
-                    : $"Importing {count} splats into {splatLayout.Width}x{splatLayout.Height} textures");
+                EditorUtility.DisplayProgressBar("Import Gaussian Splat PLY",
+                    $"Packing {n:N0} splats into {splatLayout.Width}x{splatLayout.Height} textures", 0.84f);
 
-                // Compute BBOX
-                Vector3 min = new(float.MaxValue, float.MaxValue, float.MaxValue);
-                Vector3 max = new(float.MinValue, float.MinValue, float.MinValue);
-                for (int i = 0; i < n; ++i)
-                {
-                    min = Vector3.Min(min, splats[i].pos);
-                    max = Vector3.Max(max, splats[i].pos);
-                }
-                Vector3 size = max - min;
-
-                if (size.x == 0) size.x = 1e-6f;
-                if (size.y == 0) size.y = 1e-6f;
-                if (size.z == 0) size.z = 1e-6f;
-
-                // Prepare Morton keys
-                var keys = new uint[n];
-                Vector3 centerOfMass = Vector3.zero;
-                int validCount = 0;
-                for (int i = 0; i < n; ++i)
-                {
-                    Vector3 pos = splats[i].pos;
-                    if (float.IsNaN(pos.x) || float.IsNaN(pos.y) || float.IsNaN(pos.z))
-                    {
-                        Debug.LogWarning($"Skipping splat {i} with NaN position: {pos}");
-                        continue; // skip invalid splats
-                    }
-                    centerOfMass += pos;
-                    ++validCount;
-                    Vector3 np = (pos - min);
-                    np.x /= size.x; np.y /= size.y; np.z /= size.z;
-                    keys[i] = Morton3D(np.x, np.y, np.z);
-                }
-
-                centerOfMass /= validCount; // compute center of mass
-
-                // Compute bounds relative to the center of mass
-                Vector3 maxSize = Vector3.zero;
-                for (int i = 0; i < n; ++i)
-                {
-                    Vector3 pos = splats[i].pos;
-                    if (float.IsNaN(pos.x) || float.IsNaN(pos.y) || float.IsNaN(pos.z))
-                        continue; // skip invalid splats
-                    Vector3 relativePos = pos - centerOfMass;
-                    maxSize.x = Mathf.Max(maxSize.x, Mathf.Abs(relativePos.x));
-                    maxSize.y = Mathf.Max(maxSize.y, Mathf.Abs(relativePos.y));
-                    maxSize.z = Mathf.Max(maxSize.z, Mathf.Abs(relativePos.z));
-                }
-
-                int[] sortedOrder = new int[n];
-                for (int i = 0; i < n; ++i)
-                {
-                    sortedOrder[i] = i;
-                }
-                Array.Sort(keys, sortedOrder);
-
-                int[] textureIndexBySourceIndex = new int[n];
-                for (int i = 0; i < n; ++i)
-                {
-                    textureIndexBySourceIndex[sortedOrder[i]] = i;
-                }
-
+                // Bounding box (positions are already fully transformed by the stream).
                 Bounds bbox = new Bounds();
-                if (options.cropToBounds)
+                if (options.cropToBounds || options.computeBoundingBox)
                 {
-                    bbox = options.cropBounds;
-                    bbox.extents += Vector3.one * Mathf.Max(0.0f, options.cropPadding);
-                }
-                else if (options.computeBoundingBox)
-                {
-                    // Compute bounding box from splats
-                    bbox.center = centerOfMass;
-                    bbox.extents = new Vector3(maxSize.x, maxSize.y, maxSize.z);
+                    Vector3 com = Vector3.zero;
+                    int valid = 0;
+                    for (int i = 0; i < n; ++i)
+                    {
+                        Vector3 p = splats[i].pos;
+                        if (float.IsNaN(p.x) || float.IsNaN(p.y) || float.IsNaN(p.z)) continue;
+                        com += p; ++valid;
+                    }
+                    if (valid > 0) com /= valid;
+                    Vector3 ext = Vector3.zero;
+                    for (int i = 0; i < n; ++i)
+                    {
+                        Vector3 p = splats[i].pos;
+                        if (float.IsNaN(p.x) || float.IsNaN(p.y) || float.IsNaN(p.z)) continue;
+                        Vector3 r = p - com;
+                        ext.x = Mathf.Max(ext.x, Mathf.Abs(r.x));
+                        ext.y = Mathf.Max(ext.y, Mathf.Abs(r.y));
+                        ext.z = Mathf.Max(ext.z, Mathf.Abs(r.z));
+                    }
+                    bbox.center = com;
+                    bbox.extents = ext;
                     if (bbox.extents.x == 0 || bbox.extents.y == 0 || bbox.extents.z == 0)
                     {
-                        // If the bounding box is zero-sized, set a default size
                         bbox.extents = new Vector3(1000, 1000, 1000);
                         Debug.LogWarning("Bounding box is zero-sized, using default size.");
                     }
+                    if (options.cropToBounds) bbox.extents += Vector3.one * Mathf.Max(0.0f, options.cropPadding);
                 }
                 else
                 {
-                    // Use a default bounding box if not computing from splats
                     bbox.center = Vector3.zero;
                     bbox.extents = new Vector3(1000, 1000, 1000);
                 }
 
-                // Get name of the material from the path
                 string materialName = Path.GetFileNameWithoutExtension(prefabOutputPath);
                 string outputDataFolder = Path.GetDirectoryName(prefabOutputPath) + "/" + materialName;
-
-                // Create output data folder if it doesn't exist
                 EnsureFolderExists(outputDataFolder);
 
+                // Optional octahedral precomputed sort orders (texture index = stream order, so identity map).
                 Texture2DArray sortedTex = null;
-                if(options.precomputeSorting) {
+                if (options.standalone)
+                {
                     Vector3[] octahedral_dirs = {
                         new Vector3( 0.57735027f,  0.57735027f,  0.57735027f), new Vector3( 0.57735027f,  0.57735027f, -0.57735027f), new Vector3( 0.57735027f, -0.57735027f,  0.57735027f),
                         new Vector3( 0.57735027f, -0.57735027f, -0.57735027f), new Vector3( 0.00000000f,  0.35682209f,  0.93417236f), new Vector3( 0.00000000f,  0.35682209f, -0.93417236f),
                         new Vector3( 0.35682209f,  0.93417236f,  0.00000000f), new Vector3( 0.35682209f, -0.93417236f,  0.00000000f), new Vector3( 0.93417236f,  0.00000000f,  0.35682209f),
                         new Vector3( 0.93417236f,  0.00000000f, -0.35682209f)
                     };
-                    // Precompute sorting for octahedral directions
-                    int[][] sortedIndices = new int[octahedral_dirs.Length][];
-                    for (int i = 0; i < octahedral_dirs.Length; ++i)
-                    {
-                        Vector3 dir = octahedral_dirs[i];
-                        sortedIndices[i] = new int[n];
-                        for (int j = 0; j < n; ++j)
-                        {
-                            sortedIndices[i][j] = j;
-                        }
-                        Array.Sort(sortedIndices[i], (a, b) => Vector3.Dot(splats[a].pos, dir).CompareTo(Vector3.Dot(splats[b].pos, dir)));
-                    }
-
                     sortedTex = NewTextureArray(splatLayout.Width, splatLayout.Height, octahedral_dirs.Length, TextureFormat.RFloat, "SortedOctahedralDirections");
-                    for (int i = 0; i < octahedral_dirs.Length; ++i)
+                    for (int d = 0; d < octahedral_dirs.Length; ++d)
                     {
+                        Vector3 dir = octahedral_dirs[d];
+                        int[] order = new int[n];
+                        for (int j = 0; j < n; ++j) order[j] = j;
+                        Array.Sort(order, (a, b) => Vector3.Dot(splats[a].pos, dir).CompareTo(Vector3.Dot(splats[b].pos, dir)));
                         Color[] sortedPixels = new Color[splatLayout.Capacity];
                         for (int j = 0; j < n; ++j)
                         {
                             int packedIndex = ComputePackedTextureIndex(j, splatLayout.Width);
-                            sortedPixels[packedIndex] = new Color(textureIndexBySourceIndex[sortedIndices[i][j]], 0f, 0f, 0f); // Store only the texture index in the red channel
+                            sortedPixels[packedIndex] = new Color(order[j], 0f, 0f, 0f);
                         }
-                        sortedTex.SetPixels(sortedPixels, i);
+                        sortedTex.SetPixels(sortedPixels, d);
                     }
                     sortedTex.Apply(false, true);
                     sortedTex = SaveTextureAsset(sortedTex, outputDataFolder, materialName + "_sorted_oct_dirs");
                 }
 
+                Texture2D colDcTex = NewTexture(splatLayout.Width, splatLayout.Height, TextureFormat.RGBA32, "ColorDC");
+                Texture2D rotTex = NewTexture(splatLayout.Width, splatLayout.Height, TextureFormat.RGBA32, "Rotation");
+                Texture2D scaleTex = NewTexture(splatLayout.Width, splatLayout.Height, TextureFormat.RGB9e5Float, "Scale");
+                Texture2D shTex = importedSHCoeffCount > 0 ? NewTexture(shLayout.Width, shLayout.Height, TextureFormat.RGB565, "SH") : null;
 
-                Texture2D xyzTex     = NewTexture(splatLayout.Width, splatLayout.Height, TextureFormat.RGBAFloat, "XYZ");
-                Texture2D colDcTex   = NewTexture(splatLayout.Width, splatLayout.Height, TextureFormat.RGBA32, "ColorDC");
-                Texture2D rotTex     = NewTexture(splatLayout.Width, splatLayout.Height, TextureFormat.RGBA32, "Rotation");
-                Texture2D scaleTex   = NewTexture(splatLayout.Width, splatLayout.Height, TextureFormat.RGB9e5Float, "Scale");
-                Texture2D shTex      = importedSHCoeffCount > 0 ? NewTexture(shLayout.Width, shLayout.Height, TextureFormat.RGB565, "SH") : null;
+                Shader shader = options.useSRGB
+                    ? Shader.Find("VRChatGaussianSplatting/GaussianSplatting")
+                    : Shader.Find("VRChatGaussianSplatting/GaussianSplattingSimpleBackToFront");
 
-                Shader shader = null;
-                if(options.useSRGB) {
-                    shader = Shader.Find("VRChatGaussianSplatting/GaussianSplatting");
-                } else {
-                    shader = Shader.Find("VRChatGaussianSplatting/GaussianSplattingSimpleBackToFront");
-                }
+                Color[] xyzPixels = new Color[splatLayout.Capacity];
+                Color[] colPixels = new Color[splatLayout.Capacity];
+                Color[] rotPixels = new Color[splatLayout.Capacity];
+                Color[] scalePixels = new Color[splatLayout.Capacity];
+                Color[] shPixels = importedSHCoeffCount > 0 ? new Color[shLayout.Capacity] : null;
 
-                var xyzPixels   = new Color[splatLayout.Capacity];
-                var colPixels   = new Color[splatLayout.Capacity];
-                var rotPixels   = new Color[splatLayout.Capacity];
-                var scalePixels = new Color[splatLayout.Capacity];
-                var shPixels    = importedSHCoeffCount > 0 ? new Color[shLayout.Capacity] : null;
-
-                for (int i = 0; i < n; ++i) {
-                    int sourceIndex = sortedOrder[i];
+                for (int i = 0; i < n; ++i)
+                {
                     int packedIndex = ComputePackedTextureIndex(i, splatLayout.Width);
-                    var s = splats[sourceIndex];
-                    xyzPixels[packedIndex]   = new Color(s.pos.x,   s.pos.y,   s.pos.z,   0f);
-                    colPixels[packedIndex]   = new Color(s.dc0.x,   s.dc0.y,   s.dc0.z,   s.opacity);
-                    rotPixels[packedIndex]   = new Color(0.5f + 0.5f * s.rot.x,
-                                                         0.5f + 0.5f * s.rot.y,
-                                                         0.5f + 0.5f * s.rot.z,
-                                                         0.5f + 0.5f * s.rot.w);
+                    ImportSplatData s = splats[i];
+                    xyzPixels[packedIndex] = new Color(s.pos.x, s.pos.y, s.pos.z, 0f);
+                    colPixels[packedIndex] = new Color(s.dc0.x, s.dc0.y, s.dc0.z, s.opacity);
+                    rotPixels[packedIndex] = new Color(0.5f + 0.5f * s.rot.x, 0.5f + 0.5f * s.rot.y, 0.5f + 0.5f * s.rot.z, 0.5f + 0.5f * s.rot.w);
                     scalePixels[packedIndex] = new Color(s.scale.x, s.scale.y, s.scale.z, 0f);
 
                     if (importedSHCoeffCount > 0)
                     {
+                        long baseIdx = (long)sourceIndices[i] * importedSHCoeffCount * 3;
                         for (int coeff = 0; coeff < importedSHCoeffCount; ++coeff)
                         {
-                            Vector3 sh = GetSHCoefficient(shCoeffs, requestedSHCoeffCount, sourceIndex, coeff);
+                            long o = baseIdx + coeff * 3;
                             int shPackedIndex = ComputePackedTextureIndex(coeff * n + i, shLayout.Width);
                             shPixels[shPackedIndex] = new Color(
-                                sharedShRange.x > shRangeEpsilon ? (sh.x - sharedShMin.x) / sharedShRange.x : 0f,
-                                sharedShRange.y > shRangeEpsilon ? (sh.y - sharedShMin.y) / sharedShRange.y : 0f,
-                                sharedShRange.z > shRangeEpsilon ? (sh.z - sharedShMin.z) / sharedShRange.z : 0f,
-                                0f
-                            );
+                                sharedShRange.x > shRangeEpsilon ? (shStore[o + 0] - sharedShMin.x) / sharedShRange.x : 0f,
+                                sharedShRange.y > shRangeEpsilon ? (shStore[o + 1] - sharedShMin.y) / sharedShRange.y : 0f,
+                                sharedShRange.z > shRangeEpsilon ? (shStore[o + 2] - sharedShMin.z) / sharedShRange.z : 0f,
+                                0f);
                         }
                     }
                 }
 
-                xyzTex.SetPixels(xyzPixels);
+                // Pack positions into the unified chunked, per-chunk-bbox-normalized RGBA32 format (shared with
+                // the LOD path). Splats are Hilbert-ordered, so fixed-size chunks are spatially compact => good
+                // 10-bit precision; chunkId = splatIndex / importChunkSize.
+                int importChunkSize = 1024;
+                int chunkCount = Mathf.Max(1, (n + importChunkSize - 1) / importChunkSize);
+                Vector3[] chunkMin = new Vector3[chunkCount];
+                Vector3[] chunkMax = new Vector3[chunkCount];
+                for (int c = 0; c < chunkCount; c++)
+                {
+                    chunkMin[c] = new Vector3(float.PositiveInfinity, float.PositiveInfinity, float.PositiveInfinity);
+                    chunkMax[c] = new Vector3(float.NegativeInfinity, float.NegativeInfinity, float.NegativeInfinity);
+                }
+                for (int i = 0; i < n; i++)
+                {
+                    Color p = xyzPixels[ComputePackedTextureIndex(i, splatLayout.Width)];
+                    int c = i / importChunkSize;
+                    Vector3 pos = new Vector3(p.r, p.g, p.b);
+                    chunkMin[c] = Vector3.Min(chunkMin[c], pos);
+                    chunkMax[c] = Vector3.Max(chunkMax[c], pos);
+                }
+                for (int c = 0; c < chunkCount; c++)
+                {
+                    if (float.IsInfinity(chunkMin[c].x)) { chunkMin[c] = Vector3.zero; chunkMax[c] = Vector3.zero; }
+                }
+                Color32[] packedXyz = new Color32[splatLayout.Capacity];
+                for (int i = 0; i < n; i++)
+                {
+                    int packedIndex = ComputePackedTextureIndex(i, splatLayout.Width);
+                    Color p = xyzPixels[packedIndex];
+                    int c = i / importChunkSize;
+                    packedXyz[packedIndex] = EncodePosition10(new Vector3(p.r, p.g, p.b), chunkMin[c], chunkMax[c]);
+                }
+                Texture2D xyzTex = NewTexture(splatLayout.Width, splatLayout.Height, TextureFormat.RGBA32, "XYZ");
+                xyzTex.SetPixels32(packedXyz);
+                xyzTex.Apply(false, true);
+
+                int chunkBoundsWidth = Mathf.NextPowerOfTwo(chunkCount);
+                Color[] boundsPixels = new Color[chunkBoundsWidth * 2];
+                for (int c = 0; c < chunkCount; c++)
+                {
+                    boundsPixels[c] = new Color(chunkMin[c].x, chunkMin[c].y, chunkMin[c].z, 0f);
+                    boundsPixels[chunkBoundsWidth + c] = new Color(chunkMax[c].x, chunkMax[c].y, chunkMax[c].z, 0f);
+                }
+                Texture2D chunkBoundsTex = NewTexture(chunkBoundsWidth, 2, TextureFormat.RGBAFloat, "ChunkBounds");
+                chunkBoundsTex.SetPixels(boundsPixels);
+                chunkBoundsTex.Apply(false, true);
+
                 colDcTex.SetPixels(colPixels);
                 rotTex.SetPixels(rotPixels);
                 scaleTex.SetPixels(scalePixels);
-                if (importedSHCoeffCount > 0)
-                {
-                    shTex.SetPixels(shPixels);
-                }
+                if (importedSHCoeffCount > 0) shTex.SetPixels(shPixels);
 
-                xyzTex.Apply(false, true);
                 ApplyTexture(colDcTex, options.compressColorAlphaToBC7);
                 rotTex.Apply(false, true);
                 scaleTex.Apply(false, true);
-                if (importedSHCoeffCount > 0)
-                {
-                    ApplyTexture(shTex, options.compressSHToBC7);
-                }
+                if (importedSHCoeffCount > 0) ApplyShTextureCompression(shTex, options.shCompression);
 
                 xyzTex = SaveTextureAsset(xyzTex, outputDataFolder, materialName + "_xyz");
+                chunkBoundsTex = SaveTextureAsset(chunkBoundsTex, outputDataFolder, materialName + "_chunkbounds");
                 colDcTex = SaveTextureAsset(colDcTex, outputDataFolder, materialName + "_color_dc");
                 rotTex = SaveTextureAsset(rotTex, outputDataFolder, materialName + "_rotation");
                 scaleTex = SaveTextureAsset(scaleTex, outputDataFolder, materialName + "_scale");
-                if (importedSHCoeffCount > 0)
-                {
-                    shTex = SaveTextureAsset(shTex, outputDataFolder, materialName + "_sh");
-                }
+                if (importedSHCoeffCount > 0) shTex = SaveTextureAsset(shTex, outputDataFolder, materialName + "_sh");
 
                 int splatsPerPass = options.splatsPerPass;
-                if(splatsPerPass == 0) splatsPerPass = n;
+                if (splatsPerPass == 0) splatsPerPass = n;
                 splatsPerPass = Mathf.Min(splatsPerPass, n);
 
                 List<Material> materials = new List<Material>();
@@ -835,7 +1100,8 @@ namespace GaussianSplatting
                 PassInfo[] passInfos = CreatePassLayout(n, splatsPerPass, options.maxAlphaMaskCount, options.useSRGB);
                 AppendMeshLayout(indexCounts, topologies, passInfos, options.useSRGB);
 
-                if(options.useSRGB) {
+                if (options.useSRGB)
+                {
                     Material convertToSRGB = new Material(Shader.Find("VRChatGaussianSplatting/ToSRGB"));
                     convertToSRGB.name = "convert_to_srgb";
                     materials.Add(convertToSRGB);
@@ -845,41 +1111,35 @@ namespace GaussianSplatting
                 for (int passInfoIndex = 0; passInfoIndex < passInfos.Length; passInfoIndex++)
                 {
                     PassInfo passInfo = passInfos[passInfoIndex];
-                    Material splatMat = null;
+                    Material splatMat;
                     string splatMatName = materialName + (passInfo.PassIndex > 0 ? $"_pass_{passInfo.PassIndex}" : "_main") + "_splat";
-                    if(passInfo.PassIndex == 0) {
+                    if (passInfo.PassIndex == 0)
+                    {
                         splatMat = new Material(shader);
                         splatMat.name = splatMatName;
                         mainMat = splatMat;
-                    } else {
-                        splatMat = new Material(mainMat); // copy the base pass settings without relying on parent inheritance
+                    }
+                    else
+                    {
+                        splatMat = new Material(mainMat);
                     }
 
                     ConfigureSplatMaterial(
-                        splatMat,
-                        xyzTex,
-                        colDcTex,
-                        rotTex,
-                        scaleTex,
-                        shTex,
-                        importedSHCoeffCount,
-                        n,
+                        splatMat, xyzTex, colDcTex, rotTex, scaleTex, shTex,
+                        importedSHCoeffCount, n,
                         new Vector4(sharedShMin.x, sharedShMin.y, sharedShMin.z, 0f),
-                        new Vector4(
-                            Mathf.Max(sharedShRange.x, shRangeEpsilon),
-                            Mathf.Max(sharedShRange.y, shRangeEpsilon),
-                            Mathf.Max(sharedShRange.z, shRangeEpsilon),
-                            0f),
-                        n,
-                        (float)effectiveDefaultSHBand,
-                        null,
-                        false,
-                        options.precomputeSorting ? sortedTex : null,
-                        passInfo.SplatCount,
-                        passInfo.SplatOffset);
+                        new Vector4(Mathf.Max(sharedShRange.x, shRangeEpsilon), Mathf.Max(sharedShRange.y, shRangeEpsilon), Mathf.Max(sharedShRange.z, shRangeEpsilon), 0f),
+                        n, (float)effectiveDefaultSHBand, null, false,
+                        options.standalone ? sortedTex : null,
+                        passInfo.SplatCount, passInfo.SplatOffset);
 
-                    if(passInfo.HasAlphaMask) {
-                        // Create alpha depth mask pass
+                    splatMat.SetTexture("_GS_ChunkBounds", chunkBoundsTex);
+                    splatMat.SetInt("_GS_ChunkSize", importChunkSize);
+                    if (splatMat.HasProperty("_GS_PackedPositions")) splatMat.SetInteger("_GS_PackedPositions", 1);
+                    splatMat.EnableKeyword("_GS_PACKED_POSITIONS");
+
+                    if (passInfo.HasAlphaMask)
+                    {
                         Material alphaDepthMask = new Material(Shader.Find("VRChatGaussianSplatting/AlphaDepthMask"));
                         alphaDepthMask.name = splatMatName + "_alpha_depth_mask";
                         materials.Add(alphaDepthMask);
@@ -888,14 +1148,16 @@ namespace GaussianSplatting
                     materials.Add(splatMat);
                 }
 
-                if(options.useSRGB) {
+                if (options.useSRGB)
+                {
                     Material convertToLinear = new Material(Shader.Find("VRChatGaussianSplatting/ToLinear"));
                     convertToLinear.name = "convert_to_linear";
                     materials.Add(convertToLinear);
                 }
 
                 EnsureFolderExists(outputDataFolder + "/materials");
-                for (int i = 0; i < materials.Count; ++i) {
+                for (int i = 0; i < materials.Count; ++i)
+                {
                     Material splatMat = materials[i];
                     splatMat.renderQueue = options.startRenderQueue + i;
                     string matPath = Path.Combine(outputDataFolder + "/materials", splatMat.name + ".mat");
@@ -904,16 +1166,21 @@ namespace GaussianSplatting
 
                 Mesh pointMesh = CreateMultiPassMesh(indexCounts, topologies, bbox);
                 pointMesh = CreateOrReplaceAsset(pointMesh, Path.Combine(outputDataFolder, materialName + "_mesh.asset"));
-                // Create prefab with the splat material and mesh
                 CreatePrefab(materials, pointMesh, prefabOutputPath, materialName, (int)effectiveDefaultSHBand);
+
+                GameObject prefabRoot = AssetDatabase.LoadAssetAtPath<GameObject>(prefabOutputPath);
+                GaussianSplatObject stampObject = prefabRoot != null ? prefabRoot.GetComponent<GaussianSplatObject>() : null;
+                if (stampObject != null)
+                {
+                    stampObject.importMetadataJson = ImportMetadata.ToJson(new ImportMetadata { sourcePath = sourceFile, prefabPath = prefabOutputPath, importAsLOD = false, options = options });
+                    EditorUtility.SetDirty(stampObject);
+                }
                 AssetDatabase.SaveAssets();
             }
             finally
             {
-                if (splats.IsCreated)
-                    splats.Dispose();
-                if (shCoeffs.IsCreated)
-                    shCoeffs.Dispose();
+                EditorUtility.ClearProgressBar();
+                try { Directory.Delete(tempFolder, true); } catch { /* temp cleanup best-effort */ }
             }
         }
 
@@ -1017,16 +1284,17 @@ namespace GaussianSplatting
         public static bool EnsureSortRenderTexture(ref RenderTexture targetTexture, string folderPath, string assetName, int width, int height, RenderTextureFormat format, bool useMipMap, int volumeDepth)
         {
             string assetPath = folderPath + "/" + assetName + ".renderTexture";
+            EnsureFolderExists(folderPath);
+            RenderTexture pathTexture = AssetDatabase.LoadAssetAtPath<RenderTexture>(assetPath);
             bool changed = false;
-            if (targetTexture == null || AssetDatabase.GetAssetPath(targetTexture) != assetPath)
+            if (pathTexture == null)
             {
-                EnsureFolderExists(folderPath);
-                targetTexture = AssetDatabase.LoadAssetAtPath<RenderTexture>(assetPath);
-                if (targetTexture == null)
-                {
-                    targetTexture = CreateSortRenderTextureAsset(folderPath, assetName, width, height, format, useMipMap, volumeDepth);
-                    return true;
-                }
+                targetTexture = CreateSortRenderTextureAsset(folderPath, assetName, width, height, format, useMipMap, volumeDepth);
+                return true;
+            }
+            if (targetTexture != pathTexture)
+            {
+                targetTexture = pathTexture;
                 changed = true;
             }
             bool needsResize = targetTexture.width != width
@@ -1142,27 +1410,36 @@ namespace GaussianSplatting
 
 namespace GaussianSplatting.Editor.Importers
 {
-    public class PlyImportWizard : EditorWindow
+    public class GaussianSplatImportWizard : EditorWindow
     {
         internal const string DefaultOutputFolder = "Assets";
         internal const bool DefaultComputeBoundingBox = true;
         internal const bool DefaultMultiPassRendering = true;
         internal const int DefaultSplatsPerPass = 3 * 256 * 1024;
-        internal const bool DefaultPrecomputeSorting = false;
+        internal const bool DefaultStandalone = false;
         internal const int DefaultMaxAlphaMaskCount = 1;
         internal const bool DefaultUseSRGB = true;
         internal const bool DefaultImportSphericalHarmonics = true;
         internal static readonly SHBand DefaultImportedSHBand = SHBand.SH3;
         internal const bool DefaultCompressColorAlphaToBC7 = false;
-        internal const bool DefaultCompressSHToBC7 = true;
+        internal static readonly GaussianSplatImporter.SHCompression DefaultSHCompression = GaussianSplatImporter.SHCompression.BC7;
         internal const int DefaultStartRenderQueue = 4050;
-        internal const int DefaultLODChunkSize = 1024;
+        internal const int DefaultLODChunkSize = 4096;
+        internal const int DefaultLODResamplePercent = 100;
+        internal const int DefaultLODReusePercent = 50;
+        const int LODMaxSelectionChunkCount = 16384;
+        const int ComputedLodMinClusterCount = 1;
         const int MaxPreviewSplats = 32768;
         const float PreviewSplatPixelRadius = 5.0f;
+
+        // LOD: combined GaussianSplatObject with a downsampled LOD pyramid, rendered through the combiner.
+        // Standalone: self-rendering mesh + material, no component.
+        public enum ImportMode { LOD, Standalone }
 
         class ImportEntry
         {
             public string path = string.Empty;
+            public ImportMode importMode = ImportMode.LOD;
             public bool cropToBounds;
             public Bounds cropBounds = new Bounds(Vector3.zero, Vector3.one);
             public bool horizonPickMode;
@@ -1177,17 +1454,21 @@ namespace GaussianSplatting.Editor.Importers
             public bool importAsLOD;
             public int lodChunkSize = DefaultLODChunkSize;
             public bool lodUsePackedPositions = true;
-            public bool overrideSettings;
+            public bool lodComputeSplats = true;
+            public int lodResamplePercent = DefaultLODResamplePercent;
+            public int lodReusePercent = DefaultLODReusePercent;
+            public bool normalizeSize;
+            public float normalizeTargetSize = 1.0f;
+            public GaussianSplatImporter.SHCompression shCompression = DefaultSHCompression;
             public bool computeBoundingBox = DefaultComputeBoundingBox;
             public bool multiPassRendering = DefaultMultiPassRendering;
             public int splatsPerPass = DefaultSplatsPerPass;
-            public bool precomputeSorting = DefaultPrecomputeSorting;
+            public bool standalone = DefaultStandalone;
             public int maxAlphaMaskCount = DefaultMaxAlphaMaskCount;
             public bool useSRGB = DefaultUseSRGB;
             public bool importSphericalHarmonics = DefaultImportSphericalHarmonics;
             public SHBand shBand = DefaultImportedSHBand;
             public bool compressColorAlphaToBC7 = DefaultCompressColorAlphaToBC7;
-            public bool compressSHToBC7 = DefaultCompressSHToBC7;
             public int startRenderQueue = DefaultStartRenderQueue;
         }
 
@@ -1212,7 +1493,7 @@ namespace GaussianSplatting.Editor.Importers
 
         class GaussianSplatImportPreviewStage : PreviewSceneStage
         {
-            PlyImportWizard _owner;
+            GaussianSplatImportWizard _owner;
             Mesh _previewMesh;
             Material _previewMaterial;
             Bounds _previewBounds;
@@ -1222,8 +1503,14 @@ namespace GaussianSplatting.Editor.Importers
             BoxBoundsHandle _boundsHandle = new BoxBoundsHandle();
             bool _visible;
             bool _frameOnRebuild;
+            // Saved SceneView camera settings to restore when the preview stage closes (so we don't leave the
+            // user's scene navigation with a tiny near clip / slow fly speed).
+            SceneView _camView;
+            bool _camSaved;
+            bool _camDynamicClip;
+            float _camNearClip, _camFarClip, _camSpeed, _camSpeedMin, _camSpeedMax;
 
-            public void Initialize(PlyImportWizard owner)
+            public void Initialize(GaussianSplatImportWizard owner)
             {
                 _owner = owner;
                 name = "Gaussian Splat Preview";
@@ -1250,8 +1537,49 @@ namespace GaussianSplatting.Editor.Importers
             protected override void OnCloseStage()
             {
                 SceneView.duringSceneGui -= OnSceneGUI;
+                RestorePreviewCameraSettings();
                 _owner?.OnPreviewStageClosed(this);
                 base.OnCloseStage();
+            }
+
+            // Scale the SceneView near/far clip + fly speed to the preview bbox so a small splat isn't clipped by
+            // a giant near plane and navigation speed is proportional. Originals are restored on stage close.
+            void ApplyPreviewCameraSettings(SceneView sv)
+            {
+                if (!_camSaved)
+                {
+                    _camView = sv;
+                    _camDynamicClip = sv.cameraSettings.dynamicClip;
+                    _camNearClip = sv.cameraSettings.nearClip;
+                    _camFarClip = sv.cameraSettings.farClip;
+                    _camSpeed = sv.cameraSettings.speed;
+                    _camSpeedMin = sv.cameraSettings.speedMin;
+                    _camSpeedMax = sv.cameraSettings.speedMax;
+                    _camSaved = true;
+                }
+                Vector3 size = _previewBounds.size;
+                float ext = Mathf.Max(0.001f, Mathf.Max(size.x, Mathf.Max(size.y, size.z)));
+                sv.cameraSettings.dynamicClip = false;
+                sv.cameraSettings.nearClip = Mathf.Max(0.0001f, ext * 0.0005f);
+                sv.cameraSettings.farClip = Mathf.Max(sv.cameraSettings.nearClip + 1f, ext * 1000f);
+                sv.cameraSettings.speedMin = Mathf.Max(0.0001f, ext * 0.01f);
+                sv.cameraSettings.speedMax = Mathf.Max(sv.cameraSettings.speedMin + 0.001f, ext * 10f);
+                sv.cameraSettings.speed = Mathf.Clamp(ext * 0.5f, sv.cameraSettings.speedMin, sv.cameraSettings.speedMax);
+            }
+
+            void RestorePreviewCameraSettings()
+            {
+                if (!_camSaved || _camView == null)
+                {
+                    return;
+                }
+                _camView.cameraSettings.dynamicClip = _camDynamicClip;
+                _camView.cameraSettings.nearClip = _camNearClip;
+                _camView.cameraSettings.farClip = _camFarClip;
+                _camView.cameraSettings.speed = _camSpeed;
+                _camView.cameraSettings.speedMin = _camSpeedMin;
+                _camView.cameraSettings.speedMax = _camSpeedMax;
+                _camSaved = false;
             }
 
             public void SetPreview(Mesh previewMesh, Material previewMaterial, Bounds previewBounds, bool showCropBounds, Bounds cropBounds)
@@ -1326,11 +1654,9 @@ namespace GaussianSplatting.Editor.Importers
                 _previewObject.AddComponent<MeshRenderer>().sharedMaterial = _previewMaterial;
 
                 UpdatePreviewMaterial();
-                if (_frameOnRebuild)
-                {
-                    SceneView.lastActiveSceneView?.Frame(new Bounds(_previewBounds.center, _previewBounds.size), false);
-                    _frameOnRebuild = false;
-                }
+                // NOTE: framing is deferred to OnSceneGUI (which consumes _frameOnRebuild). RebuildContent runs
+                // BEFORE GoToStage, so SceneView.lastActiveSceneView here is the pre-stage view and an animated
+                // Frame is lost when the stage takes over the SceneView. OnSceneGUI runs on the ACTIVE stage view.
             }
 
             void OnSceneGUI(SceneView sceneView)
@@ -1338,6 +1664,16 @@ namespace GaussianSplatting.Editor.Importers
                 if (!_visible || StageUtility.GetCurrentStage() != this)
                 {
                     return;
+                }
+
+                // Frame here (not in RebuildContent): this runs on the ACTIVE stage SceneView after GoToStage,
+                // so the camera placement actually sticks. Instant frame so there's no animation to lose.
+                if (_frameOnRebuild && _previewMesh != null)
+                {
+                    ApplyPreviewCameraSettings(sceneView);
+                    sceneView.Frame(new Bounds(_previewBounds.center, _previewBounds.size), true);
+                    sceneView.Repaint();
+                    _frameOnRebuild = false;
                 }
 
                 if (_showCropBounds)
@@ -1379,17 +1715,6 @@ namespace GaussianSplatting.Editor.Importers
 
         List<ImportEntry> _entries = new();
         string _outputFolder = DefaultOutputFolder;
-        bool _computeBoundingBox = DefaultComputeBoundingBox;
-        bool _multiPassRendering = DefaultMultiPassRendering;
-        int _splatsPerPass = DefaultSplatsPerPass;
-        bool _precomputeSorting = DefaultPrecomputeSorting;
-        int _maxAlphaMaskCount = DefaultMaxAlphaMaskCount;
-        bool _useSRGB = DefaultUseSRGB;
-        bool _importSphericalHarmonics = DefaultImportSphericalHarmonics;
-        SHBand _defaultSHBand = DefaultImportedSHBand;
-        bool _compressColorAlphaToBC7 = DefaultCompressColorAlphaToBC7;
-        bool _compressSHToBC7 = DefaultCompressSHToBC7;
-        int _startRenderQueue = DefaultStartRenderQueue;
         int _selectedEntryIndex = -1;
         Vector2 scrollPosition = Vector2.zero;
         CancellationTokenSource _previewCancellation;
@@ -1403,20 +1728,20 @@ namespace GaussianSplatting.Editor.Importers
         GaussianSplatImportPreviewStage _previewStage;
         bool _framePreviewOnLoad;
 
-        public static PlyImportWizard OpenWithPly(string plyPath)
+        public static GaussianSplatImportWizard OpenWithSource(string sourcePath)
         {
-            PlyImportWizard window = GetWindow<PlyImportWizard>();
-            window.titleContent = GSEditorText.C("PLY Import", "PLY インポート");
+            GaussianSplatImportWizard window = GetWindow<GaussianSplatImportWizard>();
+            window.titleContent = GSEditorText.C("Splat Import", "Splat インポート");
             window.Show();
             window.Focus();
 
-            if (!string.IsNullOrEmpty(plyPath))
+            if (!string.IsNullOrEmpty(sourcePath))
             {
                 window._entries.Clear();
-                window._entries.Add(new ImportEntry { path = plyPath });
+                window._entries.Add(new ImportEntry { path = sourcePath });
                 window.SelectEntry(0);
 
-                string outputFolder = Path.GetDirectoryName(plyPath);
+                string outputFolder = Path.GetDirectoryName(sourcePath);
                 if (!string.IsNullOrEmpty(outputFolder))
                 {
                     window._outputFolder = outputFolder.Replace('\\', '/');
@@ -1461,28 +1786,77 @@ namespace GaussianSplatting.Editor.Importers
             EditorApplication.delayCall += UpdatePreviewVisibility;
         }
 
-        public static void ImportWithDefaults(string plyPath, string prefabPath)
+        public static void ImportWithDefaults(string sourcePath, string prefabPath)
         {
-            PlySplatImporter.Import(
-                plyPath,
+            GaussianSplatImporter.Import(
+                sourcePath,
                 prefabPath,
                 DefaultComputeBoundingBox,
                 DefaultSplatsPerPass,
-                DefaultPrecomputeSorting,
+                DefaultStandalone,
                 DefaultMaxAlphaMaskCount,
                 DefaultUseSRGB,
                 DefaultImportSphericalHarmonics,
                 DefaultImportedSHBand,
                 DefaultCompressColorAlphaToBC7,
-                DefaultCompressSHToBC7);
+                DefaultSHCompression);
         }
 
-        [MenuItem("Gaussian Splatting/Import PLY Splats…")]
+        [MenuItem("Gaussian Splatting/Import Splats...")]
         static void Init()
         {
-            PlyImportWizard window = GetWindow<PlyImportWizard>();
-            window.titleContent = GSEditorText.C("PLY Import", "PLY インポート");
+            GaussianSplatImportWizard window = GetWindow<GaussianSplatImportWizard>();
+            window.titleContent = GSEditorText.C("Splat Import", "Splat インポート");
             window.Show();
+        }
+
+        // Open the import window prefilled from a splat's stored import metadata, so it can be re-imported as-is
+        // (just press Import) or with tweaked settings.
+        public static void OpenForReimport(GaussianSplatImporter.ImportMetadata md)
+        {
+            if (md == null) return;
+            GaussianSplatImportWizard window = GetWindow<GaussianSplatImportWizard>();
+            window.titleContent = GSEditorText.C("Splat Import", "Splat インポート");
+            window.Show();
+            GaussianSplatImporter.ImportOptions o = md.options;
+            ImportMode reimportMode = o.standalone ? ImportMode.Standalone : ImportMode.LOD;
+            ImportEntry entry = new ImportEntry
+            {
+                path = md.sourcePath,
+                importMode = reimportMode,
+                cropToBounds = o.cropToBounds,
+                cropBounds = o.cropBounds,
+                applyHorizonAlignment = o.applyHorizonAlignment,
+                horizonRotation = o.horizonRotation,
+                horizonPivot = o.horizonPivot,
+                importAsLOD = md.importAsLOD,
+                lodChunkSize = md.lodChunkSize,
+                lodUsePackedPositions = o.lodUsePackedPositions,
+                lodComputeSplats = o.lodComputeSplats,
+                lodResamplePercent = o.lodResamplePercent,
+                lodReusePercent = o.lodReusePercent,
+                normalizeSize = o.normalizeSize,
+                normalizeTargetSize = o.normalizeTargetSize,
+                shCompression = o.shCompression,
+                computeBoundingBox = o.computeBoundingBox,
+                multiPassRendering = o.splatsPerPass > 0,
+                splatsPerPass = o.splatsPerPass,
+                standalone = o.standalone,
+                maxAlphaMaskCount = o.maxAlphaMaskCount,
+                useSRGB = o.useSRGB,
+                importSphericalHarmonics = o.importSphericalHarmonics,
+                shBand = o.defaultSHBand,
+                compressColorAlphaToBC7 = o.compressColorAlphaToBC7,
+                startRenderQueue = o.startRenderQueue,
+            };
+            window._entries.Add(entry);
+            window.SelectEntry(window._entries.Count - 1);
+            // md.prefabPath is project-relative ("Assets/.."); the import loop runs _outputFolder through
+            // FileUtil.GetProjectRelativePath, which needs an ABSOLUTE path (else it returns empty and the
+            // reimport silently falls back to the project root). Store the absolute path so reimport writes back
+            // to the original folder.
+            string outFolder = string.IsNullOrEmpty(md.prefabPath) ? null : System.IO.Path.GetDirectoryName(md.prefabPath);
+            if (!string.IsNullOrEmpty(outFolder)) window._outputFolder = System.IO.Path.GetFullPath(outFolder).Replace('\\', '/');
         }
 
         ImportEntry SelectedEntry => _selectedEntryIndex >= 0 && _selectedEntryIndex < _entries.Count ? _entries[_selectedEntryIndex] : null;
@@ -1520,64 +1894,33 @@ namespace GaussianSplatting.Editor.Importers
         static PreviewData LoadPreviewData(string path, CancellationToken token, PreviewLoadProgress progress)
         {
             PreviewData preview = new PreviewData { path = path };
+            string tempFolder = Path.Combine(Path.GetTempPath(), "GaussianSplatPreview_" + GaussianSplatImporter.SanitizeAssetName(Path.GetFileNameWithoutExtension(path)) + "_" + DateTime.Now.Ticks.ToString());
             try
             {
-                if (path.EndsWith(".ply", StringComparison.OrdinalIgnoreCase))
-                {
-                    return LoadPlyPreviewDataStreaming(path, token, progress);
-                }
-
-                SetPreviewProgress(progress, "Reading splats", 0, 1);
-                GaussianFileReader.ReadFile(path, 0, out NativeArray<ImportSplatData> splats, out NativeArray<Vector3> shCoeffs);
-                try
-                {
-                    token.ThrowIfCancellationRequested();
-                    SetPreviewProgress(progress, "Building preview", 0, splats.Length);
-                    preview.splatCount = splats.Length;
-                    int previewCount = Mathf.Min(MaxPreviewSplats, splats.Length);
-                    preview.positions = new Vector3[previewCount];
-                    preview.colors = new Color[previewCount];
-                    Bounds bounds = new Bounds();
-                    bool hasBounds = false;
-                    for (int i = 0; i < splats.Length; i++)
-                    {
-                        Vector3 pos = splats[i].pos;
-                        if (!hasBounds)
-                        {
-                            bounds = new Bounds(pos, Vector3.zero);
-                            hasBounds = true;
-                        }
-                        else
-                        {
-                            bounds.Encapsulate(pos);
-                        }
-                    }
-                    SetPreviewProgress(progress, "Sampling preview", 0, previewCount);
-
-                    int step = Mathf.Max(1, splats.Length / Mathf.Max(1, previewCount));
-                    for (int i = 0; i < previewCount; i++)
-                    {
-                        token.ThrowIfCancellationRequested();
-                        ImportSplatData splat = splats[Mathf.Min(splats.Length - 1, i * step)];
-                        preview.positions[i] = splat.pos;
-                        preview.colors[i] = new Color(splat.dc0.x, splat.dc0.y, splat.dc0.z, Mathf.Clamp01(splat.opacity));
-                        if ((i & 255) == 0)
-                        {
-                            SetPreviewProgress(progress, "Sampling preview", i, previewCount);
-                        }
-                    }
-                    SetPreviewProgress(progress, "Sampling preview", previewCount, previewCount);
-                    preview.bounds = hasBounds ? bounds : new Bounds(Vector3.zero, Vector3.one);
-                }
-                finally
-                {
-                    if (splats.IsCreated) splats.Dispose();
-                    if (shCoeffs.IsCreated) shCoeffs.Dispose();
-                }
+                token.ThrowIfCancellationRequested();
+                SetPreviewProgress(progress, "Preparing preview", 0, 1);
+                string resolvedPlyPath = GaussianSplatImporter.ResolveSourceToPlyPath(path, tempFolder);
+                PreviewData resolvedPreview = LoadPlyPreviewDataStreaming(resolvedPlyPath, token, progress);
+                resolvedPreview.path = path;
+                return resolvedPreview;
             }
             catch (Exception e)
             {
                 preview.error = e.Message;
+            }
+            finally
+            {
+                try
+                {
+                    if (Directory.Exists(tempFolder))
+                    {
+                        Directory.Delete(tempFolder, true);
+                    }
+                }
+                catch
+                {
+                    // Preview temp cleanup is best-effort.
+                }
             }
             return preview;
         }
@@ -1588,12 +1931,12 @@ namespace GaussianSplatting.Editor.Importers
             try
             {
                 SetPreviewProgress(progress, "Reading PLY header", 0, 1);
-                using FileStream fs = OpenPreviewPlyDataStream(path, out int splatCount, out int stride, out List<(string, PLYFileReader.ElementType)> attributes);
+                using FileStream fs = PLYFileReader.OpenDataStream(path, out int splatCount, out int stride, out List<(string, PLYFileReader.ElementType)> attributes);
                 if (splatCount <= 0 || stride <= 0)
                 {
                     throw new IOException($"PLY preview header read failed for '{path}': vertex count {splatCount:N0}, stride {stride}.");
                 }
-                Dictionary<string, int> offsets = BuildPreviewFloatAttributeOffsets(attributes);
+                Dictionary<string, int> offsets = StreamedSplatReader.BuildFloatAttributeOffsets(attributes);
                 string[] required = { "x", "y", "z", "f_dc_0", "f_dc_1", "f_dc_2", "opacity" };
                 List<string> missing = new List<string>();
                 for (int i = 0; i < required.Length; i++)
@@ -1625,12 +1968,12 @@ namespace GaussianSplatting.Editor.Importers
                         ? (long)Math.Round(sampleIndex * (double)(splatCount - 1) / (previewCount - 1))
                         : 0L;
                     fs.Seek(dataStart + sourceIndex * stride, SeekOrigin.Begin);
-                    ReadPreviewExact(fs, rowBuffer, stride, path);
+                    StreamedSplatReader.ReadExact(fs, rowBuffer, stride, path);
 
                     Vector3 pos = new Vector3(
-                        ReadPreviewFloat(rowBuffer, offsets["x"]),
-                        ReadPreviewFloat(rowBuffer, offsets["y"]),
-                        ReadPreviewFloat(rowBuffer, offsets["z"]));
+                        StreamedSplatReader.ReadFloat(rowBuffer, offsets["x"]),
+                        StreamedSplatReader.ReadFloat(rowBuffer, offsets["y"]),
+                        StreamedSplatReader.ReadFloat(rowBuffer, offsets["z"]));
                     if (hasBounds)
                     {
                         bounds.Encapsulate(pos);
@@ -1642,13 +1985,13 @@ namespace GaussianSplatting.Editor.Importers
                     }
 
                     Vector3 dc0 = new Vector3(
-                        ReadPreviewFloat(rowBuffer, offsets["f_dc_0"]),
-                        ReadPreviewFloat(rowBuffer, offsets["f_dc_1"]),
-                        ReadPreviewFloat(rowBuffer, offsets["f_dc_2"]));
-                    float opacity = ReadPreviewFloat(rowBuffer, offsets["opacity"]);
-                    Vector3 color = PreviewSH0ToColor(dc0);
+                        StreamedSplatReader.ReadFloat(rowBuffer, offsets["f_dc_0"]),
+                        StreamedSplatReader.ReadFloat(rowBuffer, offsets["f_dc_1"]),
+                        StreamedSplatReader.ReadFloat(rowBuffer, offsets["f_dc_2"]));
+                    float opacity = StreamedSplatReader.ReadFloat(rowBuffer, offsets["opacity"]);
+                    Vector3 color = StreamedSplatReader.SH0ToColor(dc0);
                     preview.positions[sampleIndex] = pos;
-                    preview.colors[sampleIndex] = new Color(color.x, color.y, color.z, Mathf.Clamp01(PreviewSigmoid(opacity)));
+                    preview.colors[sampleIndex] = new Color(color.x, color.y, color.z, Mathf.Clamp01(StreamedSplatReader.Sigmoid(opacity)));
                     if ((sampleIndex & 255) == 0)
                     {
                         SetPreviewProgress(progress, "Sampling preview", sampleIndex, previewCount);
@@ -1665,99 +2008,6 @@ namespace GaussianSplatting.Editor.Importers
             return preview;
         }
 
-        static FileStream OpenPreviewPlyDataStream(string path, out int vertexCount, out int vertexStride, out List<(string, PLYFileReader.ElementType)> attributes)
-        {
-            FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite, 1024 * 1024, FileOptions.SequentialScan);
-            vertexCount = 0;
-            vertexStride = 0;
-            attributes = new List<(string, PLYFileReader.ElementType)>();
-            bool gotBinaryLittleEndian = false;
-            bool inVertexElement = false;
-            const int maxHeaderLines = 9000;
-
-            for (int lineIndex = 0; lineIndex < maxHeaderLines; lineIndex++)
-            {
-                string line = ReadPreviewHeaderLine(fs);
-                if (line == "end_header")
-                {
-                    break;
-                }
-                if (string.IsNullOrWhiteSpace(line))
-                {
-                    continue;
-                }
-
-                string[] tokens = line.Split((char[])null, StringSplitOptions.RemoveEmptyEntries);
-                if (tokens.Length == 0)
-                {
-                    continue;
-                }
-
-                if (tokens.Length >= 3 && tokens[0] == "format")
-                {
-                    gotBinaryLittleEndian = tokens[1] == "binary_little_endian" && tokens[2] == "1.0";
-                    continue;
-                }
-
-                if (tokens.Length >= 3 && tokens[0] == "element")
-                {
-                    inVertexElement = tokens[1] == "vertex";
-                    if (inVertexElement && !int.TryParse(tokens[2], out vertexCount))
-                    {
-                        throw new IOException($"PLY preview header read failed for '{path}': invalid vertex count '{tokens[2]}'.");
-                    }
-                    continue;
-                }
-
-                if (inVertexElement && tokens.Length >= 3 && tokens[0] == "property")
-                {
-                    PLYFileReader.ElementType type = tokens[1] switch
-                    {
-                        "float" or "float32" => PLYFileReader.ElementType.Float,
-                        "double" or "float64" => PLYFileReader.ElementType.Double,
-                        "uchar" or "uint8" => PLYFileReader.ElementType.UChar,
-                        _ => PLYFileReader.ElementType.None
-                    };
-                    vertexStride += PLYFileReader.TypeToSize(type);
-                    attributes.Add((tokens[2], type));
-                }
-            }
-
-            if (!gotBinaryLittleEndian)
-            {
-                fs.Dispose();
-                throw new IOException($"PLY {path} not supported: needs to be binary, little endian PLY format.");
-            }
-            if (vertexCount <= 0 || vertexStride <= 0)
-            {
-                fs.Dispose();
-                throw new IOException($"PLY preview header read failed for '{path}': vertex count {vertexCount:N0}, stride {vertexStride}.");
-            }
-
-            return fs;
-        }
-
-        static string ReadPreviewHeaderLine(FileStream fs)
-        {
-            List<byte> bytes = new List<byte>(128);
-            while (true)
-            {
-                int b = fs.ReadByte();
-                if (b == -1 || b == '\n')
-                {
-                    break;
-                }
-                bytes.Add((byte)b);
-            }
-
-            if (bytes.Count > 0 && bytes[bytes.Count - 1] == '\r')
-            {
-                bytes.RemoveAt(bytes.Count - 1);
-            }
-
-            return Encoding.UTF8.GetString(bytes.ToArray());
-        }
-
         static void SetPreviewProgress(PreviewLoadProgress progress, string stage, int processed, int total)
         {
             if (progress == null)
@@ -1767,52 +2017,6 @@ namespace GaussianSplatting.Editor.Importers
             progress.stage = stage;
             progress.processed = processed;
             progress.total = Mathf.Max(0, total);
-        }
-
-        static Dictionary<string, int> BuildPreviewFloatAttributeOffsets(List<(string, PLYFileReader.ElementType)> attributes)
-        {
-            Dictionary<string, int> result = new Dictionary<string, int>(attributes.Count);
-            int offset = 0;
-            for (int i = 0; i < attributes.Count; i++)
-            {
-                (string name, PLYFileReader.ElementType type) = attributes[i];
-                if (type == PLYFileReader.ElementType.Float)
-                {
-                    result[name] = offset;
-                }
-                offset += PLYFileReader.TypeToSize(type);
-            }
-            return result;
-        }
-
-        static float ReadPreviewFloat(byte[] buffer, int offset)
-        {
-            return BitConverter.ToSingle(buffer, offset);
-        }
-
-        static void ReadPreviewExact(FileStream fs, byte[] buffer, int bytesToRead, string filePath)
-        {
-            int totalRead = 0;
-            while (totalRead < bytesToRead)
-            {
-                int read = fs.Read(buffer, totalRead, bytesToRead - totalRead);
-                if (read <= 0)
-                {
-                    throw new IOException($"PLY {filePath} read error, expected {bytesToRead} data bytes got {totalRead}");
-                }
-                totalRead += read;
-            }
-        }
-
-        static Vector3 PreviewSH0ToColor(Vector3 dc0)
-        {
-            const float shC0 = 0.2820948f;
-            return dc0 * shC0 + Vector3.one * 0.5f;
-        }
-
-        static float PreviewSigmoid(float value)
-        {
-            return 1.0f / (1.0f + Mathf.Exp(-value));
         }
 
         void StartPreviewLoad(string path)
@@ -1909,6 +2113,25 @@ namespace GaussianSplatting.Editor.Importers
             _previewBounds = new Bounds(Vector3.zero, Vector3.one);
         }
 
+        // Floater-robust bounds: per-axis 2.5/97.5 percentile of the sampled preview centers, so stray outlier
+        // splats don't inflate the framing box. Falls back to the raw bounds for tiny point counts.
+        static Bounds ComputeRobustPreviewBounds(Vector3[] centers, int count, Bounds rawBounds)
+        {
+            if (count <= 16) return rawBounds;
+            float[] xs = new float[count];
+            float[] ys = new float[count];
+            float[] zs = new float[count];
+            for (int i = 0; i < count; i++) { xs[i] = centers[i].x; ys[i] = centers[i].y; zs[i] = centers[i].z; }
+            System.Array.Sort(xs);
+            System.Array.Sort(ys);
+            System.Array.Sort(zs);
+            int lo = Mathf.Clamp(Mathf.RoundToInt(count * 0.025f), 0, count - 1);
+            int hi = Mathf.Clamp(Mathf.RoundToInt(count * 0.975f), 0, count - 1);
+            Vector3 min = new Vector3(xs[lo], ys[lo], zs[lo]);
+            Vector3 max = new Vector3(xs[hi], ys[hi], zs[hi]);
+            return new Bounds((min + max) * 0.5f, Vector3.Max(max - min, Vector3.one * 0.001f));
+        }
+
         void CreatePreviewObject(PreviewData preview)
         {
             if (_previewMesh != null) DestroyImmediate(_previewMesh);
@@ -1920,6 +2143,7 @@ namespace GaussianSplatting.Editor.Importers
             Color[] colors = new Color[splatCount * 4];
             Vector2[] uvs = new Vector2[splatCount * 4];
             int[] triangles = new int[splatCount * 6];
+            Vector3[] previewCenters = new Vector3[splatCount];
             Bounds previewBounds = new Bounds();
             bool hasBounds = false;
             for (int i = 0; i < splatCount; i++)
@@ -1927,6 +2151,7 @@ namespace GaussianSplatting.Editor.Importers
                 int vertex = i * 4;
                 int index = i * 6;
                 Vector3 center = ToPreviewSpace(ApplyPreviewAlignment(entry, preview.positions[i]));
+                previewCenters[i] = center;
                 Color color = preview.colors[i];
                 vertices[vertex] = center;
                 vertices[vertex + 1] = center;
@@ -1953,7 +2178,9 @@ namespace GaussianSplatting.Editor.Importers
                     hasBounds = true;
                 }
             }
-            _previewBounds = hasBounds ? previewBounds : new Bounds(Vector3.zero, Vector3.one);
+            // Frame on a floater-robust bbox (2.5/97.5 percentile per axis) so a few stray splats don't blow the
+            // bounds up and zoom the camera way out. Mesh keeps the full raw bounds for correct frustum culling.
+            _previewBounds = hasBounds ? ComputeRobustPreviewBounds(previewCenters, splatCount, previewBounds) : new Bounds(Vector3.zero, Vector3.one);
 
             _previewMesh = new Mesh { name = "Gaussian Splat Import Preview Mesh", indexFormat = vertices.Length > 65535 ? IndexFormat.UInt32 : IndexFormat.UInt16 };
             _previewMesh.hideFlags = HideFlags.HideAndDontSave;
@@ -1961,7 +2188,7 @@ namespace GaussianSplatting.Editor.Importers
             _previewMesh.colors = colors;
             _previewMesh.uv = uvs;
             _previewMesh.triangles = triangles;
-            _previewMesh.bounds = _previewBounds;
+            _previewMesh.bounds = hasBounds ? previewBounds : _previewBounds;
 
             _previewMaterial = CreatePreviewMaterial(PreviewSplatPixelRadius);
             UpdatePreviewStage();
@@ -2268,6 +2495,144 @@ namespace GaussianSplatting.Editor.Importers
             return $"Estimated crop result: {estimatedCount:N0} / {_previewData.splatCount:N0} splats ({ratio * 100.0f:0.0}%, sampled {sampledInside:N0} / {_previewData.positions.Length:N0})";
         }
 
+        int EstimateSelectedImportSplatCount(ImportEntry entry)
+        {
+            if (entry == null || _previewData == null || _previewData.splatCount <= 0)
+            {
+                return -1;
+            }
+
+            if (!entry.cropToBounds || _previewData.positions == null || _previewData.positions.Length == 0)
+            {
+                return _previewData.splatCount;
+            }
+
+            int sampledInside = 0;
+            for (int i = 0; i < _previewData.positions.Length; i++)
+            {
+                Vector3 pos = ApplyPreviewAlignment(entry, _previewData.positions[i]);
+                if (entry.cropBounds.Contains(pos))
+                {
+                    sampledInside++;
+                }
+            }
+
+            float ratio = sampledInside / (float)Mathf.Max(1, _previewData.positions.Length);
+            return Mathf.Clamp(Mathf.RoundToInt(_previewData.splatCount * ratio), 0, _previewData.splatCount);
+        }
+
+        string GetComputedLodSplatEstimateLabel(ImportEntry entry)
+        {
+            int estimatedSourceCount = EstimateSelectedImportSplatCount(entry);
+            if (estimatedSourceCount < 0)
+            {
+                return GSEditorText.T("Effective stored splat count will be shown after the preview has loaded.",
+                    "プレビュー読み込み後に有効な保存 Splat 数を表示します。");
+            }
+
+            int resamplePercent = NormalizeLODResamplePercent(entry.lodResamplePercent);
+            int reusePercent = NormalizeLODReusePercent(entry.lodReusePercent);
+            int resampledLod0Count = EstimateResampledLod0SplatCount(estimatedSourceCount, entry.lodChunkSize, resamplePercent);
+            int storedCount = EstimateStoredLodSplatCount(estimatedSourceCount, entry.lodChunkSize, true, resamplePercent, reusePercent);
+            int lodSplatCount = Mathf.Max(0, storedCount - resampledLod0Count);
+            float sourceMultiplier = estimatedSourceCount > 0 ? storedCount / (float)estimatedSourceCount : 0.0f;
+            float lod0Multiplier = estimatedSourceCount > 0 ? resampledLod0Count / (float)estimatedSourceCount : 0.0f;
+            return $"Estimated splats: source {estimatedSourceCount:N0}, LOD0 {resampledLod0Count:N0} ({resamplePercent}%, {lod0Multiplier:0.00}x), computed LOD {lodSplatCount:N0}, stored {storedCount:N0} ({sourceMultiplier:0.00}x source, {reusePercent}% reused)";
+        }
+
+        static int EstimateStoredLodSplatCount(int splatCount, int chunkSize, bool computeLodSplats)
+        {
+            return EstimateStoredLodSplatCount(splatCount, chunkSize, computeLodSplats, DefaultLODResamplePercent, DefaultLODReusePercent);
+        }
+
+        static int EstimateStoredLodSplatCount(int splatCount, int chunkSize, bool computeLodSplats, int resamplePercent)
+        {
+            return EstimateStoredLodSplatCount(splatCount, chunkSize, computeLodSplats, resamplePercent, DefaultLODReusePercent);
+        }
+
+        static int EstimateStoredLodSplatCount(int splatCount, int chunkSize, bool computeLodSplats, int resamplePercent, int reusePercent)
+        {
+            splatCount = Mathf.Max(0, splatCount);
+            chunkSize = Mathf.Max(1, chunkSize);
+            resamplePercent = computeLodSplats ? NormalizeLODResamplePercent(resamplePercent) : DefaultLODResamplePercent;
+            reusePercent = computeLodSplats ? NormalizeLODReusePercent(reusePercent) : DefaultLODReusePercent;
+            if (splatCount > 0)
+            {
+                chunkSize = Mathf.Max(chunkSize, Mathf.CeilToInt(splatCount / (float)LODMaxSelectionChunkCount));
+            }
+
+            int total = 0;
+            for (int offset = 0; offset < splatCount; offset += chunkSize)
+            {
+                int sourceCount = Mathf.Min(chunkSize, splatCount - offset);
+                int lod0Count = computeLodSplats ? ComputeResampledLod0SplatCountForChunk(sourceCount, resamplePercent) : sourceCount;
+                total += lod0Count;
+                if (!computeLodSplats)
+                {
+                    continue;
+                }
+
+                for (int level = 1; level < 30; level++)
+                {
+                    int outputDivisor = 1 << Mathf.Min(30, level);
+                    int outputCount = Mathf.FloorToInt(lod0Count / (float)outputDivisor + 0.5f);
+                    int reuseCount = Mathf.Clamp(Mathf.FloorToInt(outputCount * (reusePercent / 100.0f) + 0.5f), 0, outputCount);
+                    int clusterCount = outputCount - reuseCount;
+                    if (clusterCount < ComputedLodMinClusterCount || clusterCount >= lod0Count)
+                    {
+                        break;
+                    }
+                    total += clusterCount;
+                }
+            }
+            return total;
+        }
+
+        static int EstimateResampledLod0SplatCount(int splatCount, int chunkSize, int resamplePercent)
+        {
+            splatCount = Mathf.Max(0, splatCount);
+            chunkSize = Mathf.Max(1, chunkSize);
+            resamplePercent = NormalizeLODResamplePercent(resamplePercent);
+            if (splatCount > 0)
+            {
+                chunkSize = Mathf.Max(chunkSize, Mathf.CeilToInt(splatCount / (float)LODMaxSelectionChunkCount));
+            }
+
+            int total = 0;
+            for (int offset = 0; offset < splatCount; offset += chunkSize)
+            {
+                total += ComputeResampledLod0SplatCountForChunk(Mathf.Min(chunkSize, splatCount - offset), resamplePercent);
+            }
+            return total;
+        }
+
+        static int ComputeResampledLod0SplatCountForChunk(int sourceCount, int resamplePercent)
+        {
+            sourceCount = Mathf.Max(0, sourceCount);
+            if (sourceCount <= 0)
+            {
+                return 0;
+            }
+
+            resamplePercent = NormalizeLODResamplePercent(resamplePercent);
+            if (resamplePercent >= DefaultLODResamplePercent)
+            {
+                return sourceCount;
+            }
+
+            return Mathf.Clamp(Mathf.RoundToInt(sourceCount * (resamplePercent / 100.0f)), 1, sourceCount);
+        }
+
+        static int NormalizeLODResamplePercent(int resamplePercent)
+        {
+            return resamplePercent <= 0 ? DefaultLODResamplePercent : Mathf.Clamp(resamplePercent, 1, DefaultLODResamplePercent);
+        }
+
+        static int NormalizeLODReusePercent(int reusePercent)
+        {
+            return reusePercent <= 0 ? DefaultLODReusePercent : Mathf.Clamp(reusePercent, 1, 99);
+        }
+
         void RebuildPreviewFromCache(bool framePreview)
         {
             if (_previewData == null)
@@ -2407,47 +2772,44 @@ namespace GaussianSplatting.Editor.Importers
             Repaint();
         }
 
-        PlySplatImporter.ImportOptions GetGlobalOptions()
+        // The import mode is the source of truth; the derived flags read below (and by ImportSingle) are
+        // recomputed here so they are correct even for entries whose foldout was never drawn.
+        static void ApplyImportModeFlags(ImportEntry entry)
         {
-            return new PlySplatImporter.ImportOptions
-            {
-                computeBoundingBox = _computeBoundingBox,
-                splatsPerPass = _multiPassRendering ? _splatsPerPass : 0,
-                precomputeSorting = _precomputeSorting,
-                maxAlphaMaskCount = _maxAlphaMaskCount,
-                useSRGB = _useSRGB,
-                importSphericalHarmonics = _importSphericalHarmonics,
-                defaultSHBand = _defaultSHBand,
-                compressColorAlphaToBC7 = _compressColorAlphaToBC7,
-                compressSHToBC7 = _compressSHToBC7,
-                startRenderQueue = _startRenderQueue
-            };
+            entry.standalone = entry.importMode == ImportMode.Standalone;
+            entry.importAsLOD = entry.importMode == ImportMode.LOD;
+            entry.lodComputeSplats = entry.importMode == ImportMode.LOD;
         }
 
-        PlySplatImporter.ImportOptions GetEntryOptions(ImportEntry entry)
+        GaussianSplatImporter.ImportOptions GetEntryOptions(ImportEntry entry)
         {
-            PlySplatImporter.ImportOptions options = entry.overrideSettings
-                ? new PlySplatImporter.ImportOptions
-                {
-                    computeBoundingBox = entry.computeBoundingBox,
-                    splatsPerPass = entry.multiPassRendering ? entry.splatsPerPass : 0,
-                    precomputeSorting = entry.precomputeSorting,
-                    maxAlphaMaskCount = entry.maxAlphaMaskCount,
-                    useSRGB = entry.useSRGB,
-                    importSphericalHarmonics = entry.importSphericalHarmonics,
-                    defaultSHBand = entry.shBand,
-                    compressColorAlphaToBC7 = entry.compressColorAlphaToBC7,
-                    compressSHToBC7 = entry.compressSHToBC7,
-                    startRenderQueue = entry.startRenderQueue
-                }
-                : GetGlobalOptions();
+            ApplyImportModeFlags(entry);
+            // Every splat owns its full settings.
+            GaussianSplatImporter.ImportOptions options = new GaussianSplatImporter.ImportOptions
+            {
+                computeBoundingBox = entry.computeBoundingBox,
+                splatsPerPass = entry.multiPassRendering ? entry.splatsPerPass : 0,
+                standalone = entry.standalone,
+                maxAlphaMaskCount = entry.maxAlphaMaskCount,
+                useSRGB = entry.useSRGB,
+                importSphericalHarmonics = entry.importSphericalHarmonics,
+                defaultSHBand = entry.shBand,
+                compressColorAlphaToBC7 = entry.compressColorAlphaToBC7,
+                startRenderQueue = entry.startRenderQueue
+            };
 
             options.cropToBounds = entry.cropToBounds;
             options.cropBounds = entry.cropBounds;
             options.applyHorizonAlignment = entry.applyHorizonAlignment;
             options.horizonRotation = (entry.applyWallAlignment ? entry.wallRotation : Quaternion.identity) * entry.horizonRotation;
             options.horizonPivot = entry.horizonPivot;
-            options.lodUsePackedPositions = GaussianSplatLODFeature.IsAvailable() && entry.importAsLOD && entry.lodUsePackedPositions;
+            options.lodUsePackedPositions = entry.importAsLOD && entry.lodUsePackedPositions;
+            options.lodComputeSplats = entry.importAsLOD && entry.lodComputeSplats;
+            options.lodResamplePercent = options.lodComputeSplats ? NormalizeLODResamplePercent(entry.lodResamplePercent) : DefaultLODResamplePercent;
+            options.lodReusePercent = options.lodComputeSplats ? NormalizeLODReusePercent(entry.lodReusePercent) : DefaultLODReusePercent;
+            options.normalizeSize = entry.normalizeSize;
+            options.normalizeTargetSize = entry.normalizeTargetSize;
+            options.shCompression = entry.shCompression;
             return options;
         }
 
@@ -2595,59 +2957,158 @@ namespace GaussianSplatting.Editor.Importers
             }
             EditorGUILayout.EndHorizontal();
 
-            if (GaussianSplatLODFeature.IsAvailable())
+            // --- Import type ---
+            // LOD splats import as a combined GaussianSplatObject rendered through the combiner; Standalone
+            // splats stay a self-rendering mesh + material with no component. The mode drives the derived flags
+            // read below (standalone / importAsLOD / lodComputeSplats), and gates which settings are shown.
+            EditorGUILayout.Space(6f);
+            entry.importMode = (ImportMode)EditorGUILayout.EnumPopup(GSEditorText.T("Import Mode", "インポートモード"), entry.importMode);
+            switch (entry.importMode)
             {
-                EditorGUILayout.Space(6f);
-                EditorGUILayout.LabelField(GSEditorText.T("LOD Import", "LOD インポート"), EditorStyles.boldLabel);
-                entry.importAsLOD = EditorGUILayout.Toggle(GSEditorText.T("Import As LOD", "LOD としてインポート"), entry.importAsLOD);
-                using (new EditorGUI.DisabledScope(!entry.importAsLOD))
+                case ImportMode.LOD:
+                    EditorGUILayout.HelpBox(GSEditorText.T(
+                        "Combined GaussianSplatObject with a downsampled LOD pyramid; the combiner selects detail by distance and budget.",
+                        "ダウンサンプリングした LOD ピラミッドを持つ統合 GaussianSplatObject。combiner が距離と予算に応じて詳細度を選択します。"), MessageType.Info);
+                    break;
+                case ImportMode.Standalone:
+                    EditorGUILayout.HelpBox(GSEditorText.T(
+                        "Precomputes sorting for octahedral directions so the splat renders on its own, without the GaussianSplatRenderer/combiner. Uses much more texture memory and may show rendering artifacts.",
+                        "八面体方向のソートを事前計算し、GaussianSplatRenderer/combiner なしで Splat を単独描画します。テクスチャメモリを大幅に多く使用し、描画アーティファクトが出る場合があります。"), MessageType.Warning);
+                    break;
+            }
+            ApplyImportModeFlags(entry);
+
+            EditorGUILayout.Space(6f);
+            EditorGUILayout.LabelField(GSEditorText.T("Splat Settings", "Splat 設定"), EditorStyles.boldLabel);
+            EditorGUI.indentLevel++;
+
+            // Combined-object settings (LOD and Normal modes). Chunking and packed positions apply to both;
+            // the resampling controls only matter for the LOD pyramid.
+            if (entry.importAsLOD)
+            {
+                entry.lodChunkSize = Mathf.Max(1, EditorGUILayout.IntField(GSEditorText.T("Chunk Size", "チャンクサイズ"), entry.lodChunkSize));
+                entry.lodUsePackedPositions = EditorGUILayout.Toggle(GSEditorText.T("Pack Positions", "位置をパック"), entry.lodUsePackedPositions);
+                if (entry.lodComputeSplats)
                 {
-                    entry.lodChunkSize = Mathf.Max(1, EditorGUILayout.IntField(GSEditorText.T("LOD Chunk Size", "LOD チャンクサイズ"), entry.lodChunkSize));
-                    entry.lodUsePackedPositions = EditorGUILayout.Toggle(GSEditorText.T("Pack LOD Positions", "LOD 位置をパック"), entry.lodUsePackedPositions);
+                    entry.lodResamplePercent = EditorGUILayout.IntSlider(GSEditorText.T("LOD Resampling Rate", "LOD リサンプリング率"), NormalizeLODResamplePercent(entry.lodResamplePercent), 1, DefaultLODResamplePercent);
+                    entry.lodReusePercent = EditorGUILayout.IntSlider(GSEditorText.T("LOD Reused Splats", "LOD 再利用 Splat"), NormalizeLODReusePercent(entry.lodReusePercent), 1, 99);
+                    EditorGUILayout.LabelField(GetComputedLodSplatEstimateLabel(entry), EditorStyles.wordWrappedMiniLabel);
                 }
             }
-            else
+
+            // Common geometry transforms — apply to both LOD and non-LOD (the streamed front-end bakes them
+            // identically into either output, so they are not LOD-specific). (The y-flip is always baked into
+            // coordinates -> identity prefab scale; there is no negative-scale option.)
+            entry.normalizeSize = EditorGUILayout.Toggle(GSEditorText.T("Normalize Size", "サイズを正規化"), entry.normalizeSize);
+            if (entry.normalizeSize)
             {
-                entry.importAsLOD = false;
-                entry.lodUsePackedPositions = false;
+                entry.normalizeTargetSize = Mathf.Max(0.0001f, EditorGUILayout.FloatField(GSEditorText.T("Target Size", "目標サイズ"), entry.normalizeTargetSize));
             }
 
-            entry.overrideSettings = EditorGUILayout.Toggle(GSEditorText.T("Override Import Settings", "インポート設定を上書き"), entry.overrideSettings);
-            if (!entry.overrideSettings)
-            {
-                return;
-            }
-
-            EditorGUI.indentLevel++;
-            entry.computeBoundingBox = EditorGUILayout.Toggle(GSEditorText.T("Compute Bounding Box", "バウンディングボックスを計算"), entry.computeBoundingBox);
-            entry.useSRGB = EditorGUILayout.Toggle(GSEditorText.T("sRGB Color Correction", "sRGB 色補正"), entry.useSRGB);
+            // Spherical harmonics (both LOD and non-LOD), with its compression in the same place.
             entry.importSphericalHarmonics = EditorGUILayout.Toggle(GSEditorText.T("Import Spherical Harmonics", "球面調和をインポート"), entry.importSphericalHarmonics);
             if (entry.importSphericalHarmonics)
             {
-                entry.shBand = (SHBand)EditorGUILayout.EnumPopup(GSEditorText.T("Max imported SH Band", "インポート最大 SH バンド"), entry.shBand);
+                entry.shBand = (SHBand)EditorGUILayout.EnumPopup(GSEditorText.T("Max SH Band", "最大 SH バンド"), entry.shBand);
+                EditorGUILayout.HelpBox(GSEditorText.T(
+                    "Imports higher-order SH coefficient textures only up to the selected max band and sets the imported material to that band. If the selected band has no non-zero coefficients in the file, the importer falls back to the highest lower non-zero band.",
+                    "選択した最大バンドまでの高次 SH 係数テクスチャだけをインポートし、インポートされたマテリアルをそのバンドに設定します。選択したバンドに非ゼロ係数がない場合は、より低い非ゼロの最大バンドにフォールバックします。"), MessageType.Info);
+                entry.shCompression = (GaussianSplatImporter.SHCompression)EditorGUILayout.EnumPopup(GSEditorText.T("SH Compression", "SH 圧縮"), entry.shCompression);
+                EditorGUILayout.HelpBox(GSEditorText.T(
+                    "SH texture format (LOD and non-LOD): None = RGB565 (largest), BC1 = 4bpp (smallest), BC7 = 8bpp. Compression is lossy but SH error is small. (LOD only: SH is kept while the whole scene's fused SH fits one texture; oversized splats fall back to DC.)",
+                    "SH テクスチャ形式 (LOD・非 LOD 共通): None = RGB565 (最大)、BC1 = 4bpp (最小)、BC7 = 8bpp。圧縮は不可逆ですが SH の誤差は小さいです。(LOD のみ: SH はシーン全体の統合 SH が 1 テクスチャに収まる場合のみ保持され、超過する Splat は DC にフォールバックします。)"), MessageType.Info);
             }
-            entry.compressColorAlphaToBC7 = EditorGUILayout.Toggle(GSEditorText.T("Compress ColorAlpha", "色アルファを圧縮"), entry.compressColorAlphaToBC7);
-            entry.compressSHToBC7 = EditorGUILayout.Toggle(GSEditorText.T("Compress SH1+", "SH1+ を圧縮"), entry.compressSHToBC7);
-            if (entry.useSRGB)
+            else
             {
-                entry.multiPassRendering = EditorGUILayout.Toggle(GSEditorText.T("Multi-Pass Rendering", "マルチパス描画"), entry.multiPassRendering);
-                if (entry.multiPassRendering)
-                {
-                    entry.splatsPerPass = Mathf.Clamp(EditorGUILayout.IntField(GSEditorText.T("Splat Count Per Pass", "パスごとの Splat 数"), entry.splatsPerPass), 128 * 1024, 8 * 1024 * 1024);
-                    entry.maxAlphaMaskCount = Mathf.Max(0, EditorGUILayout.IntField(GSEditorText.T("Max Alpha Mask Count", "最大アルファマスク数"), entry.maxAlphaMaskCount));
-                }
+                EditorGUILayout.HelpBox(GSEditorText.T(
+                    "Skips SH coefficient texture generation and forces imported materials to SH0 only.",
+                    "SH 係数テクスチャの生成をスキップし、インポートされたマテリアルを SH0 のみにします。"), MessageType.Info);
             }
-            entry.precomputeSorting = EditorGUILayout.Toggle(GSEditorText.T("Precompute Sorting", "ソートを事前計算"), entry.precomputeSorting);
-            entry.startRenderQueue = Mathf.Clamp(EditorGUILayout.IntField(GSEditorText.T("Start Render Queue", "開始レンダーキュー"), entry.startRenderQueue), 2000, 5000);
+
+            entry.computeBoundingBox = EditorGUILayout.Toggle(GSEditorText.T("Compute Bounding Box", "バウンディングボックスを計算"), entry.computeBoundingBox);
+
+            // Color/alpha texture compression — common to both paths (both outputs have a color texture).
+            entry.compressColorAlphaToBC7 = EditorGUILayout.Toggle(GSEditorText.T("Compress ColorAlpha (BC7)", "色アルファを圧縮 (BC7)"), entry.compressColorAlphaToBC7);
+            if (entry.compressColorAlphaToBC7 || entry.shCompression != GaussianSplatImporter.SHCompression.None)
+            {
+                EditorGUILayout.HelpBox(GSEditorText.T(
+                    "The importer always packs generated splat textures into 4x4-aligned blocks. Compression applies only to the color/alpha and SH textures; position, scale, and sorting textures stay uncompressed.",
+                    "インポーターは生成される Splat テクスチャを常に 4x4 境界に合わせたブロックに詰めます。圧縮は色アルファと SH テクスチャにのみ適用され、位置・スケール・ソートテクスチャは非圧縮のままです。"), MessageType.Info);
+            }
+
+            // Standalone rendering settings (not used by combined GaussianSplatObject splats, which render
+            // via the combiner).
+            if (!entry.importAsLOD)
+            {
+                entry.useSRGB = EditorGUILayout.Toggle(GSEditorText.T("sRGB Color Correction", "sRGB 色補正"), entry.useSRGB);
+                EditorGUILayout.HelpBox(GSEditorText.T(
+                    "Color correction requires 2 additional grab passes, for small splats you might want to disable this. Without this enabled back to front rendering will be used, which makes multi-pass rendering not work. sRGB color correction only works correctly if the world has HDR camera render targets.",
+                    "色補正には追加で 2 回の Grab パスが必要です。小さな Splat では無効にした方がよい場合があります。これを有効にしない場合は後ろから前への描画になり、マルチパス描画は機能しません。sRGB 色補正は、ワールドのカメラレンダーターゲットが HDR の場合にのみ正しく動作します。"), MessageType.Info);
+                if (entry.useSRGB)
+                {
+                    entry.multiPassRendering = EditorGUILayout.Toggle(GSEditorText.T("Multi-Pass Rendering", "マルチパス描画"), entry.multiPassRendering);
+                    if (entry.multiPassRendering)
+                    {
+                        entry.splatsPerPass = Mathf.Clamp(EditorGUILayout.IntField(GSEditorText.T("Splat Count Per Pass", "パスごとの Splat 数"), entry.splatsPerPass), 128 * 1024, 8 * 1024 * 1024);
+                        EditorGUILayout.HelpBox(GSEditorText.T(
+                            "The rendering of the splat is split into multiple sequential chunks, can help with VR rendering performance.",
+                            "Splat の描画を複数の連続チャンクに分割します。VR 描画性能の改善に役立つ場合があります。"), MessageType.Info);
+                        entry.maxAlphaMaskCount = Mathf.Max(0, EditorGUILayout.IntField(GSEditorText.T("Max Alpha Mask Count", "最大アルファマスク数"), entry.maxAlphaMaskCount));
+                        EditorGUILayout.HelpBox(GSEditorText.T(
+                            "After each chunk is rendered an optional alpha mask pass is added using a grab pass and stencil. This will occlude the following chunks if they are behind opaque objects. This can help performance, but grab pass can be expensive, so use it with care. If you have more than 4M splats you might want to have more than 1 alpha mask pass.",
+                            "各チャンクの描画後に、Grab パスとステンシルを使った任意のアルファマスクパスを追加します。不透明オブジェクトの背後にある後続チャンクを遮蔽できます。性能改善に役立つ場合がありますが、Grab パスは高コストなので注意してください。400 万を超える Splat では、アルファマスクパスを 2 つ以上にした方がよい場合があります。"), MessageType.Info);
+                    }
+                }
+                entry.startRenderQueue = Mathf.Clamp(EditorGUILayout.IntField(GSEditorText.T("Start Render Queue", "開始レンダーキュー"), entry.startRenderQueue), 2000, 5000);
+                EditorGUILayout.HelpBox(GSEditorText.T(
+                    "Starting render queue for the generated splat materials. Each generated material is assigned a sequential queue from this value.",
+                    "生成される Splat マテリアルの開始レンダーキューです。各マテリアルにはこの値から順番にキューが割り当てられます。"), MessageType.Info);
+            }
             EditorGUI.indentLevel--;
+
+            EditorGUILayout.Space(4f);
+            if (GUILayout.Button(GSEditorText.T("Copy These Settings To All Splats", "この設定を全 Splat にコピー")))
+            {
+                CopyEntrySettingsToAll(entry);
+            }
+        }
+
+        // "Globally shared" workflow: apply one splat's import settings to every other entry (crop/horizon stay per-splat).
+        void CopyEntrySettingsToAll(ImportEntry source)
+        {
+            foreach (ImportEntry e in _entries)
+            {
+                if (e == source) continue;
+                e.importMode = source.importMode;
+                e.importAsLOD = source.importAsLOD;
+                e.lodChunkSize = source.lodChunkSize;
+                e.lodUsePackedPositions = source.lodUsePackedPositions;
+                e.lodComputeSplats = source.lodComputeSplats;
+                e.lodResamplePercent = source.lodResamplePercent;
+                e.lodReusePercent = source.lodReusePercent;
+                e.normalizeSize = source.normalizeSize;
+                e.normalizeTargetSize = source.normalizeTargetSize;
+                e.shCompression = source.shCompression;
+                e.importSphericalHarmonics = source.importSphericalHarmonics;
+                e.shBand = source.shBand;
+                e.computeBoundingBox = source.computeBoundingBox;
+                e.useSRGB = source.useSRGB;
+                e.multiPassRendering = source.multiPassRendering;
+                e.splatsPerPass = source.splatsPerPass;
+                e.maxAlphaMaskCount = source.maxAlphaMaskCount;
+                e.standalone = source.standalone;
+                e.compressColorAlphaToBC7 = source.compressColorAlphaToBC7;
+                e.startRenderQueue = source.startRenderQueue;
+            }
+            Debug.Log($"[GaussianSplatting] Copied import settings from '{System.IO.Path.GetFileName(source.path)}' to {_entries.Count - 1} other splat(s).");
         }
 
         void OnGUI()
         {
             PollPreviewLoad();
             scrollPosition = EditorGUILayout.BeginScrollView(scrollPosition);
-            EditorGUILayout.LabelField(GSEditorText.T("PLY files", "PLY ファイル"), EditorStyles.boldLabel);
-            if (GUILayout.Button(GSEditorText.T("Clear All PLYs", "すべての PLY をクリア")))
+            EditorGUILayout.LabelField(GSEditorText.T("Splat files", "Splat ファイル"), EditorStyles.boldLabel);
+            if (GUILayout.Button(GSEditorText.T("Clear All Files", "すべてのファイルをクリア")))
             {
                 _entries.Clear();
                 _selectedEntryIndex = -1;
@@ -2671,7 +3132,7 @@ namespace GaussianSplatting.Editor.Importers
                 }
                 if (GUILayout.Button("…", GUILayout.Width(30)))
                 {
-                    string path = EditorUtility.OpenFilePanel(GSEditorText.T("Select PLY file", "PLY ファイルを選択"), Application.dataPath, "ply");
+                    string path = EditorUtility.OpenFilePanelWithFilters(GSEditorText.T("Select Splat File", "Splat ファイルを選択"), Application.dataPath, GaussianSplatImporter.ImportFilePanelFilters);
                     if (!string.IsNullOrEmpty(path))
                     {
                         entry.path = path;
@@ -2695,13 +3156,16 @@ namespace GaussianSplatting.Editor.Importers
                 EditorGUILayout.EndHorizontal();
             }
             EditorGUILayout.EndVertical();
-            if (GUILayout.Button(GSEditorText.T("+ Add PLY file", "+ PLY ファイルを追加"))) AddEntry();
-            if (GUILayout.Button(GSEditorText.T("Add All PLYs in Folder", "フォルダ内の PLY をすべて追加")))
+            if (GUILayout.Button(GSEditorText.T("+ Add Splat File", "+ Splat ファイルを追加"))) AddEntry();
+            if (GUILayout.Button(GSEditorText.T("Add All Splats in Folder", "フォルダ内の Splat をすべて追加")))
             {
-                string folder = EditorUtility.OpenFolderPanel(GSEditorText.T("Select Folder with PLY files", "PLY ファイルのあるフォルダを選択"), Application.dataPath, "");
+                string folder = EditorUtility.OpenFolderPanel(GSEditorText.T("Select Folder with Splat Files", "Splat ファイルのあるフォルダを選択"), Application.dataPath, "");
                 if (!string.IsNullOrEmpty(folder))
                 {
-                    string[] files = Directory.GetFiles(folder, "*.ply");
+                    string[] files = Directory.GetFiles(folder, "*.*")
+                        .Where(GaussianSplatImporter.IsSupportedImportSourcePath)
+                        .OrderBy(file => file, StringComparer.OrdinalIgnoreCase)
+                        .ToArray();
                     foreach (string file in files)
                     {
                         _entries.Add(new ImportEntry { path = file });
@@ -2714,8 +3178,8 @@ namespace GaussianSplatting.Editor.Importers
             }
 
             EditorGUILayout.HelpBox(GSEditorText.T(
-                "Large imports still depend on available RAM, but the PLY importer now streams vertex data so file size is no longer capped by a 2GB raw read buffer. SH import memory still scales with the selected SH band.",
-                "大きなインポートは引き続き使用可能な RAM に依存しますが、PLY インポーターは頂点データをストリーミングするため、ファイルサイズは 2GB の生読み込みバッファに制限されなくなりました。SH インポートのメモリ使用量は選択した SH バンドに応じて増えます。"), MessageType.Info);
+                "Large imports still depend on available RAM, but the importer streams vertex data so file size is no longer capped by a 2GB raw read buffer. SH import memory still scales with the selected SH band.",
+                "大きなインポートは引き続き使用可能な RAM に依存しますが、インポーターは頂点データをストリーミングするため、ファイルサイズは 2GB の生読み込みバッファに制限されなくなりました。SH インポートのメモリ使用量は選択した SH バンドに応じて増えます。"), MessageType.Info);
 
             DrawSelectedEntrySettings();
 
@@ -2725,90 +3189,20 @@ namespace GaussianSplatting.Editor.Importers
             if (GUILayout.Button("…", GUILayout.Width(30)))
                 _outputFolder = EditorUtility.OpenFolderPanel(GSEditorText.T("Select Output Folder", "出力フォルダを選択"), _outputFolder, "");
 
-            EditorGUILayout.Space(15);
-            EditorGUILayout.LabelField(GSEditorText.T("Splat settings", "Splat 設定"), EditorStyles.boldLabel);
-            _computeBoundingBox   = EditorGUILayout.Toggle(GSEditorText.T("Compute Bounding Box", "バウンディングボックスを計算"), _computeBoundingBox);
-            _useSRGB = EditorGUILayout.Toggle(GSEditorText.T("sRGB Color Correction", "sRGB 色補正"), _useSRGB);
-            _importSphericalHarmonics = EditorGUILayout.Toggle(GSEditorText.T("Import Spherical Harmonics", "球面調和をインポート"), _importSphericalHarmonics);
-            EditorGUILayout.Space(5f);
-            EditorGUILayout.LabelField(GSEditorText.T("BC7 Compression", "BC7 圧縮"), EditorStyles.boldLabel);
-            _compressColorAlphaToBC7 = EditorGUILayout.Toggle(GSEditorText.T("ColorAlpha", "色アルファ"), _compressColorAlphaToBC7);
-            _compressSHToBC7 = EditorGUILayout.Toggle("SH1+", _compressSHToBC7);
-            if (_compressColorAlphaToBC7 || _compressSHToBC7)
-            {
-                EditorGUILayout.HelpBox(GSEditorText.T(
-                    "The importer always packs generated splat textures into 4x4-aligned blocks. BC7 compression applies only to the selected generated textures; position, scale, and sorting textures stay uncompressed.",
-                    "インポーターは生成される Splat テクスチャを常に 4x4 境界に合わせたブロックに詰めます。BC7 圧縮は選択した生成テクスチャにのみ適用され、位置・スケール・ソートテクスチャは非圧縮のままです。"), MessageType.Info);
-                if (!_importSphericalHarmonics && _compressSHToBC7)
-                {
-                    EditorGUILayout.HelpBox(GSEditorText.T(
-                        "SH1+ compression has no effect while Import Spherical Harmonics is disabled.",
-                        "球面調和のインポートが無効な場合、SH1+ 圧縮は効果がありません。"), MessageType.Info);
-                }
-            }
-            if (_importSphericalHarmonics)
-            {
-                _defaultSHBand = (SHBand)EditorGUILayout.EnumPopup(GSEditorText.T("Max imported SH Band", "インポート最大 SH バンド"), _defaultSHBand);
-                EditorGUILayout.HelpBox(GSEditorText.T(
-                    "Imports higher-order SH coefficient textures only up to the selected max band and sets the imported material to that band. If the selected band has no non-zero coefficients in the file, the importer falls back to the highest lower non-zero band.",
-                    "選択した最大バンドまでの高次 SH 係数テクスチャだけをインポートし、インポートされたマテリアルをそのバンドに設定します。選択したバンドに非ゼロ係数がない場合は、より低い非ゼロの最大バンドにフォールバックします。"), MessageType.Info);
-            }
-            else
-            {
-                EditorGUILayout.HelpBox(GSEditorText.T(
-                    "Skips SH coefficient texture generation and forces imported materials to SH0 only.",
-                    "SH 係数テクスチャの生成をスキップし、インポートされたマテリアルを SH0 のみにします。"), MessageType.Info);
-            }
-            EditorGUILayout.HelpBox(GSEditorText.T(
-                "Color correction requires 2 additional grab passes, for small splats you might want to disable this. Without this enabled back to front rendering will be used, which makes multi-pass rendering not work. sRGB color correction only works correctly if the world has HDR camera render targets.",
-                "色補正には追加で 2 回の Grab パスが必要です。小さな Splat では無効にした方がよい場合があります。これを有効にしない場合は後ろから前への描画になり、マルチパス描画は機能しません。sRGB 色補正は、ワールドのカメラレンダーターゲットが HDR の場合にのみ正しく動作します。"), MessageType.Info);
-            if(_useSRGB) {
-                _multiPassRendering   = EditorGUILayout.Toggle(GSEditorText.T("Multi-Pass Rendering", "マルチパス描画"), _multiPassRendering);
-                if (_multiPassRendering)
-                {
-                    _splatsPerPass = EditorGUILayout.IntField(GSEditorText.T("Splat Count Per Pass", "パスごとの Splat 数"), _splatsPerPass);
-                    EditorGUILayout.HelpBox(GSEditorText.T(
-                        "The rendering of the splat is split into multiple sequential chunks, can help with VR rendering performance.",
-                        "Splat の描画を複数の連続チャンクに分割します。VR 描画性能の改善に役立つ場合があります。"), MessageType.Info);
-                    _splatsPerPass = Mathf.Clamp(_splatsPerPass, 128 * 1024, 8 * 1024 * 1024);
-                    _maxAlphaMaskCount = EditorGUILayout.IntField(GSEditorText.T("Max Alpha Mask Count", "最大アルファマスク数"), _maxAlphaMaskCount);
-                    EditorGUILayout.HelpBox(GSEditorText.T(
-                        "After each chunk is rendered an optional alpha mask pass is added using a grab pass and stencil. This will occlude the following chunks if they are behind opaque objects. This can help performance, but grab pass can be expensive, so use it with care. If you have more than 4M splats you might want to have more than 1 alpha mask pass.",
-                        "各チャンクの描画後に、Grab パスとステンシルを使った任意のアルファマスクパスを追加します。不透明オブジェクトの背後にある後続チャンクを遮蔽できます。性能改善に役立つ場合がありますが、Grab パスは高コストなので注意してください。400 万を超える Splat では、アルファマスクパスを 2 つ以上にした方がよい場合があります。"), MessageType.Info);
-                }
-                else
-                {
-                    _splatsPerPass = 0; // disable multi-pass rendering
-                }
-            }
-            _precomputeSorting = EditorGUILayout.Toggle(GSEditorText.T("Precompute Sorting", "ソートを事前計算"), _precomputeSorting);
-            if (_precomputeSorting)
-            {
-                EditorGUILayout.HelpBox(GSEditorText.T(
-                    "Precomputing sorting for octahedral directions, makes the gaussian splatting work standalone, without the GaussianSplatRenderer. However this takes way more texture memory and might have rendering artifacts. THIS WILL NO LONGER WORK WITH GaussianSplatRenderer",
-                    "八面体方向のソートを事前計算すると、GaussianSplatRenderer なしで Gaussian Splatting を単独動作させられます。ただし、テクスチャメモリを大幅に多く使用し、描画アーティファクトが出る場合があります。これは GaussianSplatRenderer では今後動作しません。"), MessageType.Warning);
-            }
-
-            EditorGUILayout.Space(5f);
-            _startRenderQueue = EditorGUILayout.IntField(GSEditorText.T("Start Render Queue", "開始レンダーキュー"), _startRenderQueue);
-            EditorGUILayout.HelpBox(GSEditorText.T(
-                "Starting render queue for the generated splat materials. Each generated material is assigned a sequential queue from this value.",
-                "生成される Splat マテリアルの開始レンダーキューです。各マテリアルにはこの値から順番にキューが割り当てられます。"), MessageType.Info);
-            _startRenderQueue = Mathf.Clamp(_startRenderQueue, 2000, 5000);
             GUILayout.FlexibleSpace();
 
-            if (GUILayout.Button(GSEditorText.T("Import All PLYs", "すべての PLY をインポート")))
+            if (GUILayout.Button(GSEditorText.T("Import All Splats", "すべての Splat をインポート")))
             {
                 if (!_entries.Any(e => !string.IsNullOrEmpty(e.path)))
                 {
-                    EditorUtility.DisplayDialog(GSEditorText.T("PLY Import", "PLY インポート"), GSEditorText.T("Add at least one PLY path.", "PLY パスを少なくとも 1 つ追加してください。"), "OK");
+                    EditorUtility.DisplayDialog(GSEditorText.T("Splat Import", "Splat インポート"), GSEditorText.T("Add at least one supported splat path.", "対応する Splat パスを少なくとも 1 つ追加してください。"), "OK");
                     return;
                 }
 
                 foreach (ImportEntry entry in _entries.Where(e => !string.IsNullOrEmpty(e.path)))
                 {
-                    string ply = entry.path;
-                    string prefabName = Path.GetFileNameWithoutExtension(ply) + ".prefab";
+                    string sourcePath = entry.path;
+                    string prefabName = Path.GetFileNameWithoutExtension(sourcePath) + ".prefab";
                     string relFolder  = FileUtil.GetProjectRelativePath(_outputFolder);
                     if (string.IsNullOrEmpty(relFolder))
                         relFolder = "Assets";
@@ -2817,7 +3211,7 @@ namespace GaussianSplatting.Editor.Importers
                 }
                 AssetDatabase.SaveAssets();
                 AssetDatabase.Refresh();
-                EditorUtility.DisplayDialog(GSEditorText.T("PLY Import", "PLY インポート"), GSEditorText.T("All imports completed.", "すべてのインポートが完了しました。"), "OK");
+                EditorUtility.DisplayDialog(GSEditorText.T("Splat Import", "Splat インポート"), GSEditorText.T("All imports completed.", "すべてのインポートが完了しました。"), "OK");
             }
             EditorGUILayout.EndScrollView();
         }
@@ -2826,27 +3220,22 @@ namespace GaussianSplatting.Editor.Importers
         {
             try
             {
-                string plyPath = entry.path;
-                EditorUtility.DisplayProgressBar(GSEditorText.T("PLY Import", "PLY インポート"),
-                    GSEditorText.T($"Importing {Path.GetFileName(plyPath)}", $"{Path.GetFileName(plyPath)} をインポート中"), 0f);
-                PlySplatImporter.ImportOptions options = GetEntryOptions(entry);
-                if (entry.importAsLOD && GaussianSplatLODFeature.IsAvailable())
+                string sourcePath = entry.path;
+                EditorUtility.DisplayProgressBar(GSEditorText.T("Splat Import", "Splat インポート"),
+                    GSEditorText.T($"Importing {Path.GetFileName(sourcePath)}", $"{Path.GetFileName(sourcePath)} をインポート中"), 0f);
+                GaussianSplatImporter.ImportOptions options = GetEntryOptions(entry);
+                if (entry.importAsLOD)
                 {
-                    string outputFolder = Path.GetDirectoryName(prefabPath)?.Replace('\\', '/');
-                    if (string.IsNullOrEmpty(outputFolder))
-                    {
-                        outputFolder = "Assets";
-                    }
-                    ImportLODPLY(plyPath, outputFolder, entry.lodChunkSize, options);
+                    ImportLOD(sourcePath, prefabPath, entry.lodChunkSize, options);
                 }
                 else
                 {
-                    PlySplatImporter.Import(plyPath, prefabPath, options);
+                    GaussianSplatImporter.Import(sourcePath, prefabPath, options);
                 }
             }
             catch (Exception e)
             {
-                EditorUtility.DisplayDialog(GSEditorText.T("PLY Import Failed", "PLY インポート失敗"), e.Message, "OK");
+                EditorUtility.DisplayDialog(GSEditorText.T("Splat Import Failed", "Splat インポート失敗"), e.Message, "OK");
                 Debug.LogException(e);
             }
             finally
@@ -2855,7 +3244,7 @@ namespace GaussianSplatting.Editor.Importers
             }
         }
 
-        static void ImportLODPLY(string plyPath, string outputFolder, int chunkSize, PlySplatImporter.ImportOptions options)
+        static void ImportLOD(string sourcePath, string prefabPath, int chunkSize, GaussianSplatImporter.ImportOptions options)
         {
             Type importerType = Type.GetType("GaussianSplatting.GaussianSplatLODImporter, GaussianSplatting.Editor");
             if (importerType == null)
@@ -2871,16 +3260,16 @@ namespace GaussianSplatting.Editor.Importers
             }
 
             System.Reflection.MethodInfo importMethod = importerType?.GetMethod(
-                "ImportLODPLY",
-                new[] { typeof(string), typeof(string), typeof(int), typeof(PlySplatImporter.ImportOptions) });
+                "ImportLODToPrefab",
+                new[] { typeof(string), typeof(string), typeof(int), typeof(GaussianSplatImporter.ImportOptions) });
             if (importMethod == null)
             {
-                throw new InvalidOperationException("LOD PLY importer is not available. Check that GaussianSplatting.Editor compiled successfully.");
+                throw new InvalidOperationException("LOD importer is not available. Check that GaussianSplatting.Editor compiled successfully.");
             }
 
             try
             {
-                importMethod.Invoke(null, new object[] { plyPath, outputFolder, chunkSize, options });
+                importMethod.Invoke(null, new object[] { sourcePath, prefabPath, chunkSize, options });
             }
             catch (System.Reflection.TargetInvocationException e) when (e.InnerException != null)
             {

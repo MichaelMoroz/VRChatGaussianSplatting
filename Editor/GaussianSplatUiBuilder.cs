@@ -82,17 +82,18 @@ namespace GaussianSplatting.Editor
                     return true;
                 }
             }
+            return false;
+        }
 
-            if (GaussianSplatLODFeature.IsAvailable())
+        static bool SceneHasActiveLODContent(UnityEngine.SceneManagement.Scene scene)
+        {
+            GaussianSplatObject[] lodObjects = Resources.FindObjectsOfTypeAll<GaussianSplatObject>();
+            for (int i = 0; i < lodObjects.Length; i++)
             {
-                GaussianSplatLODObject[] lodObjects = Resources.FindObjectsOfTypeAll<GaussianSplatLODObject>();
-                for (int i = 0; i < lodObjects.Length; i++)
+                GaussianSplatObject lodObject = lodObjects[i];
+                if (IsAutoUiSource(lodObject, scene) && lodObject.IsRenderable())
                 {
-                    GaussianSplatLODObject lodObject = lodObjects[i];
-                    if (IsAutoUiSource(lodObject, scene) && lodObject.IsRenderable())
-                    {
-                        return true;
-                    }
+                    return true;
                 }
             }
             return false;
@@ -196,8 +197,6 @@ namespace GaussianSplatting.Editor
             GameObject settingsColumn = CreateVerticalGroup("Settings Column", bodyRow.transform, new RectOffset(0, 0, 0, 0), 12.0f, TextAnchor.UpperLeft);
             SetPreferredWidth(settingsColumn, 520.0f, 0.0f);
 
-            GameObject splatColumn = CreateVerticalGroup("Splat Column", bodyRow.transform, new RectOffset(0, 0, 0, 0), 10.0f, TextAnchor.UpperLeft);
-            SetPreferredWidth(splatColumn, 560.0f, 1.0f);
             Color decrementColor = new Color(0.45f, 0.24f, 0.18f, 1.0f);
             Color incrementColor = new Color(0.18f, 0.4f, 0.24f, 1.0f);
             Color inactiveButtonColor = new Color(0.3f, 0.16f, 0.14f, 1.0f);
@@ -234,19 +233,17 @@ namespace GaussianSplatting.Editor
             generatedUi.customSubtitleText = CreateTextElement("Custom Subtitle", settingsColumn.transform, "", (int)GaussianSplatRendererUI.SubtitleFontSize, TextAnchor.UpperLeft);
             SetPreferredHeight(generatedUi.customSubtitleText.gameObject, GaussianSplatRendererUI.CustomSubtitlePreferredHeight, 0.0f);
             generatedUi.customSubtitleText.gameObject.SetActive(false);
-            generatedUi.currentSplatText = CreateTextElement("Current Splat", settingsColumn.transform, "Rendering Mode: Single\nCurrent Splat: None\nRendered Splats: 0", 16, TextAnchor.MiddleLeft);
-            generatedUi.materialSectionText = CreateTextElement("Settings Section", settingsColumn.transform, "Material Settings", 18, TextAnchor.MiddleLeft);
-            CreateSliderSetting("SH Band", "SH Band (global)", 0.0f, 3.0f, true, "3", 0.0f, out generatedUi.shBandLabelText, out generatedUi.shBandSlider, out generatedUi.shBandText);
-            CreateToggleSetting("VRC Light Volumes", "VRC Light Volumes (global)", "Off", nameof(GaussianSplatRendererUI.ToggleVrcLightVolumes), out generatedUi.vrcLightVolumesLabelText, out generatedUi.vrcLightVolumesButton);
-            CreateSliderSetting("Light Volume Intensity", "Light Volume Intensity", 0.0f, 4.0f, false, "1", 0.0f, out generatedUi.lightVolumeIntensityLabelText, out generatedUi.lightVolumeIntensitySlider, out generatedUi.lightVolumeIntensityText);
-            CreateSliderSetting("AntiAliasing", "Antialiasing", 0.0f, 3.0f, false, "1", 0.0f, out generatedUi.antiAliasingLabelText, out generatedUi.antiAliasingSlider, out generatedUi.antiAliasingText);
-            CreateStepperSetting("Gaussian Scale", "Gaussian Scale (global)", "1", nameof(GaussianSplatRendererUI.DecreaseGaussianScale), nameof(GaussianSplatRendererUI.IncreaseGaussianScale), out generatedUi.gaussianScaleLabelText, out generatedUi.gaussianScaleText);
-            CreateSliderSetting("Alpha Cutoff", "Alpha Cutoff\n(lower = better quality)", 0.005f, 0.3f, false, "0.04", 0.0f, out generatedUi.alphaCutoffLabelText, out generatedUi.alphaCutoffSlider, out generatedUi.alphaCutoffText);
-            generatedUi.alphaCutoffSlider.value = DefaultAlphaCutoff;
-            CreateSliderSetting("Alpha Cull", "Alpha Cull\n(higher = fewer splats)", 0.005f, 0.3f, false, "0.04", 0.0f, out generatedUi.alphaCullLabelText, out generatedUi.alphaCullSlider, out generatedUi.alphaCullText);
-            generatedUi.alphaCullSlider.value = DefaultAlphaCull;
-            CreateSliderSetting("LOD Splat Cap", "LOD Splat Cap", 0.0f, 1.0f, false, "3000000", 0.0f, out generatedUi.lodCullLabelText, out generatedUi.lodCullSlider, out generatedUi.lodCullText);
-            generatedUi.lodCullSlider.value = DefaultLODSplatCapSlider;
+            generatedUi.currentSplatText = CreateTextElement("Current Splat", settingsColumn.transform, "Rendered Splats: 0", 16, TextAnchor.MiddleLeft);
+
+            generatedUi.languageSectionText = CreateTextElement("Language Section", settingsColumn.transform, "Language", 18, TextAnchor.MiddleLeft);
+            GameObject languageRow = CreateHorizontalGroup("Language Row", settingsColumn.transform, 8.0f, false);
+            Button englishLanguageButton = CreateButtonElement("English Button", languageRow.transform, "English", new Color(0.2f, 0.2f, 0.24f, 1.0f), 0.0f, 1.0f);
+            Button japaneseLanguageButton = CreateButtonElement("Japanese Button", languageRow.transform, "日本語", new Color(0.2f, 0.2f, 0.24f, 1.0f), 0.0f, 1.0f);
+            generatedUi.englishLanguageButton = englishLanguageButton;
+            generatedUi.japaneseLanguageButton = japaneseLanguageButton;
+            AddUdonSharpButtonEvent(englishLanguageButton, generatedUi, nameof(GaussianSplatRendererUI.SetLanguageEnglish));
+            AddUdonSharpButtonEvent(japaneseLanguageButton, generatedUi, nameof(GaussianSplatRendererUI.SetLanguageJapanese));
+
             generatedUi.qualitySectionText = CreateTextElement("Quality Section", settingsColumn.transform, "Quality", 18, TextAnchor.MiddleLeft);
             GameObject qualityRow = CreateHorizontalGroup("Quality Row", settingsColumn.transform, 8.0f, false);
             generatedUi.qualityVeryLowButton = CreateButtonElement("Quality Very Low Button", qualityRow.transform, "Very Low", new Color(0.2f, 0.2f, 0.24f, 1.0f), 0.0f, 1.0f);
@@ -257,52 +254,25 @@ namespace GaussianSplatting.Editor
             AddUdonSharpButtonEvent(generatedUi.qualityLowButton, generatedUi, nameof(GaussianSplatRendererUI.SetQualityLow));
             AddUdonSharpButtonEvent(generatedUi.qualityMediumButton, generatedUi, nameof(GaussianSplatRendererUI.SetQualityMedium));
             AddUdonSharpButtonEvent(generatedUi.qualityHighButton, generatedUi, nameof(GaussianSplatRendererUI.SetQualityHigh));
-            generatedUi.languageSectionText = CreateTextElement("Language Section", settingsColumn.transform, "Language", 18, TextAnchor.MiddleLeft);
-            GameObject languageRow = CreateHorizontalGroup("Language Row", settingsColumn.transform, 8.0f, false);
-            Button englishLanguageButton = CreateButtonElement("English Button", languageRow.transform, "English", new Color(0.2f, 0.2f, 0.24f, 1.0f), 0.0f, 1.0f);
-            Button japaneseLanguageButton = CreateButtonElement("Japanese Button", languageRow.transform, "日本語", new Color(0.2f, 0.2f, 0.24f, 1.0f), 0.0f, 1.0f);
-            generatedUi.englishLanguageButton = englishLanguageButton;
-            generatedUi.japaneseLanguageButton = japaneseLanguageButton;
-            AddUdonSharpButtonEvent(englishLanguageButton, generatedUi, nameof(GaussianSplatRendererUI.SetLanguageEnglish));
-            AddUdonSharpButtonEvent(japaneseLanguageButton, generatedUi, nameof(GaussianSplatRendererUI.SetLanguageJapanese));
 
-            const float splatListPanelHeight = 840.0f;
-            const float splatListPanelSpacing = 8.0f;
-            const float splatListPanelPadding = 8.0f;
-            const float splatScrollButtonHeight = 38.0f;
-            const float splatSlotButtonHeight = 42.0f;
+            generatedUi.advancedSettingsButton = CreateButtonElement("Advanced Settings Button", settingsColumn.transform, "Show Advanced Settings", inactiveButtonColor, 0.0f, 1.0f);
+            AddUdonSharpButtonEvent(generatedUi.advancedSettingsButton, generatedUi, nameof(GaussianSplatRendererUI.ToggleAdvancedSettings));
 
-            generatedUi.splatSectionText = CreateTextElement("Splat Section", splatColumn.transform, "Splat Object (global)", 18, TextAnchor.MiddleLeft);
-            GameObject splatListPanel = CreateVerticalGroup("Splat List Panel", splatColumn.transform, new RectOffset(8, 8, 8, 8), 8.0f, TextAnchor.UpperLeft);
-            Image splatListPanelImage = splatListPanel.AddComponent<Image>();
-            splatListPanelImage.color = new Color(0.09f, 0.09f, 0.11f, 1.0f);
-            ApplySupersampledUiMaterial(splatListPanelImage);
-            SetPreferredHeight(splatListPanel, splatListPanelHeight, 0.0f);
-
-            GameObject splatScrollRow = CreateHorizontalGroup("Splat Scroll Controls", splatListPanel.transform, 8.0f, false);
-            Button scrollUpButton = CreateButtonElement("Splat Scroll Up", splatScrollRow.transform, "Up", new Color(0.15f, 0.24f, 0.36f, 1.0f), 96.0f, 0.0f);
-            Button scrollDownButton = CreateButtonElement("Splat Scroll Down", splatScrollRow.transform, "Down", new Color(0.15f, 0.24f, 0.36f, 1.0f), 96.0f, 0.0f);
-            generatedUi.splatScrollUpButton = scrollUpButton;
-            generatedUi.splatScrollDownButton = scrollDownButton;
-            AddUdonSharpButtonEvent(scrollUpButton, generatedUi, nameof(GaussianSplatRendererUI.ScrollSplatListUp));
-            AddUdonSharpButtonEvent(scrollDownButton, generatedUi, nameof(GaussianSplatRendererUI.ScrollSplatListDown));
-
-            GameObject splatButtonContainer = CreateVerticalGroup("Splat Button Container", splatListPanel.transform, new RectOffset(0, 0, 0, 0), 8.0f, TextAnchor.UpperLeft);
-
-            List<Button> splatButtons = new List<Button>();
-            float availableSplatButtonHeight = splatListPanelHeight - (splatListPanelPadding * 2.0f) - splatScrollButtonHeight - splatListPanelSpacing;
-            int visibleSplatButtonCount = Mathf.Max(1, Mathf.FloorToInt((availableSplatButtonHeight + splatListPanelSpacing) / (splatSlotButtonHeight + splatListPanelSpacing)));
-            visibleSplatButtonCount = Mathf.Min(visibleSplatButtonCount, 16);
-
-            for (int slotIndex = 0; slotIndex < visibleSplatButtonCount; slotIndex++)
+            generatedUi.materialSectionText = CreateTextElement("Settings Section", settingsColumn.transform, "Material Settings", 18, TextAnchor.MiddleLeft);
+            CreateSliderSetting("SH Band", "SH Band", 0.0f, 3.0f, true, "3", 0.0f, out generatedUi.shBandLabelText, out generatedUi.shBandSlider, out generatedUi.shBandText);
+            CreateToggleSetting("VRC Light Volumes", "VRC Light Volumes", "Off", nameof(GaussianSplatRendererUI.ToggleVrcLightVolumes), out generatedUi.vrcLightVolumesLabelText, out generatedUi.vrcLightVolumesButton);
+            CreateSliderSetting("Light Volume Intensity", "Light Volume Intensity", 0.0f, 4.0f, false, "1", 0.0f, out generatedUi.lightVolumeIntensityLabelText, out generatedUi.lightVolumeIntensitySlider, out generatedUi.lightVolumeIntensityText);
+            CreateSliderSetting("AntiAliasing", "Antialiasing", 0.0f, 3.0f, false, "1", 0.0f, out generatedUi.antiAliasingLabelText, out generatedUi.antiAliasingSlider, out generatedUi.antiAliasingText);
+            CreateStepperSetting("Gaussian Scale", "Gaussian Scale", "1", nameof(GaussianSplatRendererUI.DecreaseGaussianScale), nameof(GaussianSplatRendererUI.IncreaseGaussianScale), out generatedUi.gaussianScaleLabelText, out generatedUi.gaussianScaleText);
+            CreateSliderSetting("Alpha Cutoff", "Alpha Cutoff\n(lower = better quality)", 0.005f, 0.3f, false, "0.04", 0.0f, out generatedUi.alphaCutoffLabelText, out generatedUi.alphaCutoffSlider, out generatedUi.alphaCutoffText);
+            generatedUi.alphaCutoffSlider.value = DefaultAlphaCutoff;
+            CreateSliderSetting("Alpha Cull", "Alpha Cull\n(higher = fewer splats)", 0.005f, 0.3f, false, "0.04", 0.0f, out generatedUi.alphaCullLabelText, out generatedUi.alphaCullSlider, out generatedUi.alphaCullText);
+            generatedUi.alphaCullSlider.value = DefaultAlphaCull;
+            if (SceneHasActiveLODContent(renderer.gameObject.scene))
             {
-                Button slotButton = CreateButtonElement("Splat Slot " + slotIndex, splatButtonContainer.transform, string.Empty, new Color(0.2f, 0.2f, 0.24f, 1.0f), 0.0f, 1.0f);
-                SetPreferredHeight(slotButton.gameObject, splatSlotButtonHeight, 0.0f);
-                splatButtons.Add(slotButton);
-                AddUdonSharpButtonEvent(slotButton, generatedUi, "SelectSplatSlot" + slotIndex);
+                CreateSliderSetting("LOD Splat Cap", "LOD Splat Cap", 0.0f, 1.0f, false, "3000000", 0.0f, out generatedUi.lodCullLabelText, out generatedUi.lodCullSlider, out generatedUi.lodCullText);
+                generatedUi.lodCullSlider.value = DefaultLODSplatCapSlider;
             }
-
-            generatedUi.splatButtons = splatButtons.ToArray();
 
             generatedUi.RefreshUI();
             EditorUtility.SetDirty(canvasObject);

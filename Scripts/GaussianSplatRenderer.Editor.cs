@@ -48,27 +48,14 @@ public static class GSEditorText
 public partial class GaussianSplatRenderer
 {
     const int COMBINED_LOD_SETTINGS_VERSION_TARGET_SCALE_095 = 1;
+    const int DEBUG_ELLIPSOID_RENDER_QUEUE = 5000;
+    const CameraEvent DEBUG_CHUNK_BOUNDS_CAMERA_EVENT = CameraEvent.BeforeForwardAlpha;
+    static Shader _debugEllipsoidShader;
+    static readonly Dictionary<int, CommandBuffer> _chunkBoundsCommandBuffers = new Dictionary<int, CommandBuffer>();
+    // Production splat materials temporarily swapped out for the editor-only debug-ellipsoid shader while
+    // "Debug Opaque Ellipsoids" is on, so they can be restored when it's turned off. Keyed per renderer.
+    static readonly Dictionary<MeshRenderer, Material[]> _debugSwappedMaterials = new Dictionary<MeshRenderer, Material[]>();
 
-    static readonly HashSet<int> _singleModeMultiSplatWarnedScenes = new HashSet<int>();
-    static readonly HashSet<int> _singleModeLodWarnedScenes = new HashSet<int>();
-    class EditorLodGridCache
-    {
-        public int minTextureId;
-        public int maxTextureId;
-        public int chunkCount;
-        public Bounds[] chunkBounds;
-    }
-    class EditorLodGridRenderState
-    {
-        public GameObject gameObject;
-        public MeshFilter meshFilter;
-        public MeshRenderer meshRenderer;
-        public Mesh mesh;
-        public Material material;
-    }
-
-    static readonly Dictionary<GaussianSplatLODObject, EditorLodGridCache> _editorLodGridCaches = new Dictionary<GaussianSplatLODObject, EditorLodGridCache>();
-    static readonly Dictionary<GaussianSplatRenderer, EditorLodGridRenderState> _editorLodGridRenderStates = new Dictionary<GaussianSplatRenderer, EditorLodGridRenderState>();
     struct EditorCameraSortFrame
     {
         public int frame;
@@ -76,17 +63,6 @@ public partial class GaussianSplatRenderer
     }
 
     static readonly Dictionary<int, EditorCameraSortFrame> _editorCameraSortFrame = new Dictionary<int, EditorCameraSortFrame>();
-    static readonly Color[] _editorLodGridColors =
-    {
-        new Color(0.0f, 0.85f, 1.0f, 0.85f),
-        new Color(0.1f, 1.0f, 0.35f, 0.85f),
-        new Color(1.0f, 0.9f, 0.1f, 0.85f),
-        new Color(1.0f, 0.45f, 0.05f, 0.85f),
-        new Color(1.0f, 0.1f, 0.1f, 0.85f),
-        new Color(0.8f, 0.2f, 1.0f, 0.85f),
-        new Color(0.25f, 0.45f, 1.0f, 0.85f),
-        new Color(1.0f, 1.0f, 1.0f, 0.85f),
-    };
 
     static bool ShouldUseEditorScene(Scene scene)
     {
@@ -219,75 +195,6 @@ public partial class GaussianSplatRenderer
         return removedAny;
     }
 
-    static void ApplyEditorVisibility(Scene scene, bool combinedMode)
-    {
-        GaussianSplatObject[] splats = FindSceneObjects<GaussianSplatObject>(scene);
-        GaussianSplatLODObject[] lodObjects = FindSceneObjects<GaussianSplatLODObject>(scene);
-        int visibleIndex = -1;
-        int activeCount = 0;
-        int activeLodCount = 0;
-        if (!combinedMode)
-        {
-            for (int i = 0; i < splats.Length; i++)
-            {
-                GaussianSplatObject splat = splats[i];
-                if (splat != null && splat.gameObject.activeInHierarchy)
-                {
-                    if (visibleIndex < 0)
-                    {
-                        visibleIndex = i;
-                        splat.ShowSorted();
-                    }
-                    activeCount++;
-                }
-            }
-            for (int i = 0; i < lodObjects.Length; i++)
-            {
-                GaussianSplatLODObject lodObject = lodObjects[i];
-                if (lodObject != null && lodObject.gameObject.activeInHierarchy && lodObject.IsRenderable())
-                {
-                    activeLodCount++;
-                }
-            }
-        }
-        if (!combinedMode && activeCount > 1)
-        {
-            if (_singleModeMultiSplatWarnedScenes.Add(scene.handle))
-            {
-                Debug.LogWarning(GSEditorText.T(
-                    $"Multiple Gaussian splats are active in {scene.path}, but Rendering Mode is Single Splat. Only one splat will be rendered. Enable Combined rendering to render multiple active splats.",
-                    $"{scene.path} で複数の Gaussian Splat が有効ですが、表示モードは単体です。描画されるのは 1 つだけです。複数を描画するには統合表示を有効にしてください。"));
-            }
-        }
-        else
-        {
-            _singleModeMultiSplatWarnedScenes.Remove(scene.handle);
-        }
-        if (!combinedMode && activeLodCount > 0)
-        {
-            if (_singleModeLodWarnedScenes.Add(scene.handle))
-            {
-                Debug.LogWarning(GSEditorText.T(
-                    $"Gaussian Splat LOD objects are active in {scene.path}, but Rendering Mode is Single Splat. LOD splats will not be rendered. Enable Combined rendering to render LOD splats.",
-                    $"{scene.path} で Gaussian Splat LOD オブジェクトが有効ですが、表示モードは単体です。LOD スプラットは描画されません。LOD スプラットを描画するには統合表示を有効にしてください。"));
-            }
-        }
-        else
-        {
-            _singleModeLodWarnedScenes.Remove(scene.handle);
-        }
-        for (int i = 0; i < splats.Length; i++)
-        {
-            GaussianSplatObject splat = splats[i];
-            MeshRenderer renderer = splat != null ? splat.GetSortedRenderer() : null;
-            bool enabled = !combinedMode && i == visibleIndex;
-            if (renderer != null && renderer.enabled != enabled)
-            {
-                splat.SetSortedRendererEnabled(enabled);
-            }
-        }
-    }
-
     [InitializeOnLoadMethod]
     static void RegisterEditorHooks()
     {
@@ -297,6 +204,185 @@ public partial class GaussianSplatRenderer
         EditorApplication.update += ProcessEditorRefresh;
         Camera.onPreCull -= OnEditorCameraPreCull;
         Camera.onPreCull += OnEditorCameraPreCull;
+        Camera.onPostRender -= OnEditorCameraPostRender;
+        Camera.onPostRender += OnEditorCameraPostRender;
+    }
+
+    static Material _chunkBoundsDebugMaterial;
+
+    static Material GetChunkBoundsDebugMaterial()
+    {
+        if (_chunkBoundsDebugMaterial == null)
+        {
+            Shader shader = Shader.Find("Hidden/VRChatGaussianSplatting/DebugChunkBounds");
+            if (shader != null)
+            {
+                _chunkBoundsDebugMaterial = new Material(shader) { hideFlags = HideFlags.HideAndDontSave };
+            }
+        }
+        return _chunkBoundsDebugMaterial;
+    }
+
+    // Editor-only chunk bounding boxes (renderer "Debug Chunk Bounds" toggle). Drawn after opaque depth exists,
+    // before transparent passes, so the boxes use scene depth instead of behaving as an overlay.
+    static void OnEditorCameraPostRender(Camera camera)
+    {
+        RemoveChunkBoundsCommandBuffer(camera);
+    }
+
+    static void UpdateChunkBoundsCommandBuffer(Camera camera)
+    {
+        RemoveChunkBoundsCommandBuffer(camera);
+        if (Application.isPlaying || camera == null)
+        {
+            return;
+        }
+        if (camera.cameraType != CameraType.SceneView && camera.cameraType != CameraType.Game)
+        {
+            return;
+        }
+
+        // Scope the overlay to the scene this camera actually renders. A Prefab-Stage SceneView camera has
+        // camera.scene set to the prefab preview scene (that is how the stage isolates its rendering); the main
+        // scene view / game view leave camera.scene invalid. Without this, a prefab camera would draw the main
+        // scene's boxes (out in the void) or nothing.
+        Scene cameraScene = camera.scene;
+        bool prefabCamera = cameraScene.IsValid()
+            && UnityEditor.SceneManagement.EditorSceneManager.IsPreviewScene(cameraScene)
+            && ShouldUseEditorScene(cameraScene);
+
+        // The debug toggles live on a GaussianSplatRenderer. A prefab stage usually has none (the renderer is an
+        // auto-created scene singleton, never saved into prefabs), so first look for a renderer in this camera's
+        // scene, then for a prefab camera fall back to the toggle from any enabled renderer so the choice carries
+        // into Prefab Mode. Match the original semantics: pick the first renderer that actually requests a debug draw.
+        GaussianSplatRenderer[] renderers = FindSceneObjects<GaussianSplatRenderer>(default(Scene));
+        bool drawBounds = false, drawCenterArea = false;
+        bool haveTarget = false;
+        Scene targetScene = default(Scene);
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            GaussianSplatRenderer renderer = renderers[i];
+            if (renderer == null || !renderer.enabled || (!renderer.debugDrawChunkBounds && !renderer.debugDrawChunkCenterArea))
+            {
+                continue;
+            }
+            Scene rendererScene = renderer.gameObject.scene;
+            bool rendererInPreview = UnityEditor.SceneManagement.EditorSceneManager.IsPreviewScene(rendererScene);
+            bool sameContext = prefabCamera ? (rendererScene == cameraScene) : !rendererInPreview;
+            if (!sameContext)
+            {
+                continue;
+            }
+            drawBounds = renderer.debugDrawChunkBounds;
+            drawCenterArea = renderer.debugDrawChunkCenterArea;
+            targetScene = rendererScene;
+            haveTarget = true;
+            break;
+        }
+        if (prefabCamera && !haveTarget)
+        {
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                GaussianSplatRenderer renderer = renderers[i];
+                if (renderer == null || !renderer.enabled || (!renderer.debugDrawChunkBounds && !renderer.debugDrawChunkCenterArea))
+                {
+                    continue;
+                }
+                drawBounds = renderer.debugDrawChunkBounds;
+                drawCenterArea = renderer.debugDrawChunkCenterArea;
+                targetScene = cameraScene; // draw the prefab stage's own LOD/splat objects
+                haveTarget = true;
+                break;
+            }
+        }
+        if (!haveTarget || (!drawBounds && !drawCenterArea))
+        {
+            return;
+        }
+
+        Material material = GetChunkBoundsDebugMaterial();
+        if (material == null)
+        {
+            return;
+        }
+        CommandBuffer commandBuffer = new CommandBuffer { name = "Gaussian Splat Chunk Bounds" };
+        bool hasCommands = AddChunkBoundsCommands(targetScene, material, commandBuffer, drawBounds, drawCenterArea);
+        if (!hasCommands)
+        {
+            commandBuffer.Release();
+            return;
+        }
+        camera.AddCommandBuffer(DEBUG_CHUNK_BOUNDS_CAMERA_EVENT, commandBuffer);
+        _chunkBoundsCommandBuffers[camera.GetInstanceID()] = commandBuffer;
+    }
+
+    static void RemoveChunkBoundsCommandBuffer(Camera camera)
+    {
+        if (camera == null)
+        {
+            return;
+        }
+        int cameraId = camera.GetInstanceID();
+        if (!_chunkBoundsCommandBuffers.TryGetValue(cameraId, out CommandBuffer commandBuffer))
+        {
+            return;
+        }
+        camera.RemoveCommandBuffer(DEBUG_CHUNK_BOUNDS_CAMERA_EVENT, commandBuffer);
+        commandBuffer.Release();
+        _chunkBoundsCommandBuffers.Remove(cameraId);
+    }
+
+    static bool AddChunkBoundsCommands(Scene scene, Material material, CommandBuffer commandBuffer, bool drawBounds, bool drawCenterArea)
+    {
+        bool hasCommands = false;
+        MaterialPropertyBlock properties = new MaterialPropertyBlock();
+        GaussianSplatObject[] lodObjects = FindSceneObjects<GaussianSplatObject>(default(Scene));
+        for (int i = 0; i < lodObjects.Length; i++)
+        {
+            GaussianSplatObject lo = lodObjects[i];
+            if (lo == null || lo.gameObject.scene != scene || !lo.gameObject.activeInHierarchy)
+            {
+                continue;
+            }
+            int chunkCount = lo.GetChunkCount();
+            if (chunkCount <= 0)
+            {
+                continue;
+            }
+            if (drawBounds && lo.chunkBoundsMinTexture != null && lo.chunkBoundsMaxTexture != null)
+            {
+                properties.Clear();
+                properties.SetTexture("_ChunkBoundsMin", lo.chunkBoundsMinTexture);
+                properties.SetTexture("_ChunkBoundsMax", lo.chunkBoundsMaxTexture);
+                properties.SetInt("_ChunkBoundsWidth", lo.chunkBoundsMinTexture.width);
+                properties.SetInt("_ChunkBoundsMaxRow", 0);
+                properties.SetInt("_CenterAreaMode", 0);
+                properties.SetInt("_ChunkCount", chunkCount);
+                properties.SetMatrix("_LocalToWorld", lo.transform.localToWorldMatrix);
+                properties.SetColor("_Color", new Color(0.1f, 1.0f, 0.2f, 0.6f));
+                properties.SetFloat("_ColorByIndex", 1.0f);
+                commandBuffer.DrawProcedural(Matrix4x4.identity, material, 0, MeshTopology.Lines, 24, chunkCount, properties);
+                hasCommands = true;
+            }
+            // The chunk range texture's 2nd block holds (center.xyz, area); draw the equal-area cube on the center.
+            if (drawCenterArea && lo.chunkRangeTexture != null && lo.chunkRangeTexture.height >= 2)
+            {
+                properties.Clear();
+                properties.SetTexture("_ChunkBoundsMin", lo.chunkRangeTexture);
+                properties.SetTexture("_ChunkBoundsMax", lo.chunkRangeTexture);
+                properties.SetInt("_ChunkBoundsWidth", lo.chunkRangeTexture.width);
+                properties.SetInt("_ChunkBoundsMaxRow", lo.chunkRangeTexture.height / 2);
+                properties.SetInt("_CenterAreaMode", 1);
+                properties.SetInt("_ChunkCount", chunkCount);
+                properties.SetMatrix("_LocalToWorld", lo.transform.localToWorldMatrix);
+                properties.SetColor("_Color", new Color(1.0f, 0.5f, 0.05f, 0.8f)); // orange = center+area cube
+                properties.SetFloat("_ColorByIndex", 0.0f);
+                commandBuffer.DrawProcedural(Matrix4x4.identity, material, 0, MeshTopology.Lines, 24, chunkCount, properties);
+                hasCommands = true;
+            }
+        }
+
+        return hasCommands;
     }
 
     static void ProcessEditorRefresh()
@@ -316,9 +402,8 @@ public partial class GaussianSplatRenderer
             GaussianSplatRenderer renderer = GetPrimarySceneRenderer(scene);
             if (renderer == null)
             {
-                if (FindSceneObjects<GaussianSplatObject>(scene).Length == 0 && FindSceneObjects<GaussianSplatLODObject>(scene).Length == 0)
+                if (FindSceneObjects<GaussianSplatObject>(scene).Length == 0)
                 {
-                    ApplyEditorVisibility(scene, false);
                     continue;
                 }
                 renderer = EnsureSceneRendererExists(scene);
@@ -333,7 +418,12 @@ public partial class GaussianSplatRenderer
 
     static void OnEditorCameraPreCull(Camera camera)
     {
-        if (Application.isPlaying || camera == null || camera.cameraType != CameraType.SceneView)
+        if (Application.isPlaying || camera == null)
+        {
+            return;
+        }
+        UpdateChunkBoundsCommandBuffer(camera);
+        if (camera.cameraType != CameraType.SceneView)
         {
             return;
         }
@@ -362,7 +452,7 @@ public partial class GaussianSplatRenderer
                         continue;
                     }
                 }
-                renderer.SortCameraViews(cameraPosition, cameraForward, cameraPosition, false, true);
+                renderer.SortCameraViews(cameraPosition, cameraForward, cameraPosition, false, true, camera.pixelHeight, camera.fieldOfView);
             }
         }
     }
@@ -396,340 +486,25 @@ public partial class GaussianSplatRenderer
 
     bool HasEditorSortRenderOrderTextures()
     {
-        return splatRenderOrder != null && splatRenderOrderPhoto != null;
-    }
-
-    void OnDrawGizmos()
-    {
-        if (EditorUtility.IsPersistent(this) || !ShouldUseEditorScene(gameObject.scene))
+        for (int tier = 0; tier < COMBINED_BUCKET_TIER_COUNT; tier++)
         {
-            return;
-        }
-
-        if (!debugDrawLodGrid)
-        {
-            SetEditorLodGridRendererEnabled(false);
-            return;
-        }
-
-        GaussianSplatCombiner sceneCombiner = GetCombiner();
-        if (sceneCombiner == null)
-        {
-            SetEditorLodGridRendererEnabled(false);
-            return;
-        }
-
-        EditorLodGridRenderState renderState = EnsureEditorLodGridRenderState();
-        if (renderState == null || renderState.mesh == null || renderState.meshRenderer == null)
-        {
-            return;
-        }
-
-        List<Vector3> vertices = new List<Vector3>();
-        List<Color> colors = new List<Color>();
-        List<int> indices = new List<int>();
-        GaussianSplatLODObject[] lodObjects = FindSceneObjects<GaussianSplatLODObject>(gameObject.scene);
-        for (int i = 0; i < lodObjects.Length; i++)
-        {
-            AppendEditorLodGrid(sceneCombiner, lodObjects[i], vertices, colors, indices);
-        }
-
-        if (vertices.Count == 0)
-        {
-            renderState.mesh.Clear();
-            SetEditorLodGridRendererEnabled(false);
-            return;
-        }
-
-        renderState.mesh.Clear();
-        renderState.mesh.indexFormat = vertices.Count > 65535 ? IndexFormat.UInt32 : IndexFormat.UInt16;
-        renderState.mesh.SetVertices(vertices);
-        renderState.mesh.SetColors(colors);
-        renderState.mesh.SetIndices(indices, MeshTopology.Lines, 0, true);
-        renderState.mesh.RecalculateBounds();
-        int renderQueue = (TryGetRenderQueueOverride(out int overrideQueue) ? overrideQueue : DEFAULT_START_RENDER_QUEUE) - 1;
-        renderState.material.renderQueue = Mathf.Clamp(renderQueue, 2000, 5000);
-        renderState.meshRenderer.sharedMaterial = renderState.material;
-        renderState.meshRenderer.enabled = true;
-        if (!renderState.gameObject.activeSelf)
-        {
-            renderState.gameObject.SetActive(true);
-        }
-    }
-
-    void AppendEditorLodGrid(GaussianSplatCombiner sceneCombiner, GaussianSplatLODObject lodObject, List<Vector3> vertices, List<Color> colors, List<int> indices)
-    {
-        if (lodObject == null || !lodObject.gameObject.activeInHierarchy || !lodObject.IsRenderable())
-        {
-            return;
-        }
-
-        Color[] chunkStates = sceneCombiner.GetEditorLODChunkStates(lodObject);
-        if (chunkStates == null || chunkStates.Length == 0)
-        {
-            return;
-        }
-
-        EditorLodGridCache cache = GetEditorLodGridCache(lodObject);
-        if (cache == null || cache.chunkBounds == null)
-        {
-            return;
-        }
-
-        int chunkCount = Mathf.Min(cache.chunkBounds.Length, chunkStates.Length);
-        Matrix4x4 localToWorld = lodObject.transform.localToWorldMatrix;
-        for (int chunkIndex = 0; chunkIndex < chunkCount; chunkIndex++)
-        {
-            Color state = chunkStates[chunkIndex];
-            int selectedCount = Mathf.RoundToInt(state.r);
-            float fraction = lodObject.chunkSize > 0 ? Mathf.Clamp01((float)selectedCount / lodObject.chunkSize) : 0.0f;
-            int colorIndex = Mathf.Clamp(Mathf.RoundToInt((1.0f - fraction) * (_editorLodGridColors.Length - 1)), 0, _editorLodGridColors.Length - 1);
-            Color color = selectedCount > 0
-                ? _editorLodGridColors[colorIndex]
-                : new Color(0.35f, 0.35f, 0.35f, 0.45f);
-
-            Bounds bounds = cache.chunkBounds[chunkIndex];
-            AppendWireBounds(localToWorld, bounds, color, vertices, colors, indices);
-        }
-    }
-
-    static void AppendWireBounds(Matrix4x4 localToWorld, Bounds bounds, Color color, List<Vector3> vertices, List<Color> colors, List<int> indices)
-    {
-        Vector3 center = bounds.center;
-        Vector3 extents = bounds.extents;
-        Vector3[] corners =
-        {
-            center + new Vector3(-extents.x, -extents.y, -extents.z),
-            center + new Vector3( extents.x, -extents.y, -extents.z),
-            center + new Vector3( extents.x, -extents.y,  extents.z),
-            center + new Vector3(-extents.x, -extents.y,  extents.z),
-            center + new Vector3(-extents.x,  extents.y, -extents.z),
-            center + new Vector3( extents.x,  extents.y, -extents.z),
-            center + new Vector3( extents.x,  extents.y,  extents.z),
-            center + new Vector3(-extents.x,  extents.y,  extents.z),
-        };
-        int[] edgePairs =
-        {
-            0, 1, 1, 2, 2, 3, 3, 0,
-            4, 5, 5, 6, 6, 7, 7, 4,
-            0, 4, 1, 5, 2, 6, 3, 7
-        };
-        int start = vertices.Count;
-        for (int i = 0; i < corners.Length; i++)
-        {
-            vertices.Add(localToWorld.MultiplyPoint3x4(corners[i]));
-            colors.Add(color);
-        }
-        for (int i = 0; i < edgePairs.Length; i++)
-        {
-            indices.Add(start + edgePairs[i]);
-        }
-    }
-
-    EditorLodGridRenderState EnsureEditorLodGridRenderState()
-    {
-        if (_editorLodGridRenderStates.TryGetValue(this, out EditorLodGridRenderState state)
-            && state != null
-            && state.gameObject != null
-            && state.meshFilter != null
-            && state.meshRenderer != null
-            && state.mesh != null
-            && state.material != null)
-        {
-            return state;
-        }
-
-        Shader shader = Shader.Find("Hidden/GaussianSplatting/LODDebugGrid");
-        if (shader == null)
-        {
-            SetEditorLodGridRendererEnabled(false);
-            return null;
-        }
-
-        GameObject gridObject = new GameObject("GaussianSplatLODGridDebug");
-        gridObject.hideFlags = HideFlags.HideAndDontSave;
-        gridObject.transform.position = Vector3.zero;
-        gridObject.transform.rotation = Quaternion.identity;
-        gridObject.transform.localScale = Vector3.one;
-        SceneManager.MoveGameObjectToScene(gridObject, gameObject.scene);
-
-        Mesh mesh = new Mesh { name = "GaussianSplatLODGridDebugMesh", hideFlags = HideFlags.HideAndDontSave };
-        Material material = new Material(shader)
-        {
-            name = "GaussianSplatLODGridDebugMaterial",
-            hideFlags = HideFlags.HideAndDontSave
-        };
-        MeshFilter meshFilter = gridObject.AddComponent<MeshFilter>();
-        MeshRenderer meshRenderer = gridObject.AddComponent<MeshRenderer>();
-        meshFilter.sharedMesh = mesh;
-        meshRenderer.sharedMaterial = material;
-        meshRenderer.shadowCastingMode = ShadowCastingMode.Off;
-        meshRenderer.receiveShadows = false;
-        meshRenderer.lightProbeUsage = LightProbeUsage.Off;
-        meshRenderer.reflectionProbeUsage = ReflectionProbeUsage.Off;
-        meshRenderer.motionVectorGenerationMode = MotionVectorGenerationMode.ForceNoMotion;
-        meshRenderer.allowOcclusionWhenDynamic = false;
-
-        state = new EditorLodGridRenderState
-        {
-            gameObject = gridObject,
-            meshFilter = meshFilter,
-            meshRenderer = meshRenderer,
-            mesh = mesh,
-            material = material
-        };
-        _editorLodGridRenderStates[this] = state;
-        return state;
-    }
-
-    void SetEditorLodGridRendererEnabled(bool enabled)
-    {
-        if (!_editorLodGridRenderStates.TryGetValue(this, out EditorLodGridRenderState state) || state == null || state.gameObject == null)
-        {
-            return;
-        }
-        if (state.meshRenderer != null)
-        {
-            state.meshRenderer.enabled = enabled;
-        }
-        if (state.gameObject.activeSelf != enabled)
-        {
-            state.gameObject.SetActive(enabled);
-        }
-    }
-
-    static EditorLodGridCache GetEditorLodGridCache(GaussianSplatLODObject lodObject)
-    {
-        int chunkCount = lodObject != null ? lodObject.GetChunkCount() : 0;
-        Texture2D minTexture = lodObject != null ? lodObject.chunkBoundsMinTexture : null;
-        Texture2D maxTexture = lodObject != null ? lodObject.chunkBoundsMaxTexture : null;
-        if (chunkCount <= 0 || minTexture == null || maxTexture == null)
-        {
-            return null;
-        }
-
-        int minTextureId = minTexture.GetInstanceID();
-        int maxTextureId = maxTexture.GetInstanceID();
-        if (_editorLodGridCaches.TryGetValue(lodObject, out EditorLodGridCache cache)
-            && cache != null
-            && cache.minTextureId == minTextureId
-            && cache.maxTextureId == maxTextureId
-            && cache.chunkCount == chunkCount
-            && cache.chunkBounds != null)
-        {
-            return cache;
-        }
-
-        Color[] minPixels = ReadEditorTexturePixels(minTexture);
-        Color[] maxPixels = ReadEditorTexturePixels(maxTexture);
-        if (minPixels == null || maxPixels == null)
-        {
-            return null;
-        }
-
-        cache = new EditorLodGridCache
-        {
-            minTextureId = minTextureId,
-            maxTextureId = maxTextureId,
-            chunkCount = chunkCount,
-            chunkBounds = new Bounds[chunkCount]
-        };
-
-        for (int chunkIndex = 0; chunkIndex < chunkCount; chunkIndex++)
-        {
-            Color minPixel = chunkIndex < minPixels.Length ? minPixels[chunkIndex] : Color.clear;
-            Color maxPixel = chunkIndex < maxPixels.Length ? maxPixels[chunkIndex] : Color.clear;
-            Vector3 min = new Vector3(minPixel.r, minPixel.g, minPixel.b);
-            Vector3 max = new Vector3(maxPixel.r, maxPixel.g, maxPixel.b);
-            Vector3 size = max - min;
-            cache.chunkBounds[chunkIndex] = new Bounds((min + max) * 0.5f, new Vector3(Mathf.Abs(size.x), Mathf.Abs(size.y), Mathf.Abs(size.z)));
-        }
-
-        _editorLodGridCaches[lodObject] = cache;
-        return cache;
-    }
-
-    static Color[] ReadEditorTexturePixels(Texture texture)
-    {
-        if (texture == null || texture.width <= 0 || texture.height <= 0)
-        {
-            return null;
-        }
-
-        RenderTexture previous = RenderTexture.active;
-        RenderTexture temp = RenderTexture.GetTemporary(texture.width, texture.height, 0, RenderTextureFormat.ARGBFloat, RenderTextureReadWrite.Linear);
-        Texture2D readback = null;
-        try
-        {
-            Graphics.Blit(texture, temp);
-            RenderTexture.active = temp;
-            readback = new Texture2D(texture.width, texture.height, TextureFormat.RGBAFloat, false, true);
-            readback.ReadPixels(new Rect(0, 0, texture.width, texture.height), 0, 0, false);
-            readback.Apply(false, false);
-            return readback.GetPixels();
-        }
-        finally
-        {
-            RenderTexture.active = previous;
-            RenderTexture.ReleaseTemporary(temp);
-            if (readback != null)
+            if (TryGetTierTexture(splatRenderOrderByBucket, tier, out RenderTexture order)
+                && TryGetTierTexture(splatRenderOrderPhotoByBucket, tier, out RenderTexture orderPhoto))
             {
-                DestroyImmediate(readback);
+                return true;
             }
         }
-    }
-
-    static Color SamplePackedEditorPixel(Color[] pixels, int textureWidth, int index)
-    {
-        if (pixels == null || pixels.Length == 0 || textureWidth <= 0)
-        {
-            return Color.clear;
-        }
-
-        int blocksPerRow = Mathf.Max(1, textureWidth >> 2);
-        int blockIndex = index >> 4;
-        int blockX = blockIndex & (blocksPerRow - 1);
-        int blockY = blockIndex >> ComputeEditorTextureCoordShift(blocksPerRow);
-        int inBlock = index & 15;
-        int x = blockX * 4 + (inBlock & 3);
-        int y = blockY * 4 + (inBlock >> 2);
-        int pixelIndex = y * textureWidth + x;
-        return pixelIndex >= 0 && pixelIndex < pixels.Length ? pixels[pixelIndex] : Color.clear;
-    }
-
-    static int ComputeEditorTextureCoordShift(int width)
-    {
-        int shift = 0;
-        width = Mathf.Max(1, width);
-        while (width > 1)
-        {
-            width >>= 1;
-            shift++;
-        }
-        return shift;
+        return false;
     }
 
     bool RefreshCachedSceneSplatObjects()
     {
-        GaussianSplatObject[] splats = FindSceneObjects<GaussianSplatObject>(gameObject.scene);
-        GaussianSplatLODObject[] lodObjects = FindSceneObjects<GaussianSplatLODObject>(gameObject.scene);
-        GameObject[] roots = new GameObject[splats.Length];
+        GaussianSplatObject[] lodObjects = FindSceneObjects<GaussianSplatObject>(gameObject.scene);
         GameObject[] lodRoots = new GameObject[lodObjects.Length];
         bool changed = false;
-        for (int i = 0; i < splats.Length; i++)
-        {
-            GaussianSplatObject splat = splats[i];
-            roots[i] = splat != null ? splat.gameObject : null;
-            if (splat != null && splat.gaussianSplatRenderer != this)
-            {
-                splat.gaussianSplatRenderer = this;
-                EditorUtility.SetDirty(splat);
-                changed = true;
-            }
-        }
         for (int i = 0; i < lodObjects.Length; i++)
         {
-            GaussianSplatLODObject lodObject = lodObjects[i];
+            GaussianSplatObject lodObject = lodObjects[i];
             lodRoots[i] = lodObject != null ? lodObject.gameObject : null;
             if (lodObject != null && lodObject.gaussianSplatRenderer != this)
             {
@@ -738,17 +513,9 @@ public partial class GaussianSplatRenderer
                 changed = true;
             }
         }
-        if (!changed && cachedSceneSplatObjects != null && cachedSceneSplatObjects.Length == roots.Length && cachedSceneLODObjects != null && cachedSceneLODObjects.Length == lodRoots.Length)
+        if (!changed && cachedSceneLODObjects != null && cachedSceneLODObjects.Length == lodRoots.Length)
         {
-            for (int i = 0; i < roots.Length; i++)
-            {
-                if (cachedSceneSplatObjects[i] != roots[i])
-                {
-                    changed = true;
-                    break;
-                }
-            }
-            for (int i = 0; !changed && i < lodRoots.Length; i++)
+            for (int i = 0; i < lodRoots.Length; i++)
             {
                 if (cachedSceneLODObjects[i] != lodRoots[i])
                 {
@@ -761,7 +528,6 @@ public partial class GaussianSplatRenderer
                 return false;
             }
         }
-        cachedSceneSplatObjects = roots;
         cachedSceneLODObjects = lodRoots;
         ResetRuntimeCache();
         return true;
@@ -825,12 +591,204 @@ public partial class GaussianSplatRenderer
         EnsureRadixSortMaterials();
         UpdateSortingResourceTextures();
         GaussianSplatCombiner sceneCombiner = GetCombiner();
-        if (sceneCombiner != null && sceneCombiner.EnsureGeneratedHierarchyState(!IsCombinedRenderingMode()))
+        if (sceneCombiner != null && sceneCombiner.EnsureGeneratedHierarchyState(false))
         {
             EditorUtility.SetDirty(sceneCombiner);
         }
-        ApplyEditorVisibility(gameObject.scene, IsCombinedRenderingMode());
+        ApplyEditorDebugRenderingMode();
         GaussianSplatRendererUI.RequestEditorRefresh();
+    }
+
+    public bool PrepareEditorCameraRender(Camera camera)
+    {
+        if (camera == null)
+        {
+            return false;
+        }
+        if (!HasEditorSortRenderOrderTextures())
+        {
+            RefreshEditorResourcesAndVisibility();
+            if (!HasEditorSortRenderOrderTextures())
+            {
+                return false;
+            }
+        }
+        SortCameraViews(GetEditorCameraWorldPosition(camera), GetEditorCameraWorldForward(camera),
+            GetEditorCameraWorldPosition(camera), false, true, camera.pixelHeight, camera.fieldOfView);
+        return true;
+    }
+
+    public bool PrepareEditorColliderCameraRender(Camera camera, Matrix4x4 worldToBox, float boxHeight)
+    {
+        if (camera == null)
+        {
+            return false;
+        }
+        if (!HasEditorSortRenderOrderTextures())
+        {
+            RefreshEditorResourcesAndVisibility();
+            if (!HasEditorSortRenderOrderTextures())
+            {
+                return false;
+            }
+        }
+        if (!EnsureInitialized())
+        {
+            return false;
+        }
+
+        Vector3 cameraPosition = GetEditorCameraWorldPosition(camera);
+        Vector3 cameraForward = GetEditorCameraWorldForward(camera);
+        GaussianSplatCombiner sceneCombiner = GetCombiner();
+        if (sceneCombiner == null)
+        {
+            return false;
+        }
+
+        sceneCombiner.SetLodSplatTargetScale(1.0f);
+        sceneCombiner.SetLodDirectionalBias(GetCombinedLodDirectionalBias());
+        sceneCombiner.SetLodShBand(GetCurrentSHBand());
+        sceneCombiner.SetEditorDebugLodColors(false);
+
+        Vector4 fullDetailLodParams = new Vector4(-GaussianSplatObject.MAX_LOD_ALPHA_LOG2, 0.0f, 0.0f, 0.0f);
+        if (!UpdateCombinedTexturesForSort(sceneCombiner, cameraPosition, cameraPosition, cameraForward, cameraPosition,
+            false, 0, fullDetailLodParams, false, true, true))
+        {
+            return false;
+        }
+
+        float previousPlanarSort = keyValueMat.HasProperty("_GS_ColliderPlanarSort") ? keyValueMat.GetFloat("_GS_ColliderPlanarSort") : 0.0f;
+        Matrix4x4 objectToBox = _sortedRenderer != null ? worldToBox * _sortedRenderer.transform.localToWorldMatrix : worldToBox;
+        keyValueMat.SetFloat("_GS_ColliderPlanarSort", 1.0f);
+        keyValueMat.SetMatrix("_GS_ColliderObjectToBox", objectToBox);
+        keyValueMat.SetFloat("_GS_ColliderBoxHeight", Mathf.Max(boxHeight, 1e-6f));
+        try
+        {
+            SetSortCameraPos(cameraPosition);
+            _radixSort.RunFullSortForEditor(splatRenderOrder, SCREEN_CAMERA_ID);
+            _completedCameraPos[SCREEN_CAMERA_ID] = QuantizePosition(cameraPosition);
+            _completedCameraWorldPos[SCREEN_CAMERA_ID] = cameraPosition;
+            _hasCompletedSort[SCREEN_CAMERA_ID] = true;
+            OnScreenSortPublished();
+            return true;
+        }
+        finally
+        {
+            keyValueMat.SetFloat("_GS_ColliderPlanarSort", previousPlanarSort);
+        }
+    }
+
+    void ApplyEditorDebugRenderingMode()
+    {
+        bool debug = debugRenderOpaqueEllipsoids;
+        // The debug-ellipsoid swap applies to the combined renderer and its per-chunk child renderers.
+        GaussianSplatCombiner sceneCombiner = GetCombiner();
+        MeshRenderer combinedRenderer = sceneCombiner != null ? sceneCombiner.GetCombinedSortedRenderer() : null;
+        if (combinedRenderer == null)
+        {
+            return;
+        }
+
+        ApplyDebugRenderingMode(combinedRenderer, debug);
+        MeshRenderer[] chunkRenderers = combinedRenderer.GetComponentsInChildren<MeshRenderer>(true);
+        for (int i = 0; chunkRenderers != null && i < chunkRenderers.Length; i++)
+        {
+            ApplyDebugRenderingMode(chunkRenderers[i], debug);
+        }
+    }
+
+    public void ApplyEditorDebugRenderingModeNow()
+    {
+        ApplyEditorDebugRenderingMode();
+    }
+
+    // Editor-only "Debug Opaque Ellipsoids": swap each splat material to the editor-only debug-ellipsoid
+    // replacement shader (and restore when off). The production shaders contain no debug pass, so this is
+    // purely an editor preview and ships nothing. Idempotent + refresh-safe: a full refresh re-asserts the
+    // production materials, after which this re-swaps them; turning debug off restores from the cache.
+    static void ApplyDebugRenderingMode(MeshRenderer renderer, bool debug)
+    {
+        if (renderer == null)
+        {
+            return;
+        }
+        Material[] current = renderer.sharedMaterials;
+        if (current == null || current.Length == 0)
+        {
+            return;
+        }
+        bool currentlyDebug = false;
+        for (int i = 0; i < current.Length; i++)
+        {
+            if (IsDebugMaterial(current[i])) { currentlyDebug = true; break; }
+        }
+
+        if (debug)
+        {
+            if (currentlyDebug)
+            {
+                return;
+            }
+            Shader debugShader = GetDebugEllipsoidShader();
+            if (debugShader == null)
+            {
+                return;
+            }
+            Material[] swapped = new Material[current.Length];
+            for (int i = 0; i < current.Length; i++)
+            {
+                swapped[i] = CreateDebugMaterial(current[i], debugShader);
+            }
+            _debugSwappedMaterials[renderer] = current;
+            renderer.sharedMaterials = swapped;
+        }
+        else
+        {
+            if (!currentlyDebug)
+            {
+                return;
+            }
+            if (_debugSwappedMaterials.TryGetValue(renderer, out Material[] original))
+            {
+                _debugSwappedMaterials.Remove(renderer);
+                renderer.sharedMaterials = original;
+            }
+            for (int i = 0; i < current.Length; i++)
+            {
+                if (IsDebugMaterial(current[i]))
+                {
+                    Object.DestroyImmediate(current[i]);
+                }
+            }
+        }
+    }
+
+    static Shader GetDebugEllipsoidShader()
+    {
+        if (_debugEllipsoidShader == null)
+        {
+            _debugEllipsoidShader = Shader.Find("Hidden/VRChatGaussianSplatting/DebugEllipsoid");
+        }
+        return _debugEllipsoidShader;
+    }
+
+    static bool IsDebugMaterial(Material material)
+    {
+        return material != null && material.shader != null && material.shader == GetDebugEllipsoidShader();
+    }
+
+    // Only splat materials (those exposing _GS_Positions) get the debug shader; non-splat materials
+    // (AlphaDepthMask, sRGB convert) are passed through unchanged so they still bind correctly.
+    static Material CreateDebugMaterial(Material source, Shader debugShader)
+    {
+        if (source == null || source.shader == null || !source.HasProperty("_GS_Positions"))
+        {
+            return source;
+        }
+        Material debugMaterial = new Material(source) { hideFlags = HideFlags.HideAndDontSave };
+        debugMaterial.shader = debugShader;
+        debugMaterial.renderQueue = DEBUG_ELLIPSOID_RENDER_QUEUE;
+        return debugMaterial;
     }
 
     void OnValidate()
@@ -859,6 +817,9 @@ public partial class GaussianSplatRenderer
         MigrateEditorSerializedDefaults();
         combinedLodTargetScale = combinedLodTargetScale > 0.0f ? Mathf.Clamp(combinedLodTargetScale, 0.1f, 1.0f) : DEFAULT_COMBINED_LOD_TARGET_SCALE;
         combinedLodDirectionalBias = combinedLodDirectionalBias > 0.0f ? Mathf.Clamp(combinedLodDirectionalBias, 1.0f, 16.0f) : DEFAULT_COMBINED_LOD_DIRECTIONAL_BIAS;
+        requestedSHBand = Mathf.Clamp(requestedSHBand, 0, 3);
+        ResetCameraPositions();
+        SceneView.RepaintAll();
         QueueEditorRefresh();
     }
 
@@ -884,10 +845,27 @@ public partial class GaussianSplatRenderer
         {
             return;
         }
+        bool changed = false;
+        Material computeKeyValues = AssetDatabase.LoadAssetAtPath<Material>("Assets/VRChatGaussianSplatting/Resources/Materials/VRChatGaussianSplatting_ComputeKeyValue.mat");
+        if (computeKeyValues != null && radixSort.computeKeyValues != computeKeyValues)
+        {
+            radixSort.computeKeyValues = computeKeyValues;
+            changed = true;
+        }
+        Material radixSortMaterial = AssetDatabase.LoadAssetAtPath<Material>("Assets/VRChatGaussianSplatting/RadixSort/Materials/Misha_RadixSort.mat");
+        if (radixSortMaterial != null && radixSort.radixSort != radixSortMaterial)
+        {
+            radixSort.radixSort = radixSortMaterial;
+            changed = true;
+        }
         Material copyMaterial = AssetDatabase.LoadAssetAtPath<Material>("Assets/VRChatGaussianSplatting/Resources/Materials/VRChatGaussianSplatting_CopyRenderOrder.mat");
         if (copyMaterial != null && radixSort.copySortedOrder != copyMaterial)
         {
             radixSort.copySortedOrder = copyMaterial;
+            changed = true;
+        }
+        if (changed)
+        {
             EditorUtility.SetDirty(radixSort);
         }
     }
@@ -914,7 +892,7 @@ public partial class GaussianSplatRenderer
             targetTexture.Create();
             return true;
         }
-        return PlySplatImporter.EnsureSortRenderTexture(ref targetTexture, folderPath, assetName, width, height, format, useMipMap, volumeDepth);
+        return GaussianSplatImporter.EnsureSortRenderTexture(ref targetTexture, folderPath, assetName, width, height, format, useMipMap, volumeDepth);
     }
 
     public static bool MaterialArraysMatch(Material[] left, Material[] right)
@@ -937,6 +915,40 @@ public partial class GaussianSplatRenderer
         return true;
     }
 
+    static bool EnsureBucketArray(ref RenderTexture[] textures)
+    {
+        if (textures != null && textures.Length == COMBINED_BUCKET_TIER_COUNT)
+        {
+            return false;
+        }
+        RenderTexture[] resized = new RenderTexture[COMBINED_BUCKET_TIER_COUNT];
+        for (int i = 0; textures != null && i < Mathf.Min(textures.Length, resized.Length); i++)
+        {
+            resized[i] = textures[i];
+        }
+        textures = resized;
+        return true;
+    }
+
+    static bool AssignBucketTexture(ref RenderTexture target, RenderTexture source)
+    {
+        if (target == source)
+        {
+            return false;
+        }
+        target = source;
+        return true;
+    }
+
+    // Every object is a computed-LOD object, so the whole active set is thinnable: total = min(thinnableSum,
+    // budget), clamped to the combined cap. (internal for the test assembly.)
+    internal static int ComputeCombinedTierCount(int thinnableSum, int lodBudget)
+    {
+        int thinnable = lodBudget > 0 ? Mathf.Min(thinnableSum, Mathf.Max(0, lodBudget)) : thinnableSum;
+        return Mathf.Min(MAX_COMBINED_SPLAT_COUNT, Mathf.Max(0, thinnable));
+    }
+
+
     void UpdateSortingResourceTextures()
     {
         RadixSort radixSort = GetComponent<RadixSort>();
@@ -944,84 +956,55 @@ public partial class GaussianSplatRenderer
         {
             return;
         }
-        int largestCount = 0;
-        int combinedCount = 0;
-        int lodMaxCount = 0;
-        for (int i = 0; cachedSceneSplatObjects != null && i < cachedSceneSplatObjects.Length; i++)
-        {
-            GaussianSplatObject splat = cachedSceneSplatObjects[i] != null ? cachedSceneSplatObjects[i].GetComponent<GaussianSplatObject>() : null;
-            if (!TryGetSplatSource(splat, out MeshRenderer renderer, out Material primaryMaterial, out Texture positions, out int count))
-            {
-                continue;
-            }
-            combinedCount += count;
-            if (count > largestCount)
-            {
-                largestCount = count;
-            }
-        }
+        int thinnableSum = 0;   // every computed-LOD object; the budget caps these
         for (int i = 0; cachedSceneLODObjects != null && i < cachedSceneLODObjects.Length; i++)
         {
-            GaussianSplatLODObject lodObject = cachedSceneLODObjects[i] != null ? cachedSceneLODObjects[i].GetComponent<GaussianSplatLODObject>() : null;
+            GaussianSplatObject lodObject = cachedSceneLODObjects[i] != null ? cachedSceneLODObjects[i].GetComponent<GaussianSplatObject>() : null;
             if (lodObject == null || !lodObject.IsRenderable())
             {
                 continue;
             }
-            int lodCount = lodObject.GetMaxLOD0SplatCount();
-            lodMaxCount += lodCount;
+            thinnableSum += lodObject.GetMaxLOD0SplatCount();
         }
-        int effectiveLodBudget = GetEffectiveCombinedLodSplatBudget();
-        int combinedLodCount = effectiveLodBudget > 0 ? Mathf.Min(lodMaxCount, effectiveLodBudget) : lodMaxCount;
-        combinedCount += combinedLodCount;
-        if (largestCount <= 0 && (!IsCombinedRenderingMode() || combinedCount <= 0))
+        // Max splats the scene can ever render = min(thinnableSum, highest-quality budget).
+        int maxReachableTotal = ComputeCombinedTierCount(thinnableSum, GetCombinedLodSplatBudgetAtQuality(1.0f));
+        if (maxReachableTotal <= 0)
         {
             return;
         }
-        int safeCombinedCount = Mathf.Min(combinedCount, MAX_COMBINED_SPLAT_COUNT);
-        int requiredElementCount = IsCombinedRenderingMode() ? Mathf.Max(largestCount, safeCombinedCount) : largestCount;
-        int optimalPot = Mathf.NextPowerOfTwo(Mathf.Max(1, requiredElementCount));
-        int optimalPotLog2 = Mathf.CeilToInt(Mathf.Log(optimalPot, 2));
-        int requiredHeight = 1 << (optimalPotLog2 / 2);
-        int requiredWidth = 1 << (optimalPotLog2 / 2 + optimalPotLog2 % 2);
-        int histogramPotLog2 = Mathf.Max(0, optimalPotLog2 - RadixSort.BitsPerPass);
-        int requiredHistogramHeight = 1 << (histogramPotLog2 / 2);
-        int requiredHistogramWidth = 1 << (histogramPotLog2 / 2 + histogramPotLog2 % 2);
-        string resourceFolderPath = PlySplatImporter.GetSceneTempResourceFolderPath(gameObject.scene, "RTs");
-        string assetPrefix = PlySplatImporter.SanitizeAssetName(name);
+        // Pool-backed sort textures: tier i == RT bucket i (256K/1M/4M/16M). Assign the shared pool sets into
+        // every tier slot; the runtime picks the bucket by the live rendered count. The baseline (non-array)
+        // fields default to the largest bucket the scene can reach (the runtime swap overrides them per frame).
+        int safeCombinedCount = maxReachableTotal;
         bool resourcesChanged = false;
-        resourcesChanged |= EnsureSortRenderTexture(ref radixSort.keyValues0, resourceFolderPath, assetPrefix + "_KeyValues0", requiredWidth, requiredHeight, RenderTextureFormat.RGFloat, false, 1);
-        resourcesChanged |= EnsureSortRenderTexture(ref radixSort.keyValues1, resourceFolderPath, assetPrefix + "_KeyValues1", requiredWidth, requiredHeight, RenderTextureFormat.RGFloat, false, 1);
-        resourcesChanged |= EnsureSortRenderTexture(ref radixSort.histograms, resourceFolderPath, assetPrefix + "_Histograms", requiredHistogramWidth, requiredHistogramHeight, RenderTextureFormat.ARGBFloat, false, 1);
-        resourcesChanged |= EnsureSortRenderTexture(ref radixSort.prefixSums, resourceFolderPath, assetPrefix + "_PrefixSums", requiredWidth, requiredHeight, RenderTextureFormat.RFloat, true, 1);
-        resourcesChanged |= EnsureSortRenderTexture(ref splatRenderOrder, resourceFolderPath, assetPrefix + "_SplatRenderOrderScreen", requiredWidth, requiredHeight, RenderTextureFormat.RFloat, false, 1);
-        resourcesChanged |= EnsureSortRenderTexture(ref splatRenderOrderPhoto, resourceFolderPath, assetPrefix + "_SplatRenderOrderPhoto", requiredWidth, requiredHeight, RenderTextureFormat.RFloat, false, 1);
+        resourcesChanged |= EnsureBucketArray(ref splatRenderOrderByBucket);
+        resourcesChanged |= EnsureBucketArray(ref splatRenderOrderPhotoByBucket);
+        resourcesChanged |= EnsureBucketArray(ref radixSort.keyValues0ByBucket);
+        resourcesChanged |= EnsureBucketArray(ref radixSort.keyValues1ByBucket);
+        resourcesChanged |= EnsureBucketArray(ref radixSort.histogramsByBucket);
+        resourcesChanged |= EnsureBucketArray(ref radixSort.prefixSumsByBucket);
+        for (int b = 0; b < COMBINED_BUCKET_TIER_COUNT; b++)
+        {
+            GaussianSplatRTPool.BucketSet set = GaussianSplatRTPool.LoadBucket(b);
+            resourcesChanged |= AssignBucketTexture(ref radixSort.keyValues0ByBucket[b], set.keyValues0);
+            resourcesChanged |= AssignBucketTexture(ref radixSort.keyValues1ByBucket[b], set.keyValues1);
+            resourcesChanged |= AssignBucketTexture(ref radixSort.histogramsByBucket[b], set.histograms);
+            resourcesChanged |= AssignBucketTexture(ref radixSort.prefixSumsByBucket[b], set.prefixSums);
+            resourcesChanged |= AssignBucketTexture(ref splatRenderOrderByBucket[b], set.splatRenderOrder);
+            resourcesChanged |= AssignBucketTexture(ref splatRenderOrderPhotoByBucket[b], set.splatRenderOrderPhoto);
+        }
         if (resourcesChanged)
         {
             EditorUtility.SetDirty(radixSort);
             EditorUtility.SetDirty(this);
         }
         ApplyEditorRenderQueueOverride();
-        if (UnityEditor.SceneManagement.EditorSceneManager.IsPreviewScene(gameObject.scene) && !IsCombinedRenderingMode())
-        {
-            ResetRuntimeCache();
-            return;
-        }
         combiner = GaussianSplatCombiner.EnsureSceneCombiner(this);
         if (combiner == null)
         {
             return;
         }
         combiner.UpdateResources(safeCombinedCount);
-        if (!IsCombinedRenderingMode())
-        {
-            MeshRenderer combinedSortedRenderer = combiner.GetCombinedSortedRenderer();
-            if (combinedSortedRenderer != null && combinedSortedRenderer.gameObject.activeSelf)
-            {
-                Undo.RecordObject(combinedSortedRenderer.gameObject, "Toggle Combined Gaussian Splat Renderer");
-                combinedSortedRenderer.gameObject.SetActive(false);
-                EditorUtility.SetDirty(combinedSortedRenderer.gameObject);
-            }
-        }
         ResetRuntimeCache();
     }
 
@@ -1038,21 +1021,19 @@ public partial class GaussianSplatRenderer
             return;
         }
         int renderQueue = Mathf.Clamp(startRenderQueue, 2000, 5000);
-        for (int i = 0; cachedSceneSplatObjects != null && i < cachedSceneSplatObjects.Length; i++)
+        // Override the combined renderer's material queues.
+        GaussianSplatCombiner sceneCombiner = GetCombiner();
+        MeshRenderer combinedRenderer = sceneCombiner != null ? sceneCombiner.GetCombinedSortedRenderer() : null;
+        Material[] materials = combinedRenderer != null ? combinedRenderer.sharedMaterials : null;
+        for (int materialIndex = 0; materials != null && materialIndex < materials.Length; materialIndex++)
         {
-            GaussianSplatObject splat = cachedSceneSplatObjects[i] != null ? cachedSceneSplatObjects[i].GetComponent<GaussianSplatObject>() : null;
-            MeshRenderer renderer = splat != null ? splat.GetSortedRenderer() : null;
-            Material[] materials = renderer != null ? renderer.sharedMaterials : null;
-            for (int materialIndex = 0; materials != null && materialIndex < materials.Length; materialIndex++)
+            Material material = materials[materialIndex];
+            if (material == null || material.renderQueue == renderQueue + materialIndex)
             {
-                Material material = materials[materialIndex];
-                if (material == null || material.renderQueue == renderQueue + materialIndex)
-                {
-                    continue;
-                }
-                material.renderQueue = renderQueue + materialIndex;
-                EditorUtility.SetDirty(material);
+                continue;
             }
+            material.renderQueue = renderQueue + materialIndex;
+            EditorUtility.SetDirty(material);
         }
     }
 }

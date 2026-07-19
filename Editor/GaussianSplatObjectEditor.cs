@@ -1,444 +1,39 @@
 #if UNITY_EDITOR
-using System.Collections.Generic;
-using System.IO;
 using System.Reflection;
 using UdonSharpEditor;
 using UnityEditor;
 using UnityEngine;
-using UnityEngine.Profiling;
 
 namespace GaussianSplatting.Editor
 {
+    // Custom inspector for GaussianSplatObject. The component stores the imported splat data as arrays of
+    // multi-hundred-MB Texture2D references (positions/colors/rotations/scales/sh) plus chunk-metadata textures.
+    // Unity's DEFAULT inspector draws an object-field THUMBNAIL for each, which decodes every referenced texture
+    // on selection - pulling gigabytes into memory and freezing the editor when these prefab assets are selected
+    // or moved in the Project window. This editor draws only user display metadata + a header-only footprint
+    // summary (no pixel decode) and lists the source textures read-only (name/dims/size, no thumbnails), so selecting the
+    // asset loads nothing heavy.
     [CustomEditor(typeof(GaussianSplatObject))]
     [CanEditMultipleObjects]
     class GaussianSplatObjectEditor : UnityEditor.Editor
     {
-        struct TextureStats
-        {
-            public string propertyName;
-            public string textureName;
-            public string dimensions;
-            public string format;
-            public long gpuBytes;
-            public long runtimeBytes;
-            public long assetBytes;
-        }
-
-        struct InspectorStats
-        {
-            public MeshRenderer sortedRenderer;
-            public int materialCount;
-            public int splatMaterialCount;
-            public int actualSplatCount;
-            public int maxShBand;
-            public bool usesPrecomputedSorting;
-            public string dataResolution;
-            public long totalGpuBytes;
-            public long totalRuntimeBytes;
-            public long totalAssetBytes;
-            public List<TextureStats> textures;
-        }
-
+        // Storage size from the texture header (dims/format/mips) - does NOT decode or upload pixel data.
         static readonly MethodInfo GetStorageMemorySizeLongMethod = typeof(UnityEditor.Editor).Assembly
             .GetType("UnityEditor.TextureUtil")
             ?.GetMethod("GetStorageMemorySizeLong", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic, null, new[] { typeof(Texture) }, null);
 
-        SerializedProperty _gaussianSplatRenderer;
-        SerializedProperty _sortedObject;
-        SerializedProperty _sortedRenderer;
+        bool _showSourceTextures;
+        bool _showTextureSets;
         SerializedProperty _splatName;
         SerializedProperty _description;
 
         void OnEnable()
         {
-            _gaussianSplatRenderer = serializedObject.FindProperty("gaussianSplatRenderer");
-            _sortedObject = serializedObject.FindProperty("sortedObject");
-            _sortedRenderer = serializedObject.FindProperty("sortedRenderer");
             _splatName = serializedObject.FindProperty("splatName");
             _description = serializedObject.FindProperty("description");
         }
 
         public override void OnInspectorGUI()
-        {
-            DrawUdonSharpHeader();
-
-            serializedObject.Update();
-
-            DrawSettingsGroup(GSEditorText.T("References", "参照"), DrawReferenceFields);
-            DrawSettingsGroup(GSEditorText.T("UI", "UI"), DrawUiFields);
-
-            if (serializedObject.isEditingMultipleObjects)
-            {
-                EditorGUILayout.Space();
-                EditorGUILayout.HelpBox(GSEditorText.T(
-                    "General info is shown for a single selected splat object.",
-                    "一般情報は、単一の Splat オブジェクトを選択した場合に表示されます。"), MessageType.Info);
-            }
-            else
-            {
-                InspectorStats stats = GatherStats((GaussianSplatObject)target);
-
-                EditorGUILayout.Space();
-                DrawGeneralInfo(stats);
-
-                EditorGUILayout.Space();
-                DrawTextureInfo(stats);
-            }
-
-            serializedObject.ApplyModifiedProperties();
-
-            EditorGUILayout.Space();
-            DrawUdonSharpUtilities();
-        }
-
-        void DrawReferenceFields()
-        {
-            EditorGUILayout.PropertyField(_gaussianSplatRenderer, GSEditorText.C("Gaussian Splat Renderer", "Gaussian Splat レンダラー"));
-            EditorGUILayout.PropertyField(_sortedObject, GSEditorText.C("Sorted Object", "ソート済みオブジェクト"));
-            EditorGUILayout.PropertyField(_sortedRenderer, GSEditorText.C("Sorted Renderer", "ソート済みレンダラー"));
-        }
-
-        void DrawUiFields()
-        {
-            EditorGUILayout.PropertyField(_splatName, GSEditorText.C("Name", "名前"));
-            EditorGUILayout.PropertyField(_description, GSEditorText.C("Description", "説明"));
-        }
-
-        static void DrawGeneralInfo(InspectorStats stats)
-        {
-            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-            EditorGUILayout.LabelField(GSEditorText.T("General Info", "一般情報"), EditorStyles.boldLabel);
-
-            if (stats.sortedRenderer == null)
-            {
-                EditorGUILayout.HelpBox(GSEditorText.T(
-                    "No sorted renderer was found for this splat object.",
-                    "この Splat オブジェクトにソート済みレンダラーが見つかりません。"), MessageType.Info);
-            }
-            else
-            {
-                DrawInfoRow(GSEditorText.T("Sorted Renderer", "ソート済みレンダラー"), stats.sortedRenderer.name);
-                DrawInfoRow(GSEditorText.T("Material Count", "マテリアル数"), stats.materialCount.ToString());
-                DrawInfoRow(GSEditorText.T("Splat Materials", "Splat マテリアル"), stats.splatMaterialCount.ToString());
-                DrawInfoRow(GSEditorText.T("Actual Splats", "実 Splat 数"), stats.actualSplatCount > 0 ? stats.actualSplatCount.ToString("N0") : GSEditorText.T("Unknown", "不明"));
-                DrawInfoRow(GSEditorText.T("Max SH Band", "最大 SH バンド"), stats.maxShBand.ToString());
-                DrawInfoRow(GSEditorText.T("Data Resolution", "データ解像度"), string.IsNullOrEmpty(stats.dataResolution) ? GSEditorText.T("Unknown", "不明") : stats.dataResolution);
-                DrawInfoRow(GSEditorText.T("Precomputed Sorting", "事前計算ソート"), stats.usesPrecomputedSorting ? GSEditorText.T("Yes", "はい") : GSEditorText.T("No", "いいえ"));
-                DrawInfoRow(GSEditorText.T("Unique Textures", "ユニークテクスチャ"), stats.textures.Count.ToString());
-            }
-
-            EditorGUILayout.EndVertical();
-        }
-
-        static void DrawTextureInfo(InspectorStats stats)
-        {
-            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-            EditorGUILayout.LabelField(GSEditorText.T("Texture Footprint", "テクスチャ使用量"), EditorStyles.boldLabel);
-
-            if (stats.textures.Count == 0)
-            {
-                EditorGUILayout.HelpBox(GSEditorText.T(
-                    "No textures were found on the shared materials for this splat object.",
-                    "この Splat オブジェクトの共有マテリアルにテクスチャが見つかりません。"), MessageType.Info);
-                EditorGUILayout.EndVertical();
-                return;
-            }
-
-            DrawInfoRow(GSEditorText.T("Estimated GPU Memory", "推定 GPU メモリ"), EditorUtility.FormatBytes(stats.totalGpuBytes));
-            DrawInfoRow(GSEditorText.T("Runtime Memory", "ランタイムメモリ"), EditorUtility.FormatBytes(stats.totalRuntimeBytes));
-            DrawInfoRow(GSEditorText.T("Asset Size", "アセットサイズ"), EditorUtility.FormatBytes(stats.totalAssetBytes));
-
-            for (int i = 0; i < stats.textures.Count; ++i)
-            {
-                TextureStats texture = stats.textures[i];
-                EditorGUILayout.Space(3f);
-                EditorGUILayout.LabelField($"{texture.propertyName} ({texture.textureName})", EditorStyles.boldLabel);
-                DrawInfoRow(GSEditorText.T("Dimensions", "寸法"), texture.dimensions);
-                DrawInfoRow(GSEditorText.T("Format", "形式"), texture.format);
-                DrawInfoRow(GSEditorText.T("Estimated GPU Memory", "推定 GPU メモリ"), EditorUtility.FormatBytes(texture.gpuBytes));
-                DrawInfoRow(GSEditorText.T("Runtime Memory", "ランタイムメモリ"), EditorUtility.FormatBytes(texture.runtimeBytes));
-                DrawInfoRow(GSEditorText.T("Asset Size", "アセットサイズ"), EditorUtility.FormatBytes(texture.assetBytes));
-            }
-
-            EditorGUILayout.EndVertical();
-        }
-
-        static void DrawInfoRow(string label, string value)
-        {
-            EditorGUILayout.BeginHorizontal();
-            EditorGUILayout.PrefixLabel(label);
-            EditorGUILayout.SelectableLabel(value, EditorStyles.textField, GUILayout.Height(EditorGUIUtility.singleLineHeight));
-            EditorGUILayout.EndHorizontal();
-        }
-
-        static InspectorStats GatherStats(GaussianSplatObject splatObject)
-        {
-            InspectorStats stats = new InspectorStats
-            {
-                actualSplatCount = -1,
-                maxShBand = 0,
-                textures = new List<TextureStats>()
-            };
-
-            MeshRenderer sortedRenderer = ResolveSortedRenderer(splatObject);
-            stats.sortedRenderer = sortedRenderer;
-            if (sortedRenderer == null)
-            {
-                return stats;
-            }
-
-            Material[] materials = sortedRenderer.sharedMaterials;
-            if (materials == null)
-            {
-                return stats;
-            }
-
-            Dictionary<int, TextureStats> texturesById = new Dictionary<int, TextureStats>();
-            for (int materialIndex = 0; materialIndex < materials.Length; ++materialIndex)
-            {
-                Material material = materials[materialIndex];
-                if (material == null)
-                {
-                    continue;
-                }
-
-                stats.materialCount++;
-                if (IsSplatMaterial(material))
-                {
-                    stats.splatMaterialCount++;
-                    stats.maxShBand = Mathf.Max(stats.maxShBand, InferMaxShBand(material));
-
-                    if (stats.actualSplatCount < 0 && material.HasProperty("_ActualSplatCount"))
-                    {
-                        stats.actualSplatCount = material.GetInt("_ActualSplatCount");
-                    }
-
-                    if (string.IsNullOrEmpty(stats.dataResolution))
-                    {
-                        Texture positionTexture = material.GetTexture("_GS_Positions");
-                        if (positionTexture != null)
-                        {
-                            stats.dataResolution = GetTextureDimensions(positionTexture);
-                        }
-                    }
-
-                    stats.usesPrecomputedSorting |= HasPrecomputedSorting(material);
-                }
-
-                CollectTextures(material, texturesById, ref stats.totalGpuBytes, ref stats.totalRuntimeBytes, ref stats.totalAssetBytes);
-            }
-
-            foreach (TextureStats texture in texturesById.Values)
-            {
-                stats.textures.Add(texture);
-            }
-            stats.textures.Sort((left, right) => string.CompareOrdinal(left.propertyName, right.propertyName));
-
-            return stats;
-        }
-
-        static MeshRenderer ResolveSortedRenderer(GaussianSplatObject splatObject)
-        {
-            if (splatObject == null)
-            {
-                return null;
-            }
-
-            if (splatObject.sortedRenderer != null)
-            {
-                return splatObject.sortedRenderer;
-            }
-
-            GameObject sortedObject = splatObject.sortedObject;
-            if (sortedObject == null)
-            {
-                Transform sortedTransform = splatObject.transform.Find("Sorted");
-                if (sortedTransform != null)
-                {
-                    sortedObject = sortedTransform.gameObject;
-                }
-            }
-
-            if (sortedObject != null)
-            {
-                MeshRenderer childRenderer = sortedObject.GetComponent<MeshRenderer>();
-                if (childRenderer != null)
-                {
-                    return childRenderer;
-                }
-            }
-
-            return splatObject.GetComponent<MeshRenderer>();
-        }
-
-        static bool IsSplatMaterial(Material material)
-        {
-            return material != null && material.HasProperty("_GS_Positions");
-        }
-
-        static int InferMaxShBand(Material material)
-        {
-            if (material == null)
-            {
-                return 0;
-            }
-
-            if (!material.HasProperty("_GS_SH") || material.GetTexture("_GS_SH") == null || !material.HasProperty("_GS_SH_CoeffCount"))
-            {
-                return 0;
-            }
-
-            int coeffCount = material.GetInt("_GS_SH_CoeffCount");
-            if (coeffCount >= 15)
-            {
-                return 3;
-            }
-
-            if (coeffCount >= 8)
-            {
-                return 2;
-            }
-
-            if (coeffCount >= 3)
-            {
-                return 1;
-            }
-
-            return 0;
-        }
-
-        static bool HasPrecomputedSorting(Material material)
-        {
-            if (material == null)
-            {
-                return false;
-            }
-
-            if (material.HasProperty("_GS_RenderOrderPrecomputed") && material.GetTexture("_GS_RenderOrderPrecomputed") != null)
-            {
-                return true;
-            }
-
-            return material.IsKeywordEnabled("_PRECOMPUTED_SORTING_ON");
-        }
-
-        static void CollectTextures(Material material, Dictionary<int, TextureStats> texturesById, ref long totalGpuBytes, ref long totalRuntimeBytes, ref long totalAssetBytes)
-        {
-            Shader shader = material.shader;
-            if (shader == null)
-            {
-                return;
-            }
-
-            int propertyCount = ShaderUtil.GetPropertyCount(shader);
-            for (int propertyIndex = 0; propertyIndex < propertyCount; ++propertyIndex)
-            {
-                if (ShaderUtil.GetPropertyType(shader, propertyIndex) != ShaderUtil.ShaderPropertyType.TexEnv)
-                {
-                    continue;
-                }
-
-                string propertyName = ShaderUtil.GetPropertyName(shader, propertyIndex);
-                Texture texture = material.GetTexture(propertyName);
-                if (texture == null)
-                {
-                    continue;
-                }
-
-                int instanceId = texture.GetInstanceID();
-                if (texturesById.ContainsKey(instanceId))
-                {
-                    continue;
-                }
-
-                long gpuBytes = GetEstimatedGpuBytes(texture);
-                long runtimeBytes = Profiler.GetRuntimeMemorySizeLong(texture);
-                long assetBytes = GetAssetSize(texture);
-                totalGpuBytes += gpuBytes;
-                totalRuntimeBytes += runtimeBytes;
-                totalAssetBytes += assetBytes;
-
-                texturesById.Add(instanceId, new TextureStats
-                {
-                    propertyName = propertyName,
-                    textureName = texture.name,
-                    dimensions = GetTextureDimensions(texture),
-                    format = GetTextureFormat(texture),
-                    gpuBytes = gpuBytes,
-                    runtimeBytes = runtimeBytes,
-                    assetBytes = assetBytes
-                });
-            }
-        }
-
-        static long GetEstimatedGpuBytes(Texture texture)
-        {
-            if (texture == null || GetStorageMemorySizeLongMethod == null)
-            {
-                return 0L;
-            }
-
-            try
-            {
-                return (long)GetStorageMemorySizeLongMethod.Invoke(null, new object[] { texture });
-            }
-            catch
-            {
-                return 0L;
-            }
-        }
-
-        static long GetAssetSize(Object asset)
-        {
-            string assetPath = AssetDatabase.GetAssetPath(asset);
-            if (string.IsNullOrEmpty(assetPath))
-            {
-                return 0L;
-            }
-
-            string absolutePath = Path.GetFullPath(assetPath);
-            if (!File.Exists(absolutePath))
-            {
-                return 0L;
-            }
-
-            return new FileInfo(absolutePath).Length;
-        }
-
-        static string GetTextureDimensions(Texture texture)
-        {
-            if (texture is Texture2DArray arrayTexture)
-            {
-                return $"{arrayTexture.width} x {arrayTexture.height} x {arrayTexture.depth}";
-            }
-
-            return $"{texture.width} x {texture.height}";
-        }
-
-        static string GetTextureFormat(Texture texture)
-        {
-            if (texture is Texture2D texture2D)
-            {
-                return texture2D.format.ToString();
-            }
-
-            if (texture is Texture2DArray textureArray)
-            {
-                return textureArray.format.ToString();
-            }
-
-            return texture.GetType().Name;
-        }
-
-        static void DrawSettingsGroup(string title, System.Action drawContents)
-        {
-            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-            EditorGUILayout.LabelField(title, EditorStyles.boldLabel);
-            drawContents();
-            EditorGUILayout.EndVertical();
-        }
-
-        void DrawUdonSharpHeader()
         {
             if (targets != null && targets.Length > 1)
             {
@@ -448,10 +43,18 @@ namespace GaussianSplatting.Editor
             {
                 UdonSharpGUI.DrawDefaultUdonSharpBehaviourHeader(target);
             }
-        }
 
-        void DrawUdonSharpUtilities()
-        {
+            serializedObject.Update();
+            DrawEditableMetadata();
+            serializedObject.ApplyModifiedProperties();
+
+            if (!serializedObject.isEditingMultipleObjects)
+            {
+                EditorGUILayout.Space();
+                DrawImportedDataSummary((GaussianSplatObject)target);
+            }
+
+            EditorGUILayout.Space();
             if (targets != null && targets.Length > 1)
             {
                 UdonSharpGUI.DrawUtilities(targets);
@@ -460,6 +63,251 @@ namespace GaussianSplatting.Editor
             {
                 UdonSharpGUI.DrawUtilities(target);
             }
+        }
+
+        void DrawEditableMetadata()
+        {
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            EditorGUILayout.LabelField(GSEditorText.T("Display Metadata", "表示メタデータ"), EditorStyles.boldLabel);
+            EditorGUILayout.PropertyField(_splatName, GSEditorText.C("Display Name", "表示名"));
+            EditorGUILayout.PropertyField(_description, GSEditorText.C("Description", "説明"));
+            EditorGUILayout.EndVertical();
+        }
+
+        void DrawImportedDataSummary(GaussianSplatObject lo)
+        {
+            GaussianSplatImporter.ImportMetadata metadata = TryParseMetadata(lo);
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            EditorGUILayout.LabelField(GSEditorText.T("Imported Data (read-only)", "インポート済みデータ（読み取り専用）"), EditorStyles.boldLabel);
+
+            int posFiles = lo.positions != null ? lo.positions.Length : 0;
+            int shFiles = lo.sh != null ? lo.sh.Length : 0;
+            long storedSplats = SumInts(lo.fileSplatCounts);
+            DrawInfoRow(GSEditorText.T("Import Mode", "インポートモード"), ImportModeLabel(lo, metadata));
+            DrawInfoRow(GSEditorText.T("Renderable", "描画可能"), YesNo(lo.IsRenderable()));
+            if (metadata != null)
+            {
+                DrawInfoRow(GSEditorText.T("Source", "ソース"), string.IsNullOrEmpty(metadata.sourcePath) ? "-" : metadata.sourcePath);
+                DrawInfoRow(GSEditorText.T("Prefab", "Prefab"), string.IsNullOrEmpty(metadata.prefabPath) ? "-" : metadata.prefabPath);
+            }
+            DrawInfoRow(GSEditorText.T("Splat Count", "Splat 数"), lo.totalSplatCount.ToString("N0"));
+            DrawInfoRow(GSEditorText.T("Stored Splat Texels", "保存済み Splat テクセル"), storedSplats > 0 ? storedSplats.ToString("N0") : "-");
+            DrawInfoRow(GSEditorText.T("Texture Sets", "テクスチャセット"), posFiles.ToString("N0"));
+            DrawInfoRow(GSEditorText.T("SH Texture Sets", "SH テクスチャセット"), shFiles.ToString("N0"));
+            DrawInfoRow(GSEditorText.T("Chunk Count", "チャンク数"), lo.chunkCount.ToString("N0"));
+            DrawInfoRow(GSEditorText.T("Chunk Size", "チャンクサイズ"), lo.chunkSize.ToString("N0"));
+            DrawInfoRow(GSEditorText.T("Position Encoding", "位置エンコード"), lo.usePackedPositions ? "Packed RGBA32" : "RGBAFloat");
+            DrawInfoRow(GSEditorText.T("Max SH Band", "最大 SH バンド"), "SH" + lo.GetMaxSHBand());
+            DrawInfoRow(GSEditorText.T("SH Coefficients", "SH 係数"), ShCoeffSummary(lo));
+            DrawInfoRow(GSEditorText.T("LOD Reused Splats", "LOD 再利用 Splat"), lo.GetLodReusePercent() + "%");
+            DrawInfoRow(GSEditorText.T("Bounds Center", "境界中心"), FormatVector((lo.boundsMin + lo.boundsMax) * 0.5f));
+            DrawInfoRow(GSEditorText.T("Bounds Size", "境界サイズ"), FormatVector(lo.boundsMax - lo.boundsMin));
+            DrawInfoRow(GSEditorText.T("Bounds Min", "境界 Min"), FormatVector(lo.boundsMin));
+            DrawInfoRow(GSEditorText.T("Bounds Max", "境界 Max"), FormatVector(lo.boundsMax));
+            Texture2D pos0 = (lo.positions != null && lo.positions.Length > 0) ? lo.positions[0] : null;
+            DrawInfoRow(GSEditorText.T("Position Resolution", "位置テクスチャ解像度"),
+                pos0 != null ? $"{pos0.width} x {pos0.height}" : GSEditorText.T("Unknown", "不明"));
+            if (lo.chunkBoundsMinTexture != null)
+            {
+                DrawInfoRow(GSEditorText.T("Chunk Metadata", "チャンクメタデータ"),
+                    $"{lo.chunkBoundsMinTexture.width} x {lo.chunkBoundsMinTexture.height}, layout {FormatVector4(lo.chunkTextureLayout)}");
+            }
+            DrawInfoRow(GSEditorText.T("Estimated GPU Memory", "推定 GPU メモリ"), EditorUtility.FormatBytes(EstimateFootprint(lo)));
+
+            EditorGUILayout.EndVertical();
+
+            _showTextureSets = EditorGUILayout.Foldout(_showTextureSets, GSEditorText.T("Texture Sets", "テクスチャセット"), true);
+            if (_showTextureSets)
+            {
+                EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+                DrawTextureSetRows(lo);
+                EditorGUILayout.EndVertical();
+            }
+
+            // Read-only listing of the source textures (name/dims/size only - no object fields, no thumbnails,
+            // so expanding this never decodes the textures).
+            _showSourceTextures = EditorGUILayout.Foldout(_showSourceTextures, GSEditorText.T("Source Textures", "ソーステクスチャ"), true);
+            if (_showSourceTextures)
+            {
+                EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+                DrawTextureArray(GSEditorText.T("Positions", "位置"), lo.positions);
+                DrawTextureArray(GSEditorText.T("Colors", "色"), lo.colors);
+                DrawTextureArray(GSEditorText.T("Rotations", "回転"), lo.rotations);
+                DrawTextureArray(GSEditorText.T("Scales", "スケール"), lo.scales);
+                DrawTextureArray(GSEditorText.T("SH", "SH"), lo.sh);
+                DrawTextureRow(GSEditorText.T("Chunk Bounds Min", "チャンク境界 Min"), lo.chunkBoundsMinTexture);
+                DrawTextureRow(GSEditorText.T("Chunk Bounds Max", "チャンク境界 Max"), lo.chunkBoundsMaxTexture);
+                DrawTextureRow(GSEditorText.T("Chunk Range", "チャンクレンジ"), lo.chunkRangeTexture);
+                EditorGUILayout.EndVertical();
+            }
+        }
+
+        static GaussianSplatImporter.ImportMetadata TryParseMetadata(GaussianSplatObject lo)
+        {
+            try { return GaussianSplatImporter.ImportMetadata.FromJson(lo.importMetadataJson); }
+            catch { return null; }
+        }
+
+        static string ImportModeLabel(GaussianSplatObject lo, GaussianSplatImporter.ImportMetadata metadata)
+        {
+            if (metadata != null && metadata.options.standalone)
+            {
+                return "Standalone";
+            }
+            return "LOD";
+        }
+
+        void DrawTextureSetRows(GaussianSplatObject lo)
+        {
+            int setCount = lo.positions != null ? lo.positions.Length : 0;
+            if (setCount == 0)
+            {
+                EditorGUILayout.LabelField(GSEditorText.T("No texture sets.", "テクスチャセットがありません。"));
+                return;
+            }
+            for (int i = 0; i < setCount; i++)
+            {
+                int splats = lo.fileSplatCounts != null && i < lo.fileSplatCounts.Length ? lo.fileSplatCounts[i] : 0;
+                int shCoeff = lo.fileShCoeffCounts != null && i < lo.fileShCoeffCounts.Length ? lo.fileShCoeffCounts[i] : 0;
+                Texture2D pos = lo.positions[i];
+                string resolution = pos != null ? $"{pos.width}x{pos.height}" : "-";
+                string value = $"{splats:N0} splats, {resolution}, {ShCoeffLabel(shCoeff)}, {EditorUtility.FormatBytes(TextureSetBytes(lo, i))}";
+                DrawInfoRow("Set " + i, value);
+            }
+        }
+
+        void DrawTextureArray(string label, Texture2D[] arr)
+        {
+            int n = arr != null ? arr.Length : 0;
+            EditorGUILayout.LabelField(label, n + GSEditorText.T(" file(s)", " 個"));
+            if (arr == null)
+            {
+                return;
+            }
+            EditorGUI.indentLevel++;
+            for (int i = 0; i < arr.Length; i++)
+            {
+                DrawTextureRow($"[{i}]", arr[i]);
+            }
+            EditorGUI.indentLevel--;
+        }
+
+        void DrawTextureRow(string label, Texture t)
+        {
+            string value = t != null
+                ? $"{t.name}  ({t.width}x{t.height} {(t as Texture2D)?.format})  {EditorUtility.FormatBytes(StorageBytes(t))}"
+                : GSEditorText.T("(none)", "（なし）");
+            DrawInfoRow(label, value);
+        }
+
+        static long TextureSetBytes(GaussianSplatObject lo, int index)
+        {
+            long total = 0;
+            total += ArrayStorageBytes(lo.positions, index);
+            total += ArrayStorageBytes(lo.colors, index);
+            total += ArrayStorageBytes(lo.rotations, index);
+            total += ArrayStorageBytes(lo.scales, index);
+            total += ArrayStorageBytes(lo.sh, index);
+            return total;
+        }
+
+        static long ArrayStorageBytes(Texture2D[] arr, int index)
+        {
+            return arr != null && index >= 0 && index < arr.Length ? StorageBytes(arr[index]) : 0L;
+        }
+
+        static long EstimateFootprint(GaussianSplatObject lo)
+        {
+            long total = 0;
+            total += SumArray(lo.positions) + SumArray(lo.colors) + SumArray(lo.rotations) + SumArray(lo.scales) + SumArray(lo.sh);
+            total += StorageBytes(lo.chunkBoundsMinTexture) + StorageBytes(lo.chunkBoundsMaxTexture) + StorageBytes(lo.chunkRangeTexture);
+            return total;
+        }
+
+        static long SumArray(Texture2D[] arr)
+        {
+            long sum = 0;
+            if (arr != null)
+            {
+                for (int i = 0; i < arr.Length; i++)
+                {
+                    sum += StorageBytes(arr[i]);
+                }
+            }
+            return sum;
+        }
+
+        static long SumInts(int[] arr)
+        {
+            long sum = 0;
+            if (arr != null)
+            {
+                for (int i = 0; i < arr.Length; i++)
+                {
+                    sum += Mathf.Max(0, arr[i]);
+                }
+            }
+            return sum;
+        }
+
+        static string ShCoeffSummary(GaussianSplatObject lo)
+        {
+            if (lo.fileShCoeffCounts == null || lo.fileShCoeffCounts.Length == 0)
+            {
+                return "SH0 (0 coeff)";
+            }
+            int min = int.MaxValue;
+            int max = 0;
+            for (int i = 0; i < lo.fileShCoeffCounts.Length; i++)
+            {
+                int coeff = Mathf.Max(0, lo.fileShCoeffCounts[i]);
+                min = Mathf.Min(min, coeff);
+                max = Mathf.Max(max, coeff);
+            }
+            if (min == int.MaxValue || max == 0)
+            {
+                return "SH0 (0 coeff)";
+            }
+            return min == max ? ShCoeffLabel(max) : ShCoeffLabel(min) + " - " + ShCoeffLabel(max);
+        }
+
+        static string ShCoeffLabel(int coeff)
+        {
+            int band = coeff >= 15 ? 3 : (coeff >= 8 ? 2 : (coeff >= 3 ? 1 : 0));
+            return "SH" + band + " (" + Mathf.Max(0, coeff) + " coeff)";
+        }
+
+        static string YesNo(bool value)
+        {
+            return value ? GSEditorText.T("Yes", "はい") : GSEditorText.T("No", "いいえ");
+        }
+
+        static string FormatVector(Vector3 v)
+        {
+            return $"{v.x:0.###}, {v.y:0.###}, {v.z:0.###}";
+        }
+
+        static string FormatVector4(Vector4 v)
+        {
+            return $"{v.x:0.###}, {v.y:0.###}, {v.z:0.###}, {v.w:0.###}";
+        }
+
+        static long StorageBytes(Texture t)
+        {
+            if (t == null || GetStorageMemorySizeLongMethod == null)
+            {
+                return 0L;
+            }
+            try { return (long)GetStorageMemorySizeLongMethod.Invoke(null, new object[] { t }); }
+            catch { return 0L; }
+        }
+
+        static void DrawInfoRow(string label, string value)
+        {
+            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.PrefixLabel(label);
+            EditorGUILayout.SelectableLabel(value, EditorStyles.textField, GUILayout.Height(EditorGUIUtility.singleLineHeight));
+            EditorGUILayout.EndHorizontal();
         }
     }
 }

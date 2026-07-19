@@ -15,6 +15,7 @@ namespace GaussianSplatting
 // file is excluded from Udon compilation via the preprocessor guard above.
 public partial class GaussianSplatCombiner
 {
+
     static bool EnsureGeneratedObjectEditable(GameObject generatedObject)
     {
         if (generatedObject == null || generatedObject.hideFlags == HideFlags.None)
@@ -89,21 +90,17 @@ public partial class GaussianSplatCombiner
 
         gaussianSplatRenderer = source.gaussianSplatRenderer;
         combinedSortedRenderer = source.combinedSortedRenderer;
-        combineDataMaterial = source.combineDataMaterial;
-        lodChunkSelectMaterial = source.lodChunkSelectMaterial;
-        lodCombineDataMaterial = source.lodCombineDataMaterial;
         combinedPositionsFormat = source.combinedPositionsFormat;
         combinedRotationsFormat = source.combinedRotationsFormat;
         combinedScalesFormat = source.combinedScalesFormat;
         combinedColorsFormat = source.combinedColorsFormat;
         combinedColorsCameraFormat = source.combinedColorsCameraFormat;
         combinedTextureFormatsInitialized = true;
-        combinedPositions = source.combinedPositions;
-        combinedRotations = source.combinedRotations;
-        combinedScales = source.combinedScales;
-        combinedColors = source.combinedColors;
-        combinedColorsCamera = source.combinedColorsCamera;
-        lodChunkSelection = source.lodChunkSelection;
+        combinedPositionsByBucket = source.combinedPositionsByBucket;
+        combinedRotationsByBucket = source.combinedRotationsByBucket;
+        combinedScalesByBucket = source.combinedScalesByBucket;
+        combinedColorsByBucket = source.combinedColorsByBucket;
+        combinedColorsCameraByBucket = source.combinedColorsCameraByBucket;
         lodAlphaState = source.lodAlphaState;
         lodAlphaStateScratch = source.lodAlphaStateScratch;
         builtCombinedElementCount = source.builtCombinedElementCount;
@@ -326,10 +323,9 @@ public partial class GaussianSplatCombiner
         return GetOwnerRenderer();
     }
 
-    bool OwnerIsCombinedMode()
+    bool HasOwner()
     {
-        GaussianSplatRenderer owner = ResolveOwner();
-        return owner != null && owner.IsCombinedRenderingMode();
+        return ResolveOwner() != null;
     }
 
     bool EnsureOwnerChunkHierarchy(GaussianSplatRenderer owner)
@@ -369,7 +365,7 @@ public partial class GaussianSplatCombiner
         return material != null && material.shader != null && material.shader.name == shaderName;
     }
 
-    bool CombinedMaterialQueuesMatch(PlySplatImporter.PassInfo[] passInfos, bool useSrgb)
+    bool CombinedMaterialQueuesMatch(GaussianSplatImporter.PassInfo[] passInfos, bool useSrgb)
     {
         if (combinedSortedRenderer == null)
         {
@@ -626,16 +622,713 @@ public partial class GaussianSplatCombiner
     int GetSceneMaxLODChunkCount()
     {
         int maxChunks = 1;
-        GaussianSplatLODObject[] lodObjects = UnityEngine.Object.FindObjectsOfType<GaussianSplatLODObject>(true);
+        GaussianSplatObject[] lodObjects = UnityEngine.Object.FindObjectsOfType<GaussianSplatObject>(true);
         for (int i = 0; i < lodObjects.Length; i++)
         {
-            GaussianSplatLODObject lodObject = lodObjects[i];
+            GaussianSplatObject lodObject = lodObjects[i];
             if (lodObject != null && lodObject.gameObject.scene == gameObject.scene)
             {
                 maxChunks = Mathf.Max(maxChunks, lodObject.GetChunkCount());
             }
         }
         return maxChunks;
+    }
+
+    // Deterministic hash of an asset's GUID (stable across domain reloads, unlike GetInstanceID).
+    // SH band number from stored coeff count (3 -> SH1, 8 -> SH2, 15 -> SH3), matching the importer.
+    static float SHBandFromCoeffCount(int coeffCount)
+    {
+        if (coeffCount >= 15) return 3.0f;
+        if (coeffCount >= 8) return 2.0f;
+        if (coeffCount >= 3) return 1.0f;
+        return 0.0f;
+    }
+
+    static int StableAssetHash(Texture2D t)
+    {
+        if (t == null) return 0;
+        string g = AssetDatabase.AssetPathToGUID(AssetDatabase.GetAssetPath(t));
+        if (string.IsNullOrEmpty(g)) g = t.name;
+        int h = 17;
+        for (int i = 0; i < g.Length; i++) { unchecked { h = h * 31 + g[i]; } }
+        return h;
+    }
+
+    static int StableTextureContentHash(Texture2D t)
+    {
+        if (t == null) return 0;
+        int h = StableAssetHash(t);
+        unchecked
+        {
+            h = h * 31 + t.width;
+            h = h * 31 + t.height;
+        }
+        string path = AssetDatabase.GetAssetPath(t);
+        if (!string.IsNullOrEmpty(path))
+        {
+            string dep = AssetDatabase.GetAssetDependencyHash(path).ToString();
+            for (int i = 0; i < dep.Length; i++) { unchecked { h = h * 31 + dep[i]; } }
+        }
+        return h;
+    }
+
+    // The fuse bake's "is this content already baked?" signature is persisted to EditorPrefs (keyed by
+    // scene GUID + owner prefix) rather than ONLY the scene-serialized field. The scene-serialized
+    // signature reverts to its last-saved value on domain reload if the scene was not saved, so a heavy
+    // ~GB rebake would fire on every editor open of an unsaved scene. EditorPrefs survives reload AND an
+    // unsaved scene, so combined with the reload-from-disk fast path the bake runs only on real change.
+    string FuseSigKey(string kind, string prefix)
+    {
+        string sceneGuid = AssetDatabase.AssetPathToGUID(gameObject.scene.path);
+        if (string.IsNullOrEmpty(sceneGuid)) sceneGuid = gameObject.scene.name;
+        return "GSFuseSig_" + kind + "_" + sceneGuid + "_" + prefix;
+    }
+    int LoadFuseSig(string kind, string prefix) { return EditorPrefs.GetInt(FuseSigKey(kind, prefix), int.MinValue); }
+    void SaveFuseSig(string kind, string prefix, int sig) { EditorPrefs.SetInt(FuseSigKey(kind, prefix), sig); }
+
+
+    bool EnsureUnifiedLODMaterials(string folder, string prefix)
+    {
+        bool changed = false;
+        string selectPath = folder + "/" + prefix + "_LODSelect.mat";
+        Material selectMaterial = AssetDatabase.LoadAssetAtPath<Material>(selectPath);
+        if (selectMaterial == null)
+        {
+            Shader s = Shader.Find("Hidden/GaussianSplatting/LODChunkSelect");
+            if (s != null)
+            {
+                selectMaterial = new Material(s) { name = prefix + "_LODSelect" };
+                selectMaterial = GaussianSplatImporter.CreateOrReplaceAsset(selectMaterial, selectPath);
+            }
+        }
+        if (lodUnifiedSelectMaterial != selectMaterial)
+        {
+            lodUnifiedSelectMaterial = selectMaterial;
+            changed = true;
+        }
+
+        string combinePath = folder + "/" + prefix + "_LODCombine.mat";
+        Material combineMaterial = AssetDatabase.LoadAssetAtPath<Material>(combinePath);
+        if (combineMaterial == null)
+        {
+            Shader s = Shader.Find("Hidden/GaussianSplatting/LODCombine");
+            if (s != null)
+            {
+                combineMaterial = new Material(s) { name = prefix + "_LODCombine" };
+                combineMaterial = GaussianSplatImporter.CreateOrReplaceAsset(combineMaterial, combinePath);
+            }
+        }
+        if (lodUnifiedCombineMaterial != combineMaterial)
+        {
+            lodUnifiedCombineMaterial = combineMaterial;
+            changed = true;
+        }
+        if (changed)
+        {
+            EditorUtility.SetDirty(this);
+        }
+        return changed;
+    }
+
+    static bool TextureAssetExists(string path)
+    {
+        return AssetDatabase.LoadAssetAtPath<Texture2D>(path) != null;
+    }
+
+    static bool HasAppendedChunkRangeStats(Texture2D range, int chunkCount)
+    {
+        if (range == null)
+        {
+            return false;
+        }
+        int width = Mathf.Max(1, range.width);
+        int metaHeight = (Mathf.Max(1, chunkCount) + width - 1) / width;
+        return range.height >= metaHeight * 2;
+    }
+
+    static bool FusedLODAssetsExist(string folder, string prefix, int totalChunks, bool requireRangeStats)
+    {
+        Texture2D range = AssetDatabase.LoadAssetAtPath<Texture2D>(folder + "/" + prefix + "_LODGlobalRange.asset");
+        bool required = TextureAssetExists(folder + "/" + prefix + "_LODFusedPositions.asset")
+            && TextureAssetExists(folder + "/" + prefix + "_LODFusedColors.asset")
+            && TextureAssetExists(folder + "/" + prefix + "_LODFusedRotations.asset")
+            && TextureAssetExists(folder + "/" + prefix + "_LODFusedScales.asset")
+            && TextureAssetExists(folder + "/" + prefix + "_LODGlobalBounds.asset")
+            && range != null
+            && TextureAssetExists(folder + "/" + prefix + "_LODFileBase.asset");
+        if (!required)
+        {
+            return false;
+        }
+        return !requireRangeStats || HasAppendedChunkRangeStats(range, totalChunks);
+    }
+
+    // Reload an already-current unified LOD fused set from disk instead of re-baking. objs must be in the
+    // same reload-stable order as the bake (transform-table row k <-> objs[k]); the caller guarantees this.
+    bool TryReloadFusedLODFromDisk(string folder, string prefix, List<GameObject> objs, int totalChunks, bool requireRangeStats)
+    {
+        Texture2D pos = AssetDatabase.LoadAssetAtPath<Texture2D>(folder + "/" + prefix + "_LODFusedPositions.asset");
+        Texture2D col = AssetDatabase.LoadAssetAtPath<Texture2D>(folder + "/" + prefix + "_LODFusedColors.asset");
+        Texture2D rot = AssetDatabase.LoadAssetAtPath<Texture2D>(folder + "/" + prefix + "_LODFusedRotations.asset");
+        Texture2D scl = AssetDatabase.LoadAssetAtPath<Texture2D>(folder + "/" + prefix + "_LODFusedScales.asset");
+        Texture2D bounds = AssetDatabase.LoadAssetAtPath<Texture2D>(folder + "/" + prefix + "_LODGlobalBounds.asset");
+        Texture2D rng = AssetDatabase.LoadAssetAtPath<Texture2D>(folder + "/" + prefix + "_LODGlobalRange.asset");
+        Texture2D fbase = AssetDatabase.LoadAssetAtPath<Texture2D>(folder + "/" + prefix + "_LODFileBase.asset");
+        if (pos == null || col == null || rot == null || scl == null || bounds == null || rng == null || fbase == null)
+        {
+            return false;
+        }
+        if (requireRangeStats && !HasAppendedChunkRangeStats(rng, totalChunks))
+        {
+            return false;
+        }
+        lodFusedPositions = pos; lodFusedColors = col; lodFusedRotations = rot; lodFusedScales = scl;
+        lodGlobalBounds = bounds; lodGlobalRange = rng; lodFileBase = fbase;
+        lodUnifiedSH = AssetDatabase.LoadAssetAtPath<Texture2D>(folder + "/" + prefix + "_LODFusedSH.asset");
+        lodShParams = AssetDatabase.LoadAssetAtPath<Texture2D>(folder + "/" + prefix + "_LODShParams.asset");
+        int shBpr = Mathf.Max(1, lodUnifiedSH != null ? lodUnifiedSH.width >> 2 : 1);
+        lodUnifiedShCoordShift = ComputeTextureCoordShift(shBpr);
+        lodUnifiedShCoordMask = shBpr - 1;
+        // Total baked into the (deduped) fused source = every file's splat count (fileBase row z channel).
+        int totalSource = 0;
+        if (fbase.isReadable)
+        {
+            Color[] fb = fbase.GetPixels();
+            for (int i = 0; i < fb.Length; i++) totalSource += Mathf.RoundToInt(fb[i].b);
+        }
+        lodTotalSourceCount = totalSource;
+        lodFusedObjects = objs.ToArray();
+        lodFusedObjectCount = objs.Count;
+        lodTotalChunks = totalChunks;
+        lodMetaWidth = bounds.width;
+        lodSelectionSide = Mathf.NextPowerOfTwo(Mathf.CeilToInt(Mathf.Sqrt(Mathf.Max(1, totalChunks))));
+        int bpr = Mathf.Max(1, pos.width >> 2);
+        lodFusedCoordShift = ComputeTextureCoordShift(bpr);
+        lodFusedCoordMask = bpr - 1;
+        EnsureUnifiedLODMaterials(folder, prefix);
+        return lodUnifiedCombineMaterial != null;
+    }
+
+    // Editor debug splat counter: selected total (sum of the selection texture mip0) + current log2 alpha.
+    // The readback is a synchronous ReadPixels (GPU->CPU flush); the scene view fires a burst of sorts on
+    // focus regain, so it is throttled (the counter is cosmetic; reuse the last value between readbacks).
+    // The counter is cosmetic, so reuse the last value between readbacks (a few per second is plenty).
+    static double _lastUnifiedReadbackTime = -1.0;
+    static int _lastUnifiedReadbackTotal;
+    static float _lastUnifiedReadbackAlpha;
+    const double UNIFIED_READBACK_MIN_INTERVAL = 0.2;
+
+    int ReadbackUnifiedLODSelected(out float alpha, bool force = false)
+    {
+        double now = EditorApplication.timeSinceStartup;
+        if (!force && _lastUnifiedReadbackTime >= 0.0 && (now - _lastUnifiedReadbackTime) < UNIFIED_READBACK_MIN_INTERVAL)
+        {
+            alpha = _lastUnifiedReadbackAlpha;
+            return _lastUnifiedReadbackTotal;
+        }
+        _lastUnifiedReadbackTime = now;
+
+        alpha = 0.0f;
+        if (lodUnifiedSelection == null) return 0;
+        RenderTexture prev = RenderTexture.active;
+        int total = 0;
+        Texture2D rd = new Texture2D(lodUnifiedSelection.width, lodUnifiedSelection.height, TextureFormat.RGBAFloat, false, true);
+        try
+        {
+            RenderTexture.active = lodUnifiedSelection;
+            rd.ReadPixels(new Rect(0, 0, lodUnifiedSelection.width, lodUnifiedSelection.height), 0, 0, false);
+            rd.Apply(false, false);
+            Color[] px = rd.GetPixels();
+            double sum = 0.0;
+            for (int i = 0; i < px.Length; i++) { sum += px[i].r; }
+            total = (int)System.Math.Round(sum);
+        }
+        finally
+        {
+            RenderTexture.active = prev;
+            UnityEngine.Object.DestroyImmediate(rd);
+        }
+        if (lodAlphaState != null)
+        {
+            Texture2D a = new Texture2D(1, 1, TextureFormat.RGBAFloat, false, true);
+            try
+            {
+                RenderTexture.active = lodAlphaState;
+                a.ReadPixels(new Rect(0, 0, 1, 1), 0, 0, false);
+                a.Apply(false, false);
+                alpha = a.GetPixel(0, 0).r;
+            }
+            finally
+            {
+                RenderTexture.active = prev;
+                UnityEngine.Object.DestroyImmediate(a);
+            }
+        }
+        _lastUnifiedReadbackTotal = total;
+        _lastUnifiedReadbackAlpha = alpha;
+        return total;
+    }
+
+    static bool FusedLODObjectRefsMatch(GameObject[] current, List<GameObject> expected)
+    {
+        int expectedCount = expected != null ? expected.Count : 0;
+        if (current == null || current.Length != expectedCount)
+        {
+            return false;
+        }
+        for (int i = 0; i < expectedCount; i++)
+        {
+            if (current[i] != expected[i])
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool EnsureFusedLODObjectRefs(List<GameObject> expected)
+    {
+        int count = expected != null ? expected.Count : 0;
+        if (FusedLODObjectRefsMatch(lodFusedObjects, expected))
+        {
+            if (lodFusedObjectCount != count)
+            {
+                lodFusedObjectCount = count;
+                EditorUtility.SetDirty(this);
+                return true;
+            }
+            return false;
+        }
+        lodFusedObjects = count > 0 ? expected.ToArray() : new GameObject[0];
+        lodFusedObjectCount = count;
+        EditorUtility.SetDirty(this);
+        return true;
+    }
+
+    const double FUSED_BAKE_DEBOUNCE_SECONDS = 2.0;
+    static readonly List<GaussianSplatCombiner> _queuedFusedBakes = new List<GaussianSplatCombiner>();
+    static readonly Dictionary<GaussianSplatCombiner, double> _queuedFusedBakeTimes = new Dictionary<GaussianSplatCombiner, double>();
+    // Canonical "rebake wanted" set + its target signature. Editor-only and static so queueing never touches the
+    // serialized surface (a serialized queue flag re-dirtied the scene on save). Survives the ProcessQueuedFusedBakes
+    // dequeue from _queuedFusedBakes (which happens before the bake runs); cleared only on commit/clear.
+    static readonly Dictionary<GaussianSplatCombiner, int> _queuedFusedSignatures = new Dictionary<GaussianSplatCombiner, int>();
+    static bool _processingQueuedFusedBake;
+    static GaussianSplatCombiner _activeFusedBakeCombiner;
+    static GaussianSplatFuse.FuseLODJob _activeFusedBakeJob;
+    static FusedBakeCommit _activeFusedBakeCommit;
+
+    sealed class FusedBakeCommit
+    {
+        public int signature;
+        public int sourceSignature;
+        public List<GameObject> combinedObjects;
+        public string folder;
+        public string prefix;
+    }
+
+    [InitializeOnLoadMethod]
+    static void RegisterFusedBakeQueue()
+    {
+        EditorApplication.update -= ProcessQueuedFusedBakes;
+        EditorApplication.update += ProcessQueuedFusedBakes;
+    }
+
+    static void ProcessQueuedFusedBakes()
+    {
+        if (_processingQueuedFusedBake || Application.isPlaying || EditorApplication.isCompiling)
+        {
+            return;
+        }
+
+        if (_activeFusedBakeJob != null)
+        {
+            _processingQueuedFusedBake = true;
+            try
+            {
+                EditorUtility.DisplayProgressBar("Gaussian Splat Fusion", $"Fusing splat textures… ({_activeFusedBakeJob.StageName})", _activeFusedBakeJob.Progress);
+                if (_activeFusedBakeJob.Step())
+                {
+                    if (!_activeFusedBakeJob.Failed && _activeFusedBakeCombiner != null)
+                    {
+                        GaussianSplatFuse.FuseLODResult r = _activeFusedBakeJob.Result;
+                        _activeFusedBakeCombiner.CommitFusedLODResult(r, _activeFusedBakeCommit);
+                        Debug.Log($"[GaussianSplatFuse] Fused splat textures updated: {r.totalSourceCount:N0} splats, {r.totalChunkCount:N0} chunks.", _activeFusedBakeCombiner);
+                    }
+                    _activeFusedBakeJob = null;
+                    _activeFusedBakeCombiner = null;
+                    _activeFusedBakeCommit = null;
+                    EditorUtility.ClearProgressBar();
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogException(e, _activeFusedBakeCombiner);
+                _activeFusedBakeJob = null;
+                _activeFusedBakeCombiner = null;
+                _activeFusedBakeCommit = null;
+                EditorUtility.ClearProgressBar();
+            }
+            finally
+            {
+                _processingQueuedFusedBake = false;
+            }
+            return;
+        }
+
+        double now = EditorApplication.timeSinceStartup;
+        for (int i = _queuedFusedBakes.Count - 1; i >= 0; i--)
+        {
+            GaussianSplatCombiner combiner = _queuedFusedBakes[i];
+            if (combiner == null || !combiner.gameObject.scene.IsValid())
+            {
+                _queuedFusedBakes.RemoveAt(i);
+                if (combiner != null) _queuedFusedBakeTimes.Remove(combiner);
+                continue;
+            }
+            if (_queuedFusedBakeTimes.TryGetValue(combiner, out double dueTime) && now < dueTime)
+            {
+                continue;
+            }
+
+            _queuedFusedBakes.RemoveAt(i);
+            _queuedFusedBakeTimes.Remove(combiner);
+            _processingQueuedFusedBake = true;
+            try
+            {
+                combiner.RunQueuedFusedLODBake();
+            }
+            catch (Exception e)
+            {
+                Debug.LogException(e, combiner);
+            }
+            finally
+            {
+                _processingQueuedFusedBake = false;
+            }
+            return;
+        }
+    }
+
+    // One row of the inspector's per-fused-object debug table.
+    public struct FusedObjectDebugRow
+    {
+        public string name;
+        public bool active;
+        public int splats;
+        public int files;
+        public int chunks;
+        public int shCoeff;   // SH coefficients the source carries (0 = none)
+        public long shTexels; // SH texels this object asks of the fused SH texture
+        public bool shDropped;
+    }
+
+    public List<FusedObjectDebugRow> GetFusedObjectDebugRows()
+    {
+        var rows = new List<FusedObjectDebugRow>();
+        int n = lodObjSplatCount != null ? lodObjSplatCount.Length : 0;
+        for (int i = 0; i < n; i++)
+        {
+            GameObject go = lodFusedObjects != null && i < lodFusedObjects.Length ? lodFusedObjects[i] : null;
+            int coeff = lodObjShCoeff != null && i < lodObjShCoeff.Length ? lodObjShCoeff[i] : 0;
+            int splats = lodObjSplatCount[i];
+            rows.Add(new FusedObjectDebugRow
+            {
+                name = go != null ? go.name : ("object " + i),
+                active = go != null && go.activeInHierarchy,
+                splats = splats,
+                files = lodObjFileCount != null && i < lodObjFileCount.Length ? lodObjFileCount[i] : 0,
+                chunks = lodObjChunkCount != null && i < lodObjChunkCount.Length ? lodObjChunkCount[i] : 0,
+                shCoeff = coeff,
+                shTexels = (long)coeff * splats,
+                shDropped = lodObjShDropped != null && i < lodObjShDropped.Length && lodObjShDropped[i],
+            });
+        }
+        return rows;
+    }
+
+    void QueueFusedLODBake(int signature)
+    {
+        bool wasQueued = _queuedFusedSignatures.TryGetValue(this, out int queuedSig);
+        if (wasQueued && queuedSig == signature && _queuedFusedBakes.Contains(this))
+        {
+            return;
+        }
+        _queuedFusedSignatures[this] = signature;
+        if (!_queuedFusedBakes.Contains(this))
+        {
+            _queuedFusedBakes.Add(this);
+        }
+        _queuedFusedBakeTimes[this] = EditorApplication.timeSinceStartup + FUSED_BAKE_DEBOUNCE_SECONDS;
+        // Warn once when the fused set first goes stale (not on every edit) so it's clear a rebake is pending.
+        if (!wasQueued)
+        {
+            Debug.LogWarning($"[GaussianSplatFuse] Fused splat textures are out of date in scene '{gameObject.scene.name}'; rebaking ~{FUSED_BAKE_DEBOUNCE_SECONDS:0}s after edits settle.", this);
+        }
+    }
+
+    void ClearQueuedFusedLODBake()
+    {
+        _queuedFusedSignatures.Remove(this);
+        _queuedFusedBakes.Remove(this);
+        _queuedFusedBakeTimes.Remove(this);
+    }
+
+    void RunQueuedFusedLODBake()
+    {
+        if (!_queuedFusedSignatures.ContainsKey(this))
+        {
+            return;
+        }
+        GaussianSplatRenderer owner = ResolveOwner();
+        string ownerName = owner != null ? owner.name : name;
+        BuildFusedLOD(ownerName, true);
+    }
+
+    void StartFusedLODJob(List<GaussianSplatFuse.FuseLODSource> sources, string folder, string prefix, GaussianSplatFuse.FuseLODResult reuseFrom, int signature, int sourceSignature, List<GameObject> combinedObjects)
+    {
+        if (_activeFusedBakeJob != null)
+        {
+            QueueFusedLODBake(signature);
+            return;
+        }
+        GaussianSplatImporter.EnsureFolderExists(folder);
+        _activeFusedBakeCombiner = this;
+        _activeFusedBakeCommit = new FusedBakeCommit
+        {
+            signature = signature,
+            sourceSignature = sourceSignature,
+            combinedObjects = combinedObjects,
+            folder = folder,
+            prefix = prefix
+        };
+        _activeFusedBakeJob = GaussianSplatFuse.CreateFuseLODJob(sources, folder, prefix, reuseFrom);
+        if (_activeFusedBakeJob == null || _activeFusedBakeJob.Result == null)
+        {
+            _activeFusedBakeJob = null;
+            _activeFusedBakeCombiner = null;
+            _activeFusedBakeCommit = null;
+            ClearQueuedFusedLODBake();
+            return;
+        }
+        GaussianSplatFuse.FuseLODResult r = _activeFusedBakeJob.Result;
+        Debug.Log($"[GaussianSplatFuse] Baking fused splat textures: {r.totalSourceCount:N0} splats, {r.totalChunkCount:N0} chunks, {r.objectCount} object(s).", this);
+    }
+
+    void CommitFusedLODResult(GaussianSplatFuse.FuseLODResult res, FusedBakeCommit commit)
+    {
+        if (res == null || commit == null)
+        {
+            ClearQueuedFusedLODBake();
+            return;
+        }
+        lodFusedPositions = res.fusedPositions;
+        lodFusedColors = res.fusedColors;
+        lodFusedRotations = res.fusedRotations;
+        lodFusedScales = res.fusedScales;
+        lodGlobalBounds = res.globalBounds;
+        lodGlobalRange = res.globalRange;
+        lodFileBase = res.fileBaseTable;
+        lodUnifiedSH = res.fusedSH;
+        lodShParams = res.shParams;
+        lodUnifiedShCoordShift = res.fusedShCoordShift;
+        lodUnifiedShCoordMask = res.fusedShCoordMask;
+        lodTotalSourceCount = res.totalSourceCount;
+        lodShDroppedObjects = res.shDroppedObjects;
+        lodObjSplatCount = res.objSplatCount;
+        lodObjFileCount = res.objFileCount;
+        lodObjChunkCount = res.objChunkCount;
+        lodObjShCoeff = res.objShCoeff;
+        lodObjShDropped = res.objShDropped;
+        lodFusedObjects = commit.combinedObjects != null ? commit.combinedObjects.ToArray() : new GameObject[0];
+        lodFusedObjectCount = lodFusedObjects.Length;
+        lodTotalChunks = res.totalChunkCount;
+        lodMetaWidth = res.metaWidth;
+        lodFusedSignature = commit.signature;
+        lodFusedSourceSignature = commit.sourceSignature;
+        lodSelectionSide = Mathf.NextPowerOfTwo(Mathf.CeilToInt(Mathf.Sqrt(Mathf.Max(1, res.totalChunkCount))));
+        int bpr = Mathf.Max(1, res.fusedPositions != null ? res.fusedPositions.width >> 2 : 1);
+        lodFusedCoordShift = ComputeTextureCoordShift(bpr);
+        lodFusedCoordMask = bpr - 1;
+        EnsureUnifiedLODMaterials(commit.folder, commit.prefix);
+        SaveFuseSig("LOD", commit.prefix, commit.signature);
+        SaveFuseSig("LODsrc", commit.prefix, commit.sourceSignature);
+        ClearQueuedFusedLODBake();
+        EditorUtility.SetDirty(this);
+        GaussianSplatRenderer.RequestEditorRefresh();
+    }
+
+    // Bakes all packed scene splats (non-LOD then LOD) into the unified fused set + chunk metadata via
+    // GaussianSplatFuse.CreateFuseLODJob, records the ordered object list for the runtime transform writer, and
+    // ensures the select/combine materials. The POT-square selection RT is created in UpdateResources.
+    void BuildFusedLOD(string ownerName, bool allowHeavyBake)
+    {
+        // Gather packed, renderable LOD objects, then sort by a RELOAD-STABLE key (first position
+        // texture's GUID hash) so the fused concatenation order is reproducible across domain reloads.
+        // The per-object transform-table row k maps to objs[k] at runtime; an InstanceID sort is NOT
+        // stable across reloads and would break the reload-from-disk fast path.
+        int sig = 20; // cheap content signature: object set + source textures + chunk/splat counts.
+                      // Bump the seed on fused-metadata FORMAT changes so old bakes regenerate once instead of
+                      // being reused via the fast path.
+
+        // Source signature: hashes ONLY what the heavy fused source textures depend on - each UNIQUE source once
+        // (instances dedup). Stable when a duplicate is added/removed, so the ~GB GPU source concat is skipped and
+        // only the metadata rebuilds. (sig, per placement, remains the LAYOUT signature gating the fast-path reload.)
+        int sourceSig = 17;
+        var sourceSigSeen = new HashSet<Texture2D>();
+
+        var valid = new List<GaussianSplatObject>();
+        GaussianSplatObject[] all = UnityEngine.Object.FindObjectsOfType<GaussianSplatObject>(true);
+        for (int i = 0; i < all.Length; i++)
+        {
+            GaussianSplatObject lo = all[i];
+            if (lo == null || lo.gameObject.scene != gameObject.scene || !lo.IsRenderable() || !lo.usePackedPositions)
+            {
+                continue; // only packed, renderable LOD objects in this scene participate
+            }
+            valid.Add(lo);
+        }
+        valid.Sort((a, b) =>
+        {
+            int ha = StableAssetHash((a.positions != null && a.positions.Length > 0) ? a.positions[0] : null);
+            int hb = StableAssetHash((b.positions != null && b.positions.Length > 0) ? b.positions[0] : null);
+            if (ha != hb) return ha.CompareTo(hb);
+            return string.CompareOrdinal(a.name, b.name);
+        });
+
+        var srcs = new List<GaussianSplatFuse.FuseLODSource>();
+        var objs = new List<GameObject>();
+        int totalChunks = 0;
+        bool requireRangeStats = false;
+        for (int i = 0; i < valid.Count; i++)
+        {
+            GaussianSplatObject lo = valid[i];
+            int loShCoeff = (lo.sh != null && lo.sh.Length > 0) ? Mathf.Max(0, lo.GetFileSHCoeffCount(0)) : 0;
+            requireRangeStats |= HasAppendedChunkRangeStats(lo.chunkRangeTexture, lo.GetChunkCount());
+            srcs.Add(new GaussianSplatFuse.FuseLODSource
+            {
+                positions = lo.positions, colors = lo.colors, rotations = lo.rotations, scales = lo.scales,
+                fileSplatCounts = lo.fileSplatCounts,
+                chunkBoundsMin = lo.chunkBoundsMinTexture, chunkBoundsMax = lo.chunkBoundsMaxTexture, chunkRange = lo.chunkRangeTexture,
+                chunkCount = lo.GetChunkCount(), chunkSize = lo.chunkSize, packed = true,
+                sh = lo.sh, shCoeffCount = loShCoeff, shMin = lo.GetFileSHMin(0), shRange = lo.GetFileSHRange(0),
+                shBand = SHBandFromCoeffCount(loShCoeff)
+            });
+            objs.Add(lo.gameObject);
+            totalChunks += Mathf.Max(0, lo.GetChunkCount());
+            // Content-hash based (asset dependency hash): detects a source/SH reimport, yet stays stable across
+            // domain reloads (the dependency hash only changes on an actual reimport). Commutative across objects.
+            Texture2D firstTex = (lo.positions != null && lo.positions.Length > 0) ? lo.positions[0] : null;
+            Texture2D shTex = lo.GetSH(0) as Texture2D;
+            unchecked { sig += StableTextureContentHash(firstTex) * 31 + StableTextureContentHash(lo.chunkRangeTexture) * 17 + StableTextureContentHash(shTex) * 23 + lo.GetFileCount() * 7 + lo.GetChunkCount() * 13 + lo.totalSplatCount + loShCoeff * 101; }
+            // Per UNIQUE source only (dedup by positions[0], matching FuseLOD's sharedSources key).
+            if (firstTex == null || sourceSigSeen.Add(firstTex))
+            {
+                unchecked { sourceSig += StableTextureContentHash(firstTex) * 31 + StableTextureContentHash(shTex) * 23 + lo.totalSplatCount + loShCoeff * 101 + lo.GetFileCount() * 7; }
+            }
+        }
+        if (srcs.Count == 0)
+        {
+            ClearQueuedFusedLODBake();
+            EnsureFusedLODObjectRefs(null);
+            lodTotalChunks = 0;
+            lodSelectionSide = 0;
+            lodTotalSourceCount = 0;
+            lodFusedSignature = sig;
+            lodFusedSourceSignature = sourceSig;
+            return;
+        }
+
+        // Combined object list matches the bake's objId order.
+        var combinedObjs = new List<GameObject>(objs);
+        EnsureFusedLODObjectRefs(combinedObjs);
+
+        string folder = GaussianSplatImporter.GetSceneTempResourceFolderPath(gameObject.scene, "RTs") + "/FusedLOD";
+        string prefix = GaussianSplatImporter.SanitizeAssetName(ownerName);
+        EnsureUnifiedLODMaterials(folder, prefix);
+
+        // Fast path A: already current in memory (steady-state refresh / saved scene after reload).
+        if (sig == lodFusedSignature && lodFusedPositions != null
+            && FusedLODObjectRefsMatch(lodFusedObjects, combinedObjs) && lodUnifiedCombineMaterial != null
+            && (lodSelectionSide > 0 || totalChunks == 0)
+            && FusedLODAssetsExist(folder, prefix, totalChunks, requireRangeStats))
+        {
+            ClearQueuedFusedLODBake();
+            return;
+        }
+
+        // Fast path B: the on-disk baked assets are already current for this content (EditorPrefs signature
+        // survives reload + unsaved scene). Reload them instead of re-running the heavy ~GB fuse + rewrite.
+        if (sig == LoadFuseSig("LOD", prefix) && TryReloadFusedLODFromDisk(folder, prefix, combinedObjs, totalChunks, requireRangeStats))
+        {
+            lodFusedSignature = sig;
+            lodFusedSourceSignature = sourceSig;
+            ClearQueuedFusedLODBake();
+            return;
+        }
+
+        if (!allowHeavyBake)
+        {
+            QueueFusedLODBake(sig);
+            return;
+        }
+
+        GaussianSplatImporter.EnsureFolderExists(folder);
+
+        // Source-reuse path: only the layout changed (a duplicate added/removed, transforms, chunk metadata) but
+        // the UNIQUE source set is identical, so the heavy GPU source concat output is byte-identical. Reuse the
+        // cached fused source textures (in-memory if the source sig still matches, else reloaded from disk) and
+        // let FuseLOD rebuild only the small per-instance metadata - skipping the ~GB gather + readback.
+        GaussianSplatFuse.FuseLODResult reuseFrom = null;
+        bool sourceCached = sourceSig == lodFusedSourceSignature && lodFusedPositions != null
+            && lodFusedColors != null && lodFusedRotations != null && lodFusedScales != null;
+        if (!sourceCached && sourceSig == LoadFuseSig("LODsrc", prefix))
+        {
+            Texture2D pos = AssetDatabase.LoadAssetAtPath<Texture2D>(folder + "/" + prefix + "_LODFusedPositions.asset");
+            Texture2D col = AssetDatabase.LoadAssetAtPath<Texture2D>(folder + "/" + prefix + "_LODFusedColors.asset");
+            Texture2D rot = AssetDatabase.LoadAssetAtPath<Texture2D>(folder + "/" + prefix + "_LODFusedRotations.asset");
+            Texture2D scl = AssetDatabase.LoadAssetAtPath<Texture2D>(folder + "/" + prefix + "_LODFusedScales.asset");
+            if (pos != null && col != null && rot != null && scl != null)
+            {
+                lodFusedPositions = pos; lodFusedColors = col; lodFusedRotations = rot; lodFusedScales = scl;
+                lodUnifiedSH = AssetDatabase.LoadAssetAtPath<Texture2D>(folder + "/" + prefix + "_LODFusedSH.asset");
+                sourceCached = true;
+            }
+        }
+        if (sourceCached)
+        {
+            reuseFrom = new GaussianSplatFuse.FuseLODResult
+            {
+                fusedPositions = lodFusedPositions, fusedColors = lodFusedColors,
+                fusedRotations = lodFusedRotations, fusedScales = lodFusedScales, fusedSH = lodUnifiedSH,
+            };
+        }
+
+        StartFusedLODJob(srcs, folder, prefix, reuseFrom, sig, sourceSig, combinedObjs);
+    }
+
+    static bool EnsureBucketArray(ref RenderTexture[] textures)
+    {
+        if (textures != null && textures.Length == GaussianSplatRenderer.COMBINED_BUCKET_TIER_COUNT)
+        {
+            return false;
+        }
+        RenderTexture[] resized = new RenderTexture[GaussianSplatRenderer.COMBINED_BUCKET_TIER_COUNT];
+        for (int i = 0; textures != null && i < Mathf.Min(textures.Length, resized.Length); i++)
+        {
+            resized[i] = textures[i];
+        }
+        textures = resized;
+        return true;
+    }
+
+    static bool AssignBucketTexture(ref RenderTexture target, RenderTexture source)
+    {
+        if (target == source)
+        {
+            return false;
+        }
+        target = source;
+        return true;
     }
 
     public void UpdateResources(int combinedElementCount)
@@ -650,44 +1343,48 @@ public partial class GaussianSplatCombiner
         }
         GaussianSplatRenderer owner = ResolveOwner();
         string ownerName = owner != null ? owner.name : name;
-        PlySplatImporter.TextureLayout combinedLayout = PlySplatImporter.ChoosePotTextureLayout(combinedElementCount);
-        int combinedWidth = combinedLayout.Width;
-        int combinedHeight = combinedLayout.Height;
-        string combinedFolderPath = PlySplatImporter.GetSceneTempResourceFolderPath(gameObject.scene, "RTs") + "/Combined";
-        string assetPrefix = PlySplatImporter.SanitizeAssetName(ownerName);
-        RenderTexture previousCombinedPositions = combinedPositions;
-        RenderTexture previousCombinedRotations = combinedRotations;
-        RenderTexture previousCombinedScales = combinedScales;
-        RenderTexture previousCombinedColors = combinedColors;
-        RenderTexture previousCombinedColorsCamera = combinedColorsCamera;
-        RenderTexture previousLodChunkSelection = lodChunkSelection;
-        RenderTexture previousLodAlphaState = lodAlphaState;
-        RenderTexture previousLodAlphaStateScratch = lodAlphaStateScratch;
-        Material previousCombineDataMaterial = combineDataMaterial;
+        BuildFusedLOD(ownerName, false); // queue heavy fused bake automatically; do not block editor refresh
+        string combinedFolderPath = GaussianSplatImporter.GetSceneTempResourceFolderPath(gameObject.scene, "RTs") + "/Combined";
+        string assetPrefix = GaussianSplatImporter.SanitizeAssetName(ownerName);
         MeshRenderer previousCombinedSortedRenderer = combinedSortedRenderer;
         bool resourcesChanged = false;
-        resourcesChanged |= PlySplatImporter.EnsureSortRenderTexture(ref combinedPositions, combinedFolderPath, assetPrefix + "_CombinedPositions", combinedWidth, combinedHeight, combinedPositionsFormat, false, 1);
-        // Quaternions are baked into the combined texture here; the format is user-configurable
-        // because precision and memory tradeoffs depend on the scene.
-        resourcesChanged |= PlySplatImporter.EnsureSortRenderTexture(ref combinedRotations, combinedFolderPath, assetPrefix + "_CombinedRotations", combinedWidth, combinedHeight, combinedRotationsFormat, false, 1);
-        resourcesChanged |= PlySplatImporter.EnsureSortRenderTexture(ref combinedScales, combinedFolderPath, assetPrefix + "_CombinedScales", combinedWidth, combinedHeight, combinedScalesFormat, false, 1);
-        resourcesChanged |= PlySplatImporter.EnsureSortRenderTexture(ref combinedColors, combinedFolderPath, assetPrefix + "_CombinedColors", combinedWidth, combinedHeight, combinedColorsFormat, false, 1);
-        resourcesChanged |= PlySplatImporter.EnsureSortRenderTexture(ref combinedColorsCamera, combinedFolderPath, assetPrefix + "_CombinedColorsCamera", combinedWidth, combinedHeight, combinedColorsCameraFormat, false, 1);
-        int lodSelectionWidth = Mathf.NextPowerOfTwo(Mathf.Max(1, GetSceneMaxLODChunkCount()));
-        resourcesChanged |= PlySplatImporter.EnsureSortRenderTexture(ref lodChunkSelection, combinedFolderPath, assetPrefix + "_LODChunkSelection", lodSelectionWidth, 1, RenderTextureFormat.ARGBFloat, true, 1);
-        resourcesChanged |= PlySplatImporter.EnsureSortRenderTexture(ref lodAlphaState, combinedFolderPath, assetPrefix + "_LODAlphaState", 1, 1, RenderTextureFormat.ARGBFloat, false, 1);
-        resourcesChanged |= PlySplatImporter.EnsureSortRenderTexture(ref lodAlphaStateScratch, combinedFolderPath, assetPrefix + "_LODAlphaStateScratch", 1, 1, RenderTextureFormat.ARGBFloat, false, 1);
+        // Pool-backed combined textures: tier i == RT bucket i (256K/1M/4M/16M). Assign the shared pool sets
+        // into every tier slot; the baseline fields default to the largest bucket the scene can reach (the
+        // runtime swap overrides them per frame). Per-scene combined RTs are no longer allocated.
+        int maxBucket = GaussianSplatRTPool.BucketIndexForCount(combinedElementCount);
+        if (maxBucket < 0) maxBucket = GaussianSplatRenderer.COMBINED_BUCKET_TIER_COUNT - 1;
+        resourcesChanged |= EnsureBucketArray(ref combinedPositionsByBucket);
+        resourcesChanged |= EnsureBucketArray(ref combinedRotationsByBucket);
+        resourcesChanged |= EnsureBucketArray(ref combinedScalesByBucket);
+        resourcesChanged |= EnsureBucketArray(ref combinedColorsByBucket);
+        resourcesChanged |= EnsureBucketArray(ref combinedColorsCameraByBucket);
+        for (int b = 0; b < GaussianSplatRenderer.COMBINED_BUCKET_TIER_COUNT; b++)
+        {
+            GaussianSplatRTPool.BucketSet set = GaussianSplatRTPool.LoadBucket(b);
+            resourcesChanged |= AssignBucketTexture(ref combinedPositionsByBucket[b], set.combinedPositions);
+            resourcesChanged |= AssignBucketTexture(ref combinedRotationsByBucket[b], set.combinedRotations);
+            resourcesChanged |= AssignBucketTexture(ref combinedScalesByBucket[b], set.combinedScales);
+            resourcesChanged |= AssignBucketTexture(ref combinedColorsByBucket[b], set.combinedColors);
+            resourcesChanged |= AssignBucketTexture(ref combinedColorsCameraByBucket[b], set.combinedColorsCamera);
+        }
+        GaussianSplatRTPool.BucketSet baseSet = GaussianSplatRTPool.LoadBucket(maxBucket);
+        resourcesChanged |= GaussianSplatImporter.EnsureSortRenderTexture(ref lodAlphaState, combinedFolderPath, assetPrefix + "_LODAlphaState", 1, 1, RenderTextureFormat.ARGBFloat, false, 1);
+        resourcesChanged |= GaussianSplatImporter.EnsureSortRenderTexture(ref lodAlphaStateScratch, combinedFolderPath, assetPrefix + "_LODAlphaStateScratch", 1, 1, RenderTextureFormat.ARGBFloat, false, 1);
+        // Unified LOD selection: POT-square (mip-chained) 2D pyramid over all baked LOD chunks.
+        if (lodSelectionSide > 0)
+        {
+            resourcesChanged |= GaussianSplatImporter.EnsureSortRenderTexture(ref lodUnifiedSelection, combinedFolderPath, assetPrefix + "_LODUnifiedSelection", lodSelectionSide, lodSelectionSide, RenderTextureFormat.ARGBFloat, true, 1);
+        }
         bool useSrgb = true;
-        PlySplatImporter.PassInfo[] passInfos = PlySplatImporter.CreatePassLayout(combinedElementCount, Mathf.Min(DEFAULT_COMBINED_SPLATS_PER_PASS, combinedElementCount), DEFAULT_COMBINED_MAX_ALPHA_MASK_COUNT, useSrgb);
-        bool ownerCombinedMode = OwnerIsCombinedMode();
+        // Geometric pass ladder (512K, 512K, 1M, 2M, 4M, 8M) covering the max reachable count, with shared
+        // per-pass meshes; the runtime enables the minimal prefix that covers the live rendered count.
+        GaussianSplatImporter.PassInfo[] passInfos = GaussianSplatRTPool.CreateGeometricPassLayout(combinedElementCount);
+        bool hasOwner = HasOwner();
         bool hierarchyStateChanged = EnsureGeneratedHierarchyState(false);
         bool chunkHierarchyChanged = EnsureOwnerChunkHierarchy(owner);
-        bool sortedRendererSatisfied = combinedSortedRenderer != null && (ownerCombinedMode || !combinedSortedRenderer.gameObject.activeSelf);
+        bool sortedRendererSatisfied = combinedSortedRenderer != null && (hasOwner || !combinedSortedRenderer.gameObject.activeSelf);
         if (!resourcesChanged
             && builtCombinedElementCount == combinedElementCount
-            && combineDataMaterial != null
-            && lodChunkSelectMaterial != null
-            && lodCombineDataMaterial != null
             && sortedRendererSatisfied
             && CombinedMaterialQueuesMatch(passInfos, useSrgb))
         {
@@ -705,34 +1402,14 @@ public partial class GaussianSplatCombiner
             EditorUtility.SetDirty(combinedSortedRenderer.gameObject);
             rendererVisibilityChanged = true;
         }
-        Shader combineShader = Shader.Find("Hidden/GaussianSplatting/CombineData");
-        if (combineShader == null)
-        {
-            return;
-        }
-        Material combineMaterial = new Material(combineShader);
-        combineMaterial.name = assetPrefix + "_CombineData";
-        combineDataMaterial = PlySplatImporter.CreateOrReplaceAsset(combineMaterial, combinedFolderPath + "/" + assetPrefix + "_CombineData.mat");
-        Shader lodChunkSelectShader = Shader.Find("Hidden/GaussianSplatting/LODChunkSelect");
-        Shader lodCombineShader = Shader.Find("Hidden/GaussianSplatting/LODCombineData");
-        if (lodChunkSelectShader != null)
-        {
-            Material chunkSelectMaterial = new Material(lodChunkSelectShader);
-            chunkSelectMaterial.name = assetPrefix + "_LODChunkSelect";
-            lodChunkSelectMaterial = PlySplatImporter.CreateOrReplaceAsset(chunkSelectMaterial, combinedFolderPath + "/" + assetPrefix + "_LODChunkSelect.mat");
-        }
-        if (lodCombineShader != null)
-        {
-            Material lodCombineMaterial = new Material(lodCombineShader);
-            lodCombineMaterial.name = assetPrefix + "_LODCombineData";
-            lodCombineDataMaterial = PlySplatImporter.CreateOrReplaceAsset(lodCombineMaterial, combinedFolderPath + "/" + assetPrefix + "_LODCombineData.mat");
-        }
+        // Unified combine/select materials are created in BuildFusedLOD; no legacy CombineData/LODChunkSelect/
+        // LODCombineData materials needed anymore.
         List<Material> generatedMaterials = new List<Material>();
         List<int> generatedRenderQueues = new List<int>();
         int renderQueue = GetEffectiveStartRenderQueue();
         if (useSrgb)
         {
-            Material toSrgb = PlySplatImporter.CreateMaterialFromTemplate(null, "VRChatGaussianSplatting/ToSRGB", assetPrefix + "_CombinedToSRGB");
+            Material toSrgb = GaussianSplatImporter.CreateMaterialFromTemplate(null, "VRChatGaussianSplatting/ToSRGB", assetPrefix + "_CombinedToSRGB");
             if (toSrgb != null)
             {
                 toSrgb.renderQueue = renderQueue++;
@@ -743,11 +1420,11 @@ public partial class GaussianSplatCombiner
         Material mainMaterial = null;
         for (int passIndex = 0; passIndex < passInfos.Length; passIndex++)
         {
-            PlySplatImporter.PassInfo passInfo = passInfos[passIndex];
+            GaussianSplatImporter.PassInfo passInfo = passInfos[passIndex];
             string materialName = assetPrefix + (passInfo.PassIndex > 0 ? "_CombinedPass" + passInfo.PassIndex : "_CombinedMain") + "_Splat";
             Material splatMaterial = passInfo.PassIndex == 0
-                ? PlySplatImporter.CreateMaterialFromTemplate(null, "VRChatGaussianSplatting/GaussianSplatting", materialName)
-                : (mainMaterial != null ? new Material(mainMaterial) : PlySplatImporter.CreateMaterialFromTemplate(null, "VRChatGaussianSplatting/GaussianSplatting", materialName));
+                ? GaussianSplatImporter.CreateMaterialFromTemplate(null, "VRChatGaussianSplatting/GaussianSplatting", materialName)
+                : (mainMaterial != null ? new Material(mainMaterial) : GaussianSplatImporter.CreateMaterialFromTemplate(null, "VRChatGaussianSplatting/GaussianSplatting", materialName));
             if (splatMaterial == null)
             {
                 continue;
@@ -757,12 +1434,12 @@ public partial class GaussianSplatCombiner
             {
                 mainMaterial = splatMaterial;
             }
-            PlySplatImporter.ConfigureSplatMaterial(
+            GaussianSplatImporter.ConfigureSplatMaterial(
                 splatMaterial,
-                combinedPositions,
-                combinedColors,
-                combinedRotations,
-                combinedScales,
+                baseSet.combinedPositions,
+                baseSet.combinedColors,
+                baseSet.combinedRotations,
+                baseSet.combinedScales,
                 null,
                 0,
                 combinedElementCount,
@@ -770,7 +1447,7 @@ public partial class GaussianSplatCombiner
                 Vector4.one,
                 combinedElementCount,
                 0.0f,
-                combinedColorsCamera,
+                baseSet.combinedColorsCamera,
                 true,
                 null,
                 passInfo.SplatCount,
@@ -781,7 +1458,7 @@ public partial class GaussianSplatCombiner
             }
             if (passInfo.HasAlphaMask)
             {
-                Material alphaMask = PlySplatImporter.CreateMaterialFromTemplate(null, "VRChatGaussianSplatting/AlphaDepthMask", materialName + "_AlphaDepthMask");
+                Material alphaMask = GaussianSplatImporter.CreateMaterialFromTemplate(null, "VRChatGaussianSplatting/AlphaDepthMask", materialName + "_AlphaDepthMask");
                 if (alphaMask != null)
                 {
                     alphaMask.renderQueue = renderQueue++;
@@ -795,7 +1472,7 @@ public partial class GaussianSplatCombiner
         }
         if (useSrgb)
         {
-            Material toLinear = PlySplatImporter.CreateMaterialFromTemplate(null, "VRChatGaussianSplatting/ToLinear", assetPrefix + "_CombinedToLinear");
+            Material toLinear = GaussianSplatImporter.CreateMaterialFromTemplate(null, "VRChatGaussianSplatting/ToLinear", assetPrefix + "_CombinedToLinear");
             if (toLinear != null)
             {
                 toLinear.renderQueue = renderQueue++;
@@ -804,10 +1481,10 @@ public partial class GaussianSplatCombiner
             }
         }
         string materialsFolderPath = combinedFolderPath + "/Materials";
-        PlySplatImporter.EnsureFolderExists(materialsFolderPath);
+        GaussianSplatImporter.EnsureFolderExists(materialsFolderPath);
         for (int i = 0; i < generatedMaterials.Count; i++)
         {
-            Material savedMaterial = PlySplatImporter.CreateOrReplaceAsset(generatedMaterials[i], materialsFolderPath + "/" + generatedMaterials[i].name + ".mat");
+            Material savedMaterial = GaussianSplatImporter.CreateOrReplaceAsset(generatedMaterials[i], materialsFolderPath + "/" + generatedMaterials[i].name + ".mat");
             if (savedMaterial != null && savedMaterial.renderQueue != generatedRenderQueues[i])
             {
                 savedMaterial.renderQueue = generatedRenderQueues[i];
@@ -818,15 +1495,7 @@ public partial class GaussianSplatCombiner
         Material[] combinedMaterials = generatedMaterials.ToArray();
         bool rendererRootChanged = EnsureCombinedRendererRoot(combinedMaterials);
         chunkHierarchyChanged |= EnsureOwnerChunkHierarchy(owner);
-        if (combinedPositions != previousCombinedPositions ||
-            combinedRotations != previousCombinedRotations ||
-            combinedScales != previousCombinedScales ||
-            combinedColors != previousCombinedColors ||
-            combinedColorsCamera != previousCombinedColorsCamera ||
-            lodChunkSelection != previousLodChunkSelection ||
-            lodAlphaState != previousLodAlphaState ||
-            lodAlphaStateScratch != previousLodAlphaStateScratch ||
-            combineDataMaterial != previousCombineDataMaterial ||
+        if (resourcesChanged ||
             combinedSortedRenderer != previousCombinedSortedRenderer ||
             builtCombinedElementCount != combinedElementCount ||
             rendererRootChanged ||

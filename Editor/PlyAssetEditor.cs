@@ -158,7 +158,7 @@ namespace GaussianSplatting.Editor
 
             if (GUILayout.Button(GSEditorText.T("Open Import Wizard", "インポートウィザードを開く")))
             {
-                GaussianSplatting.Editor.Importers.PlyImportWizard.OpenWithPly(absolutePath);
+                GaussianSplatting.Editor.Importers.GaussianSplatImportWizard.OpenWithSource(absolutePath);
             }
 
             EditorGUILayout.EndVertical();
@@ -322,7 +322,7 @@ namespace GaussianSplatting.Editor
                     GSEditorText.T("PLY Import", "PLY インポート"),
                     GSEditorText.T("Importing ", "インポート中: ") + Path.GetFileName(absolutePlyPath),
                     0.0f);
-                GaussianSplatting.Editor.Importers.PlyImportWizard.ImportWithDefaults(absolutePlyPath, prefabAssetPath);
+                GaussianSplatting.Editor.Importers.GaussianSplatImportWizard.ImportWithDefaults(absolutePlyPath, prefabAssetPath);
                 AssetDatabase.SaveAssets();
                 AssetDatabase.Refresh();
 

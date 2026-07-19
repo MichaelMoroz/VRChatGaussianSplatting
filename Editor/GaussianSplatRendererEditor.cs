@@ -10,22 +10,27 @@ namespace GaussianSplatting.Editor
     [CanEditMultipleObjects]
     class GaussianSplatRendererEditor : UnityEditor.Editor
     {
+        const long VRC_WORLD_SIZE_WARNING_BYTES = 1200L * 1024L * 1024L;
+        const float SPLAT_DATA_DOWNLOAD_COMPRESSION_ESTIMATE = 0.85f;
+
         SerializedProperty _cameraPositionQuantization;
-        SerializedProperty _alwaysUpdate;
-        SerializedProperty _splatRenderOrder;
-        SerializedProperty _splatRenderOrderPhoto;
-        SerializedProperty _renderingMode;
         SerializedProperty _combinedLodSplatBudgetPC;
         SerializedProperty _combinedLodSplatBudgetAndroid;
         SerializedProperty _combinedLodTargetScale;
         SerializedProperty _combinedLodDirectionalBias;
+        SerializedProperty _lodMaxSplatsPerPixel;
+        SerializedProperty _startupQualityPreset;
+        SerializedProperty _startupLodCapacity;
         SerializedProperty _debugDrawLodGrid;
-        SerializedProperty _blockNonMasterGlobalChanges;
+        SerializedProperty _debugRenderOpaqueEllipsoids;
+        SerializedProperty _debugDrawChunkBounds;
+        SerializedProperty _debugDrawChunkCenterArea;
 
         SerializedProperty _overrideMaterialProperties;
         SerializedProperty _overrideRenderQueue;
         SerializedProperty _startRenderQueue;
         SerializedProperty _requestedSHBand;
+        bool _showFusedObjectTable;
         SerializedProperty _gaussianScale;
         SerializedProperty _thinThreshold;
         SerializedProperty _antiAliasing;
@@ -44,16 +49,17 @@ namespace GaussianSplatting.Editor
         void OnEnable()
         {
             _cameraPositionQuantization = serializedObject.FindProperty("cameraPositionQuantization");
-            _alwaysUpdate = serializedObject.FindProperty("alwaysUpdate");
-            _splatRenderOrder = serializedObject.FindProperty("splatRenderOrder");
-            _splatRenderOrderPhoto = serializedObject.FindProperty("splatRenderOrderPhoto");
-            _renderingMode = serializedObject.FindProperty("renderingMode");
             _combinedLodSplatBudgetPC = serializedObject.FindProperty("combinedLodSplatBudgetPC");
             _combinedLodSplatBudgetAndroid = serializedObject.FindProperty("combinedLodSplatBudgetAndroid");
             _combinedLodTargetScale = serializedObject.FindProperty("combinedLodTargetScale");
             _combinedLodDirectionalBias = serializedObject.FindProperty("combinedLodDirectionalBias");
+            _lodMaxSplatsPerPixel = serializedObject.FindProperty("lodMaxSplatsPerPixel");
+            _startupQualityPreset = serializedObject.FindProperty("startupQualityPreset");
+            _startupLodCapacity = serializedObject.FindProperty("startupLodCapacity");
             _debugDrawLodGrid = serializedObject.FindProperty("debugDrawLodGrid");
-            _blockNonMasterGlobalChanges = serializedObject.FindProperty("blockNonMasterGlobalChanges");
+            _debugRenderOpaqueEllipsoids = serializedObject.FindProperty("debugRenderOpaqueEllipsoids");
+            _debugDrawChunkBounds = serializedObject.FindProperty("debugDrawChunkBounds");
+            _debugDrawChunkCenterArea = serializedObject.FindProperty("debugDrawChunkCenterArea");
 
             _overrideMaterialProperties = serializedObject.FindProperty("overrideMaterialProperties");
             _overrideRenderQueue = serializedObject.FindProperty("overrideRenderQueue");
@@ -94,10 +100,12 @@ namespace GaussianSplatting.Editor
                 if (changed)
                 {
                     sceneRenderer.RefreshEditorResourcesAndVisibility();
+                    sceneRenderer.ApplyEditorDebugRenderingModeNow();
                 }
                 else
                 {
                     GaussianSplatCombinedHierarchyBuilder.EnsureChunkHierarchy(sceneRenderer);
+                    sceneRenderer.ApplyEditorDebugRenderingModeNow();
                 }
             }
 
@@ -107,40 +115,40 @@ namespace GaussianSplatting.Editor
 
         void DrawRenderingSettings()
         {
-            bool lodAvailable = GaussianSplatLODFeature.IsAvailable();
-            DrawRenderingModeField();
-            if (lodAvailable)
+            bool hasActiveLodObjects = !serializedObject.isEditingMultipleObjects && target is GaussianSplatRenderer sceneRendererWithLod && CountActiveSceneLODObjects(sceneRendererWithLod) > 0;
+            if (hasActiveLodObjects)
             {
                 DrawCombinedLodBudgetField();
-                EditorGUILayout.PropertyField(_debugDrawLodGrid, GSEditorText.C("Debug LOD Grid", "LOD グリッドをデバッグ表示"));
+                EditorGUILayout.PropertyField(_debugDrawLodGrid, GSEditorText.C("Debug LOD", "LOD をデバッグ表示"));
             }
-            EditorGUILayout.HelpBox(GSEditorText.T(
-                "Combined mode is slightly slower than single splat. Rendering multiple splats requires separately transforming splats into world space and writing them into a combined set of render textures.",
-                "統合モードは単体 Splat より少し低速です。複数の Splat を描画するには、各 Splat を個別にワールド空間へ変換し、統合された RenderTexture セットへ書き込む必要があります。"), MessageType.Info);
-            if (!serializedObject.isEditingMultipleObjects && target is GaussianSplatRenderer warningRenderer && !warningRenderer.IsCombinedRenderingMode() && CountActiveSceneSplats(warningRenderer) > 1)
-            {
-                EditorGUILayout.HelpBox(GSEditorText.T(
-                    "Multiple Gaussian splats are active, but Rendering Mode is Single Splat. Only one splat will be rendered. Enable Combined rendering to render multiple active splats.",
-                    "複数の Gaussian Splat が有効ですが、表示モードは単体です。描画されるのは 1 つだけです。複数を描画するには統合表示を有効にしてください。"), MessageType.Warning);
-            }
-            if (lodAvailable && !serializedObject.isEditingMultipleObjects && target is GaussianSplatRenderer lodWarningRenderer && !lodWarningRenderer.IsCombinedRenderingMode() && CountActiveSceneLODObjects(lodWarningRenderer) > 0)
-            {
-                EditorGUILayout.HelpBox(GSEditorText.T(
-                    "Gaussian Splat LOD objects only render in Combined mode.",
-                    "Gaussian Splat LOD オブジェクトは統合モードでのみ描画されます。"), MessageType.Warning);
-            }
+            EditorGUILayout.PropertyField(_debugRenderOpaqueEllipsoids, GSEditorText.C("Debug Opaque Ellipsoids", "不透明楕円体をデバッグ表示"));
+            EditorGUILayout.PropertyField(_debugDrawChunkBounds, GSEditorText.C("Debug Chunk Bounds", "チャンク境界をデバッグ表示"));
+            EditorGUILayout.PropertyField(_debugDrawChunkCenterArea, GSEditorText.C("Debug Chunk Center+Area", "チャンク重心+面積をデバッグ表示"));
             if (!serializedObject.isEditingMultipleObjects && target is GaussianSplatRenderer sceneRenderer)
             {
                 EditorGUILayout.LabelField(GSEditorText.T("Rendered Splat Count", "描画スプラット数"), sceneRenderer.GetCurrentRenderedSplatCount().ToString());
-                if (sceneRenderer.IsCombinedRenderingMode())
+                EditorGUILayout.LabelField(GSEditorText.T("Baked Splat Count", "ベイク済みスプラット数"), sceneRenderer.GetTotalBakedSplatCount().ToString("N0"));
+                long splatDataBytes = sceneRenderer.GetBakedSplatDataBytes();
+                if (splatDataBytes > 0)
                 {
-                    int readbackCount = sceneRenderer.GetEditorReadbackRenderedSplatCount();
-                    int reservedCount = sceneRenderer.GetEditorReadbackReservedSplatCount();
-                    if (reservedCount > 0)
+                    // Build/download is an LZ4 asset bundle; the high-entropy RGBA32 splat textures compress to
+                    // ~0.85x (measured on a 4.5M-splat build: 81.7 MB uncompressed source -> ~70 MB in the .vrcw).
+                    long compressedBytes = (long)(splatDataBytes * SPLAT_DATA_DOWNLOAD_COMPRESSION_ESTIMATE);
+                    EditorGUILayout.LabelField(GSEditorText.T("Splat Data (download est.)", "スプラットデータ (DL推定)"),
+                        EditorUtility.FormatBytes(compressedBytes) + " (~" + EditorUtility.FormatBytes(splatDataBytes) + " raw)");
+                    if (compressedBytes > VRC_WORLD_SIZE_WARNING_BYTES)
                     {
-                        EditorGUILayout.LabelField(GSEditorText.T("Editor Readback Splat Count", "エディタ読み戻しスプラット数"), readbackCount + " / " + reservedCount);
-                        EditorGUILayout.LabelField(GSEditorText.T("Editor Readback Log2 Alpha", "エディタ読み戻し Log2 アルファ"), sceneRenderer.GetEditorReadbackAlpha().ToString("0.###"));
+                        EditorGUILayout.HelpBox(
+                            "Estimated splat data alone exceeds the 1.2 GB VRChat world size limit. Reduce baked splat data before uploading.",
+                            MessageType.Warning);
                     }
+                }
+                int readbackCount = sceneRenderer.GetEditorReadbackRenderedSplatCount();
+                int reservedCount = sceneRenderer.GetEditorReadbackReservedSplatCount();
+                if (reservedCount > 0)
+                {
+                    EditorGUILayout.LabelField(GSEditorText.T("Editor Readback Splat Count", "エディタ読み戻しスプラット数"), readbackCount + " / " + reservedCount);
+                    EditorGUILayout.LabelField(GSEditorText.T("Editor Readback Log2 Alpha", "エディタ読み戻し Log2 アルファ"), sceneRenderer.GetEditorReadbackAlpha().ToString("0.###"));
                 }
             }
         }
@@ -191,8 +199,50 @@ namespace GaussianSplatting.Editor
                 }
                 EditorGUI.showMixedValue = false;
             }
+            if (_lodMaxSplatsPerPixel != null)
+            {
+                EditorGUI.showMixedValue = _lodMaxSplatsPerPixel.hasMultipleDifferentValues;
+                EditorGUI.BeginChangeCheck();
+                float nextMaxPerPixel = EditorGUILayout.Slider(GSEditorText.T("LOD Max Splats / Pixel", "LOD 最大スプラット/ピクセル"), Mathf.Max(0.0f, _lodMaxSplatsPerPixel.floatValue), 0.0f, 4.0f);
+                if (EditorGUI.EndChangeCheck())
+                {
+                    _lodMaxSplatsPerPixel.floatValue = Mathf.Max(0.0f, nextMaxPerPixel);
+                }
+                EditorGUI.showMixedValue = false;
+            }
+            if (_startupQualityPreset != null)
+            {
+                // Index 0 = "Keep Inspector Settings" maps to the stored value -1; indices 1..4 map to 0..3.
+                string[] startupLabels = { GSEditorText.T("Keep Inspector Settings", "インスペクター設定を維持"), GSEditorText.T("Very Low", "最低"), GSEditorText.T("Low", "低"), GSEditorText.T("Medium", "中"), GSEditorText.T("High", "高") };
+                EditorGUI.showMixedValue = _startupQualityPreset.hasMultipleDifferentValues;
+                EditorGUI.BeginChangeCheck();
+                int nextStartup = EditorGUILayout.Popup(GSEditorText.T("Startup Quality", "起動時の品質"), Mathf.Clamp(_startupQualityPreset.intValue + 1, 0, startupLabels.Length - 1), startupLabels);
+                if (EditorGUI.EndChangeCheck())
+                {
+                    _startupQualityPreset.intValue = nextStartup - 1;
+                }
+                EditorGUI.showMixedValue = false;
+            }
             if (!serializedObject.isEditingMultipleObjects && target is GaussianSplatRenderer sceneRenderer)
             {
+                if (_startupLodCapacity != null)
+                {
+                    // Startup LOD capacity as a fraction of THIS platform's cap (scales per-platform). Used when
+                    // Startup Quality = "Keep Inspector Settings". Shows the resolved count for the editor's
+                    // platform (PC cap) for reference.
+                    EditorGUI.showMixedValue = _startupLodCapacity.hasMultipleDifferentValues;
+                    EditorGUI.BeginChangeCheck();
+                    float nextCapacity = EditorGUILayout.Slider(GSEditorText.T("Startup LOD Capacity", "起動時 LOD 容量"), Mathf.Clamp01(_startupLodCapacity.floatValue), 0.0f, 1.0f);
+                    if (EditorGUI.EndChangeCheck())
+                    {
+                        _startupLodCapacity.floatValue = Mathf.Clamp01(nextCapacity);
+                    }
+                    EditorGUI.showMixedValue = false;
+                    int sliderMin = sceneRenderer.GetCombinedLodSplatBudgetSliderMin();
+                    int sliderMax = sceneRenderer.GetCombinedLodSplatBudgetSliderMax();
+                    int resolved = Mathf.Clamp(Mathf.RoundToInt(Mathf.Clamp01(_startupLodCapacity.floatValue) * sliderMax), sliderMin, sliderMax);
+                    EditorGUILayout.LabelField(" ", GSEditorText.T("= " + resolved.ToString("N0") + " splats (PC cap)", "= " + resolved.ToString("N0") + " スプラット (PC 上限)"));
+                }
                 int effectiveBudget = sceneRenderer.GetEffectiveCombinedLodSplatBudget();
                 int targetBudget = effectiveBudget > 0 ? Mathf.FloorToInt(effectiveBudget * sceneRenderer.GetEffectiveCombinedLodTargetScale()) : 0;
                 string effective = effectiveBudget == 0 ? GSEditorText.T("No cap", "上限なし") : effectiveBudget.ToString();
@@ -203,40 +253,10 @@ namespace GaussianSplatting.Editor
             }
         }
 
-        void DrawRenderingModeField()
-        {
-            string[] modeLabels =
-            {
-                GSEditorText.T("Single Splat", "単体"),
-                GSEditorText.T("Combined", "統合")
-            };
-            EditorGUI.showMixedValue = _renderingMode.hasMultipleDifferentValues;
-            EditorGUI.BeginChangeCheck();
-            int nextMode = EditorGUILayout.Popup(GSEditorText.T("Rendering Mode", "表示モード"), Mathf.Clamp(_renderingMode.enumValueIndex, 0, modeLabels.Length - 1), modeLabels);
-            if (EditorGUI.EndChangeCheck())
-            {
-                _renderingMode.enumValueIndex = nextMode;
-            }
-            EditorGUI.showMixedValue = false;
-        }
-
-        static int CountActiveSceneSplats(GaussianSplatRenderer renderer)
-        {
-            int count = 0;
-            foreach (GaussianSplatObject splat in Resources.FindObjectsOfTypeAll<GaussianSplatObject>())
-            {
-                if (splat != null && splat.gameObject.scene == renderer.gameObject.scene && !EditorUtility.IsPersistent(splat) && splat.gameObject.activeInHierarchy)
-                {
-                    count++;
-                }
-            }
-            return count;
-        }
-
         static int CountActiveSceneLODObjects(GaussianSplatRenderer renderer)
         {
             int count = 0;
-            foreach (GaussianSplatLODObject lodObject in Resources.FindObjectsOfTypeAll<GaussianSplatLODObject>())
+            foreach (GaussianSplatObject lodObject in Resources.FindObjectsOfTypeAll<GaussianSplatObject>())
             {
                 if (lodObject != null && lodObject.gameObject.scene == renderer.gameObject.scene && !EditorUtility.IsPersistent(lodObject) && lodObject.gameObject.activeInHierarchy)
                 {
@@ -249,16 +269,25 @@ namespace GaussianSplatting.Editor
         void DrawSortingSettings()
         {
             EditorGUILayout.PropertyField(_cameraPositionQuantization, GSEditorText.C("Camera Position Quantization", "カメラ位置量子化"));
-            EditorGUILayout.PropertyField(_alwaysUpdate, GSEditorText.C("Always Update", "常に更新"));
-            EditorGUILayout.PropertyField(_splatRenderOrder, GSEditorText.C("Splat Render Order", "スプラット描画順"));
-            EditorGUILayout.PropertyField(_splatRenderOrderPhoto, GSEditorText.C("Photo Splat Render Order", "写真スプラット描画順"));
         }
 
         void DrawMaterialSettings()
         {
             EditorGUILayout.IntSlider(_requestedSHBand, 0, 3, GSEditorText.C("Requested SH Band", "要求 SH バンド"));
+            if (!serializedObject.isEditingMultipleObjects && target is GaussianSplatRenderer shRenderer)
+            {
+                GaussianSplatCombiner shCombiner = shRenderer.GetCombiner();
+                int droppedSh = shCombiner != null ? shCombiner.GetFusedShDroppedObjectCount() : 0;
+                if (droppedSh > 0)
+                {
+                    EditorGUILayout.HelpBox(GSEditorText.T(
+                        $"Spherical harmonics were dropped for {droppedSh} object(s): the scene's total SH exceeds the single fused SH texture cap (16384² texels). Those splats render without view-dependent color regardless of this setting. Lower the SH band on some splats, reduce splat counts, or split the scene.",
+                        $"{droppedSh} 個のオブジェクトの球面調和が破棄されました: シーン全体の SH が単一の統合 SH テクスチャ上限 (16384² テクセル) を超えています。該当スプラットはこの設定に関わらず視点依存色なしで描画されます。一部スプラットの SH バンドを下げる、スプラット数を減らす、またはシーンを分割してください。"),
+                        MessageType.Warning);
+                }
+                DrawFusedObjectTable(shCombiner);
+            }
             EditorGUILayout.PropertyField(_useVrcLightVolumes, GSEditorText.C("Use VRC Light Volumes", "VRC Light Volumes を使用"));
-            EditorGUILayout.PropertyField(_blockNonMasterGlobalChanges, GSEditorText.C("Block Non-Master Global UI", "非マスターの共有 UI 変更をブロック"));
             using (new EditorGUI.DisabledScope(!_useVrcLightVolumes.boolValue))
             {
                 EditorGUILayout.Slider(_lightVolumeIntensity, 0.0f, 10.0f, GSEditorText.C("Light Volume Intensity", "ライトボリューム強度"));
@@ -281,10 +310,7 @@ namespace GaussianSplatting.Editor
                 EditorGUILayout.Slider(_log2MinScale, -20.0f, 10.0f, GSEditorText.C("Log2 Minimum Scale", "Log2 最小スケール"));
                 EditorGUILayout.Slider(_alphaCutoff, 0.0f, 1.0f, GSEditorText.C("Alpha Cutoff", "アルファカットオフ"));
                 EditorGUILayout.Slider(_alphaCull, 0.0f, 1.0f, GSEditorText.C("Alpha Cull", "アルファカリング"));
-                if (GaussianSplatLODFeature.IsAvailable())
-                {
-                    EditorGUILayout.Slider(_lodCull, 0.0f, 0.1f, GSEditorText.C("LOD Cull", "LOD カリング"));
-                }
+                EditorGUILayout.Slider(_lodCull, 0.0f, 0.1f, GSEditorText.C("LOD Cull", "LOD カリング"));
                 EditorGUILayout.Slider(_scaleCutoff, 0.0f, 100.0f, GSEditorText.C("Scale Cutoff", "スケールカットオフ"));
                 EditorGUILayout.Slider(_exposure, 0.0f, 5.0f, GSEditorText.C("Exposure", "露出"));
                 EditorGUILayout.Slider(_opacity, 0.0f, 5.0f, GSEditorText.C("Opacity", "不透明度"));
@@ -293,15 +319,83 @@ namespace GaussianSplatting.Editor
             }
         }
 
+        static readonly GUILayoutOption[] _colNum = { GUILayout.Width(64) };
+        static readonly GUILayoutOption[] _colShTex = { GUILayout.Width(110) };
+        static readonly GUILayoutOption[] _colFlag = { GUILayout.Width(72) };
+
+        static void DrawFusedTableRow(string c0, string active, string splats, string files, string chunks, string band, string shTex, string flag, GUIStyle style)
+        {
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                EditorGUILayout.LabelField(c0, style, GUILayout.MinWidth(120));
+                EditorGUILayout.LabelField(active, style, _colFlag);
+                EditorGUILayout.LabelField(splats, style, _colNum);
+                EditorGUILayout.LabelField(files, style, _colNum);
+                EditorGUILayout.LabelField(chunks, style, _colNum);
+                EditorGUILayout.LabelField(band, style, _colNum);
+                EditorGUILayout.LabelField(shTex, style, _colShTex);
+                EditorGUILayout.LabelField(flag, style, _colFlag);
+            }
+        }
+
+        // Debug table of every fused object's params (splats / files / chunks / SH), including which objects had
+        // their SH dropped because the scene's total SH exceeds the single fused SH texture (GaussianSplatFuse cap).
+        void DrawFusedObjectTable(GaussianSplatCombiner combiner)
+        {
+            if (combiner == null)
+            {
+                return;
+            }
+            var rows = combiner.GetFusedObjectDebugRows();
+            if (rows == null || rows.Count == 0)
+            {
+                return;
+            }
+            _showFusedObjectTable = EditorGUILayout.Foldout(_showFusedObjectTable, GSEditorText.T("Fused Objects (debug)", "統合オブジェクト (デバッグ)"), true);
+            if (!_showFusedObjectTable)
+            {
+                return;
+            }
+            long cap = GaussianSplatFuse.MaxFusedShTexels;
+            long shUsed = 0, shRequested = 0, splatTotal = 0;
+            foreach (var r in rows)
+            {
+                shRequested += r.shTexels;
+                if (!r.shDropped) shUsed += r.shTexels;
+                splatTotal += r.splats;
+            }
+            using (new EditorGUI.IndentLevelScope())
+            {
+                EditorGUILayout.LabelField(GSEditorText.T("Objects / Splats", "オブジェクト / スプラット"), $"{rows.Count}  /  {splatTotal:N0}");
+                EditorGUILayout.LabelField(GSEditorText.T("Fused SH used / cap", "統合 SH 使用 / 上限"), $"{shUsed:N0} / {cap:N0}  ({(cap > 0 ? 100.0 * shUsed / cap : 0):F1}%)");
+                if (shRequested != shUsed)
+                {
+                    EditorGUILayout.LabelField(GSEditorText.T("SH requested (incl. dropped)", "SH 要求 (破棄含む)"), $"{shRequested:N0}  ({(cap > 0 ? 100.0 * shRequested / cap : 0):F1}%)");
+                }
+                EditorGUILayout.Space(2);
+                var head = EditorStyles.miniBoldLabel;
+                var cell = EditorStyles.miniLabel;
+                DrawFusedTableRow("Object", "Active", "Splats", "Files", "Chunks", "Band", "SH texels", "Dropped", head);
+                foreach (var r in rows)
+                {
+                    int band = r.shCoeff >= 15 ? 3 : (r.shCoeff >= 8 ? 2 : (r.shCoeff >= 3 ? 1 : 0));
+                    string shTex = r.shCoeff > 0 ? $"{r.shTexels:N0} ({(cap > 0 ? 100.0 * r.shTexels / cap : 0):F1}%)" : "-";
+                    string flag = r.shDropped ? "DROPPED" : (r.shCoeff > 0 ? "" : "no SH");
+                    DrawFusedTableRow(r.name, r.active ? "yes" : "no", $"{r.splats:N0}", r.files.ToString(), r.chunks.ToString(), band.ToString(), shTex, flag, cell);
+                }
+            }
+        }
+
         void DrawQualityPresetButtons()
         {
             EditorGUILayout.LabelField(GSEditorText.T("Quality Preset", "品質プリセット"), EditorStyles.boldLabel);
-            EditorGUILayout.BeginHorizontal();
-            if (GUILayout.Button(GSEditorText.T("Very Low", "最低"))) ApplyQualityPreset(0.15f, 0.15f);
-            if (GUILayout.Button(GSEditorText.T("Low", "低"))) ApplyQualityPreset(0.07f, 0.1f);
-            if (GUILayout.Button(GSEditorText.T("Medium", "中"))) ApplyQualityPreset(0.04f, 0.04f);
-            if (GUILayout.Button(GSEditorText.T("High", "高"))) ApplyQualityPreset(0.01f, 0.01f);
-            EditorGUILayout.EndHorizontal();
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                if (GUILayout.Button(GSEditorText.T("Very Low", "最低"))) ApplyQualityPreset(0.15f, 0.15f);
+                if (GUILayout.Button(GSEditorText.T("Low", "低"))) ApplyQualityPreset(0.07f, 0.1f);
+                if (GUILayout.Button(GSEditorText.T("Medium", "中"))) ApplyQualityPreset(0.04f, 0.04f);
+                if (GUILayout.Button(GSEditorText.T("High", "高"))) ApplyQualityPreset(0.01f, 0.01f);
+            }
         }
 
         void ApplyQualityPreset(float cull, float cutoff)
@@ -325,10 +419,11 @@ namespace GaussianSplatting.Editor
 
         static void DrawSettingsGroup(string title, System.Action drawContents)
         {
-            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-            EditorGUILayout.LabelField(title, EditorStyles.boldLabel);
-            drawContents();
-            EditorGUILayout.EndVertical();
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+            {
+                EditorGUILayout.LabelField(title, EditorStyles.boldLabel);
+                drawContents();
+            }
         }
 
         void DrawUdonSharpHeader()

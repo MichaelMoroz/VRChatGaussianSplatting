@@ -1,0 +1,242 @@
+#pragma kernel ClearSupersample
+#pragma kernel MarchTile
+#pragma kernel ReduceHeights
+#pragma kernel MedianFilterHeights
+
+#define HEIGHT_SENTINEL -3.402823466e+38
+#define SMALL_VALUE 1e-8
+#define MAX_SUPERSAMPLE 8
+#define MAX_REDUCTION_VALUES 64
+#define MAX_MEDIAN_RADIUS 8
+#define MAX_MEDIAN_VALUES 289
+
+Texture2DArray<float> _SliceTex;
+
+RWStructuredBuffer<float> _SupersampleHeights;
+RWStructuredBuffer<float> _SupersampleOpacity;
+RWStructuredBuffer<float> _OutputHeights;
+RWStructuredBuffer<float> _OutputOpacity;
+StructuredBuffer<float> _FilterInputHeights;
+
+uint _SuperWidth;
+uint _SuperHeight;
+uint _TileW;
+uint _TileH;
+uint _TileOriginX;
+uint _TileOriginY;
+uint _Slices;
+uint _OutputResolution;
+uint _Supersample;
+float _BoxHeight;
+float _ReductionPercentile;
+uint _MedianRadius;
+
+bool ValidHeight(float height)
+{
+    return height > -1e20 && height < 1e20 && height == height;
+}
+
+float3 DepthStateStep(float3 state, float contributionWeight, float depth)
+{
+    if (contributionWeight <= SMALL_VALUE || depth <= 0.0)
+    {
+        return state;
+    }
+
+    float totalWeight = state.x + contributionWeight;
+    float delta = depth - state.y;
+    float nextDepthMean = state.y + (contributionWeight / max(totalWeight, SMALL_VALUE)) * delta;
+    float nextDepthM2 = state.z + state.x * contributionWeight * delta * delta / max(totalWeight, SMALL_VALUE);
+    return float3(totalWeight, nextDepthMean, nextDepthM2);
+}
+
+[numthreads(256, 1, 1)]
+void ClearSupersample(uint3 id : SV_DispatchThreadID)
+{
+    uint count = _SuperWidth * _SuperHeight;
+    if (id.x >= count)
+    {
+        return;
+    }
+    _SupersampleHeights[id.x] = HEIGHT_SENTINEL;
+    _SupersampleOpacity[id.x] = 0.0;
+}
+
+[numthreads(8, 8, 1)]
+void MarchTile(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= _TileW || id.y >= _TileH)
+    {
+        return;
+    }
+
+    float opacity = 0.0;
+    float trans = 1.0;
+    float3 depthState = 0.0;
+    float sliceThickness = _BoxHeight / max((float)_Slices, 1.0);
+
+    for (uint s = 0; s < _Slices; s++)
+    {
+        float alpha = saturate(_SliceTex[uint3(id.xy, s)]);
+        float contributionWeight = trans * alpha;
+        float rayDepth = ((float)s + 0.5) * sliceThickness;
+        depthState = DepthStateStep(depthState, contributionWeight, rayDepth);
+        opacity += contributionWeight;
+        trans *= 1.0 - alpha;
+    }
+
+    uint gx = _TileOriginX + id.x;
+    uint gy = _TileOriginY + id.y;
+    if (gx >= _SuperWidth || gy >= _SuperHeight)
+    {
+        return;
+    }
+
+    uint index = gy * _SuperWidth + gx;
+    _SupersampleHeights[index] = depthState.x > SMALL_VALUE ? _BoxHeight - depthState.y : HEIGHT_SENTINEL;
+    _SupersampleOpacity[index] = opacity;
+}
+
+void InsertSorted(inout float values[MAX_REDUCTION_VALUES], inout uint count, float value)
+{
+    uint index = count;
+    count++;
+    [loop]
+    while (index > 0u && values[index - 1u] > value)
+    {
+        values[index] = values[index - 1u];
+        index--;
+    }
+    values[index] = value;
+}
+
+[numthreads(8, 8, 1)]
+void ReduceHeights(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= _OutputResolution || id.y >= _OutputResolution)
+    {
+        return;
+    }
+
+    uint ss = min(max(_Supersample, 1u), (uint)MAX_SUPERSAMPLE);
+    float values[MAX_REDUCTION_VALUES];
+    uint validCount = 0u;
+    float maxOpacity = 0.0;
+    uint baseX = id.x * ss;
+    uint baseY = id.y * ss;
+
+    [loop]
+    for (uint y = 0u; y < (uint)MAX_SUPERSAMPLE; y++)
+    {
+        if (y >= ss)
+        {
+            break;
+        }
+        [loop]
+        for (uint x = 0u; x < (uint)MAX_SUPERSAMPLE; x++)
+        {
+            if (x >= ss)
+            {
+                break;
+            }
+
+            uint sx = baseX + x;
+            uint sy = baseY + y;
+            if (sx >= _SuperWidth || sy >= _SuperHeight)
+            {
+                continue;
+            }
+
+            uint sampleIndex = sy * _SuperWidth + sx;
+            float sampleHeight = _SupersampleHeights[sampleIndex];
+            maxOpacity = max(maxOpacity, _SupersampleOpacity[sampleIndex]);
+            if (ValidHeight(sampleHeight) && validCount < (uint)MAX_REDUCTION_VALUES)
+            {
+                InsertSorted(values, validCount, sampleHeight);
+            }
+        }
+    }
+
+    uint outputIndex = id.y * _OutputResolution + id.x;
+    _OutputOpacity[outputIndex] = maxOpacity;
+    if (validCount == 0u)
+    {
+        _OutputHeights[outputIndex] = HEIGHT_SENTINEL;
+        return;
+    }
+
+    uint rank = (uint)round(saturate(_ReductionPercentile) * (float)(validCount - 1u));
+    _OutputHeights[outputIndex] = values[min(rank, validCount - 1u)];
+}
+
+void InsertSortedMedian(inout float values[MAX_MEDIAN_VALUES], inout uint count, float value)
+{
+    uint index = count;
+    count++;
+    [loop]
+    while (index > 0u && values[index - 1u] > value)
+    {
+        values[index] = values[index - 1u];
+        index--;
+    }
+    values[index] = value;
+}
+
+[numthreads(8, 8, 1)]
+void MedianFilterHeights(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= _OutputResolution || id.y >= _OutputResolution)
+    {
+        return;
+    }
+
+    uint outputIndex = id.y * _OutputResolution + id.x;
+    float center = _FilterInputHeights[outputIndex];
+    if (!ValidHeight(center))
+    {
+        _OutputHeights[outputIndex] = HEIGHT_SENTINEL;
+        return;
+    }
+
+    int radius = (int)min(_MedianRadius, (uint)MAX_MEDIAN_RADIUS);
+    float values[MAX_MEDIAN_VALUES];
+    uint validCount = 0u;
+
+    [loop]
+    for (int dy = -MAX_MEDIAN_RADIUS; dy <= MAX_MEDIAN_RADIUS; dy++)
+    {
+        if (dy < -radius || dy > radius)
+        {
+            continue;
+        }
+
+        int sy = (int)id.y + dy;
+        if (sy < 0 || sy >= (int)_OutputResolution)
+        {
+            continue;
+        }
+
+        [loop]
+        for (int dx = -MAX_MEDIAN_RADIUS; dx <= MAX_MEDIAN_RADIUS; dx++)
+        {
+            if (dx < -radius || dx > radius)
+            {
+                continue;
+            }
+
+            int sx = (int)id.x + dx;
+            if (sx < 0 || sx >= (int)_OutputResolution)
+            {
+                continue;
+            }
+
+            float sampleHeight = _FilterInputHeights[(uint)sy * _OutputResolution + (uint)sx];
+            if (ValidHeight(sampleHeight) && validCount < (uint)MAX_MEDIAN_VALUES)
+            {
+                InsertSortedMedian(values, validCount, sampleHeight);
+            }
+        }
+    }
+
+    _OutputHeights[outputIndex] = validCount > 0u ? values[validCount >> 1] : center;
+}
