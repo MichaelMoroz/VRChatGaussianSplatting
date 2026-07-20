@@ -57,7 +57,7 @@ MonoBehaviour:
   _udonSharpBackingUdonBehaviour: {fileID: 6228469963575007511}
   gaussianSplatRenderer: {fileID: 0}
   splatName: lego
-  description: Chunk LOD imported from Assets/VRChatGaussianSplatting/ExampleSplats/Objects/PLY/lego.ply
+  description: From the NeRF synthetic (Blender) dataset.
   importMetadataJson: '{"sourcePath":"Assets/VRChatGaussianSplatting/ExampleSplats/Objects/PLY/lego.ply","prefabPath":"Assets/VRChatGaussianSplatting/ExampleSplats/Objects/lego.prefab","importAsLOD":true,"lodChunkSize":4096,"options":{"computeBoundingBox":true,"splatsPerPass":0,"standalone":false,"maxAlphaMaskCount":1,"useSRGB":true,"importSphericalHarmonics":true,"defaultSHBand":3,"compressColorAlphaToBC7":false,"startRenderQueue":4050,"cropToBounds":false,"cropBounds":{"m_Center":{"x":0.0,"y":0.0,"z":0.0},"m_Extent":{"x":0.0,"y":0.0,"z":0.0}},"cropPadding":0.0,"applyHorizonAlignment":false,"horizonRotation":{"x":0.0,"y":0.0,"z":0.0,"w":1.0},"horizonPivot":{"x":0.0,"y":0.0,"z":0.0},"lodUsePackedPositions":true,"lodComputeSplats":true,"lodResamplePercent":100,"lodReusePercent":50,"normalizeSize":false,"normalizeTargetSize":1.0,"shCompression":2}}'
   chunkSize: 4096
   chunkCount: 45

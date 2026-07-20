@@ -57,7 +57,7 @@ MonoBehaviour:
   _udonSharpBackingUdonBehaviour: {fileID: 4444393888189382927}
   gaussianSplatRenderer: {fileID: 0}
   splatName: flowers
-  description: Chunk LOD imported from C:/Development/VRChat/VolumeWorld/VolumeWorld-backup-2025-12-22T15.04.57/Assets/GaussianSplatting/OldSplats/PLY/ExampleSplatPly\flowers.ply
+  description: '"Flowers" scene from the Mip-NeRF 360 dataset.'
   importMetadataJson: '{"sourcePath":"C:/Development/VRChat/VolumeWorld/VolumeWorld-backup-2025-12-22T15.04.57/Assets/GaussianSplatting/OldSplats/PLY/ExampleSplatPly\\flowers.ply","prefabPath":"Assets/VRChatGaussianSplatting/ExampleSplats/Large/flowers.prefab","importAsLOD":true,"lodChunkSize":4096,"options":{"computeBoundingBox":true,"splatsPerPass":786432,"standalone":false,"maxAlphaMaskCount":1,"useSRGB":true,"importSphericalHarmonics":true,"defaultSHBand":3,"compressColorAlphaToBC7":false,"startRenderQueue":4050,"cropToBounds":false,"cropBounds":{"m_Center":{"x":16.64598846435547,"y":-28.28875732421875,"z":19.065521240234376},"m_Extent":{"x":65.22920227050781,"y":35.158599853515628,"z":78.47865295410156}},"cropPadding":0.0,"applyHorizonAlignment":false,"horizonRotation":{"x":0.0,"y":0.0,"z":0.0,"w":1.0},"horizonPivot":{"x":0.0,"y":0.0,"z":0.0},"lodUsePackedPositions":true,"lodComputeSplats":true,"lodResamplePercent":100,"lodReusePercent":50,"normalizeSize":false,"normalizeTargetSize":1.0,"shCompression":2}}'
   chunkSize: 4096
   chunkCount: 982
