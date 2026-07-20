@@ -137,11 +137,11 @@ Render queue and the sort/material settings live on the `GaussianSplatRenderer` 
 
 ## Worlds in VRChat that use this
 
-- [My Gaussian Splat Gallery](https://vrchat.com/home/launch?worldId=wrld_01df1297-a9de-4d53-9da1-213c29a3012a)
-- [My Gaussian Splat Mega Gallery](https://vrchat.com/home/launch?worldId=wrld_91216c98-a1db-4be6-8ebf-05088b335825)
-- [双葉水辺公園 ［ 3DGS × Photogrammetry ］ — Tokoyoshi](https://vrchat.com/home/launch?worldId=wrld_29cf640a-5c84-4a61-b954-559809a69880)
-- [- 川北東橋 ⁄ Kawakita-higashi Bridge - 3DGS — DEKA_KEIJI777V](https://vrchat.com/home/launch?worldId=wrld_45d430c0-2a0c-4d7b-b848-bd950fda5e5f)
-- [Хотинська фортеця - Gaussian Splatting - 3Dimka](https://vrchat.com/home/launch?worldId=wrld_2ccfe926-3b64-4522-97a1-9840f329f5b3)
+- [新・深夜の京都散歩 / New Kyoto Midnight Walk](https://vrchat.com/home/launch?worldId=wrld_02b99a48-ff5c-41a7-a8f1-1a472d2259ea)
+- [Huge City Splat (85M splats)](https://vrchat.com/home/launch?worldId=wrld_d22b6e6a-d5e3-41fa-b7cb-f76813127df7)
+- [Uncharted 4 Madagascar](https://vrchat.com/home/launch?worldId=wrld_bbccb4e0-1d09-4458-b263-33f9693113ec)
+- [2.37 Million Splat Raspberry](https://vrchat.com/home/launch?worldId=wrld_9a028567-f1eb-467d-a895-0837559391e8)
+- [Tiny Gaussian Splat Gallery](https://vrchat.com/home/launch?worldId=wrld_c491f8c0-0631-4381-9447-f3d326be2191)
 
 ---
 
@@ -340,11 +340,11 @@ VRChat ワールド（Udon）でスプラットをランタイムにカメラソ
 
 ## VRChat で本ツールを使用しているワールド
 
-- [My Gaussian Splat Gallery](https://vrchat.com/home/launch?worldId=wrld_01df1297-a9de-4d53-9da1-213c29a3012a)
-- [My Gaussian Splat Mega Gallery](https://vrchat.com/home/launch?worldId=wrld_91216c98-a1db-4be6-8ebf-05088b335825)
-- [双葉水辺公園 ［ 3DGS × Photogrammetry ］ — Tokoyoshi](https://vrchat.com/home/launch?worldId=wrld_29cf640a-5c84-4a61-b954-559809a69880)
-- [- 川北東橋 ⁄ Kawakita-higashi Bridge - 3DGS — DEKA_KEIJI777V](https://vrchat.com/home/launch?worldId=wrld_45d430c0-2a0c-4d7b-b848-bd950fda5e5f)
-- [Хотинська фортеця - Gaussian Splatting - 3Dimka](https://vrchat.com/home/launch?worldId=wrld_2ccfe926-3b64-4522-97a1-9840f329f5b3)
+- [新・深夜の京都散歩 / New Kyoto Midnight Walk](https://vrchat.com/home/launch?worldId=wrld_02b99a48-ff5c-41a7-a8f1-1a472d2259ea)
+- [Huge City Splat (85M splats)](https://vrchat.com/home/launch?worldId=wrld_d22b6e6a-d5e3-41fa-b7cb-f76813127df7)
+- [Uncharted 4 Madagascar](https://vrchat.com/home/launch?worldId=wrld_bbccb4e0-1d09-4458-b263-33f9693113ec)
+- [2.37 Million Splat Raspberry](https://vrchat.com/home/launch?worldId=wrld_9a028567-f1eb-467d-a895-0837559391e8)
+- [Tiny Gaussian Splat Gallery](https://vrchat.com/home/launch?worldId=wrld_c491f8c0-0631-4381-9447-f3d326be2191)
 
 ---
 
