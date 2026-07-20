@@ -153,9 +153,27 @@ namespace GaussianSplatting.Editor
 
             EnsureEventSystemExists();
 
+            // The gallery list, master lock, and custom description are author-set data that live only on the UI
+            // component. Regenerating destroys that component, so carry those values across to the rebuilt UI.
             Transform existingUi = renderer.transform.Find("Gaussian Splat UI");
+            GaussianSplatObject[] preservedGalleryObjects = null;
+            bool preservedGalleryEnabled = true;
+            bool preservedGalleryMasterLock = true;
+            string preservedCustomSubtitleEnglish = null;
+            string preservedCustomSubtitleJapanese = null;
+            int preservedGallerySelectedIndex = 0;
             if (existingUi != null)
             {
+                GaussianSplatRendererUI existingGeneratedUi = existingUi.GetComponentInChildren<GaussianSplatRendererUI>(true);
+                if (existingGeneratedUi != null)
+                {
+                    preservedGalleryObjects = existingGeneratedUi.galleryObjects;
+                    preservedGalleryEnabled = existingGeneratedUi.galleryEnabled;
+                    preservedGalleryMasterLock = existingGeneratedUi.galleryMasterLock;
+                    preservedCustomSubtitleEnglish = existingGeneratedUi.customSubtitleEnglish;
+                    preservedCustomSubtitleJapanese = existingGeneratedUi.customSubtitleJapanese;
+                    preservedGallerySelectedIndex = ReadGallerySelectedIndex(existingGeneratedUi);
+                }
                 Undo.DestroyObjectImmediate(existingUi.gameObject);
             }
 
@@ -227,7 +245,8 @@ namespace GaussianSplatting.Editor
                 value = CreateTextElement(baseName + " Value", row.transform, valueText, 16, TextAnchor.MiddleCenter);
                 SetPreferredWidth(value.gameObject, 72.0f, 0.0f);
             }
-            CreateTextElement("Title", settingsColumn.transform, "VRChatGaussianSplatting", 22, TextAnchor.MiddleLeft);
+            GameObject headerRow = CreateHeaderRow(settingsColumn.transform);
+            CreateSocialSection(generatedUi, headerRow.transform, canvasObject.transform);
             generatedUi.subtitleText = CreateTextElement("Subtitle", settingsColumn.transform, GaussianSplatRendererUI.DefaultSubtitleEnglish, (int)GaussianSplatRendererUI.SubtitleFontSize, TextAnchor.UpperLeft);
             SetPreferredHeight(generatedUi.subtitleText.gameObject, GaussianSplatRendererUI.SubtitlePreferredHeight, 0.0f);
             generatedUi.customSubtitleText = CreateTextElement("Custom Subtitle", settingsColumn.transform, "", (int)GaussianSplatRendererUI.SubtitleFontSize, TextAnchor.UpperLeft);
@@ -235,7 +254,7 @@ namespace GaussianSplatting.Editor
             generatedUi.customSubtitleText.gameObject.SetActive(false);
             generatedUi.currentSplatText = CreateTextElement("Current Splat", settingsColumn.transform, "Rendered Splats: 0", 16, TextAnchor.MiddleLeft);
 
-            generatedUi.languageSectionText = CreateTextElement("Language Section", settingsColumn.transform, "Language", 18, TextAnchor.MiddleLeft);
+            generatedUi.languageSectionText = null;
             GameObject languageRow = CreateHorizontalGroup("Language Row", settingsColumn.transform, 8.0f, false);
             Button englishLanguageButton = CreateButtonElement("English Button", languageRow.transform, "English", new Color(0.2f, 0.2f, 0.24f, 1.0f), 0.0f, 1.0f);
             Button japaneseLanguageButton = CreateButtonElement("Japanese Button", languageRow.transform, "日本語", new Color(0.2f, 0.2f, 0.24f, 1.0f), 0.0f, 1.0f);
@@ -274,6 +293,18 @@ namespace GaussianSplatting.Editor
                 generatedUi.lodCullSlider.value = DefaultLODSplatCapSlider;
             }
 
+            if (preservedGalleryObjects != null)
+            {
+                generatedUi.galleryObjects = preservedGalleryObjects;
+            }
+            generatedUi.galleryEnabled = preservedGalleryEnabled;
+            generatedUi.galleryMasterLock = preservedGalleryMasterLock;
+            generatedUi.customSubtitleEnglish = preservedCustomSubtitleEnglish;
+            generatedUi.customSubtitleJapanese = preservedCustomSubtitleJapanese;
+            WriteGallerySelectedIndex(generatedUi, preservedGallerySelectedIndex);
+            // Rebuild the gallery section (Body Row child) from the restored list.
+            InvokeSyncEditorSerializedState(generatedUi);
+
             generatedUi.RefreshUI();
             EditorUtility.SetDirty(canvasObject);
             EditorUtility.SetDirty(renderer);
@@ -285,6 +316,34 @@ namespace GaussianSplatting.Editor
             }
 
             if (select) Selection.activeGameObject = canvasObject;
+        }
+
+        static int ReadGallerySelectedIndex(GaussianSplatRendererUI ui)
+        {
+            FieldInfo field = typeof(GaussianSplatRendererUI).GetField("_gallerySelectedIndex", BindingFlags.Instance | BindingFlags.NonPublic);
+            if (field != null && field.GetValue(ui) is int value)
+            {
+                return value;
+            }
+            return 0;
+        }
+
+        static void WriteGallerySelectedIndex(GaussianSplatRendererUI ui, int value)
+        {
+            FieldInfo field = typeof(GaussianSplatRendererUI).GetField("_gallerySelectedIndex", BindingFlags.Instance | BindingFlags.NonPublic);
+            if (field != null)
+            {
+                field.SetValue(ui, value);
+            }
+        }
+
+        static void InvokeSyncEditorSerializedState(GaussianSplatRendererUI ui)
+        {
+            MethodInfo method = typeof(GaussianSplatRendererUI).GetMethod("SyncEditorSerializedState", BindingFlags.Instance | BindingFlags.NonPublic);
+            if (method != null)
+            {
+                method.Invoke(ui, null);
+            }
         }
 
         static Type FindTypeInLoadedAssemblies(string fullTypeName, string shortTypeName)
@@ -574,23 +633,23 @@ namespace GaussianSplatting.Editor
             EditorUtility.SetDirty(backingBehaviour);
         }
 
-        static Material CreateOpaqueBackgroundMaterial()
+        static Material CreateOpaqueBackgroundMaterial(string assetName, Color color)
         {
             const string materialFolderPath = "Assets/VRChatGaussianSplatting/Resources/Materials";
-            const string materialAssetPath = materialFolderPath + "/GaussianSplatUIBackground.mat";
+            string materialAssetPath = materialFolderPath + "/" + assetName + ".mat";
             EnsureFolderExists(materialFolderPath);
             Material material = AssetDatabase.LoadAssetAtPath<Material>(materialAssetPath);
             if (material != null) return material;
             Shader shader = Shader.Find("Standard") ?? Shader.Find("Unlit/Color");
             if (shader == null) return null;
             material = new Material(shader);
-            material.name = "Gaussian Splat UI Background";
-            material.color = new Color(0.08f, 0.08f, 0.1f, 1.0f);
+            material.name = assetName;
+            material.color = color;
             AssetDatabase.CreateAsset(material, materialAssetPath);
             return material;
         }
 
-        static GameObject CreateOpaqueBackgroundPlate(Transform parent, Vector2 sizeDelta)
+        static GameObject CreateOpaqueBackgroundPlate(Transform parent, Vector2 sizeDelta, Material material = null)
         {
             GameObject backgroundObject = GameObject.CreatePrimitive(PrimitiveType.Cube);
             Undo.RegisterCreatedObjectUndo(backgroundObject, "Create Gaussian Splat UI Background");
@@ -602,7 +661,7 @@ namespace GaussianSplatting.Editor
             Collider backgroundCollider = backgroundObject.GetComponent<Collider>();
             if (backgroundCollider != null) backgroundCollider.enabled = false;
             MeshRenderer backgroundRenderer = backgroundObject.GetComponent<MeshRenderer>();
-            Material backgroundMaterial = backgroundRenderer != null ? CreateOpaqueBackgroundMaterial() : null;
+            Material backgroundMaterial = material != null ? material : (backgroundRenderer != null ? CreateOpaqueBackgroundMaterial("GaussianSplatUIBackground", new Color(0.08f, 0.08f, 0.1f, 1.0f)) : null);
             if (backgroundMaterial != null) backgroundRenderer.sharedMaterial = backgroundMaterial;
             return backgroundObject;
         }
@@ -637,6 +696,35 @@ namespace GaussianSplatting.Editor
             LayoutElement layoutElement = rectTransform.gameObject.AddComponent<LayoutElement>();
             layoutElement.preferredHeight = layoutElement.minHeight = preferredHeight;
             return text;
+        }
+
+        const string LogoAssetPath = "Assets/VRChatGaussianSplatting/VRCGS_Logo.png";
+
+        // Header row: logo pinned to the top-left corner, with a flexible spacer that pushes the
+        // social icon buttons (added afterwards by CreateSocialSection) over to the right edge.
+        static GameObject CreateHeaderRow(Transform column)
+        {
+            const float logoHeight = 54.0f;
+            const float logoAspect = 2164.0f / 922.0f;
+            GameObject row = CreateHorizontalGroup("Header Row", column, 6.0f, false);
+            row.GetComponent<HorizontalLayoutGroup>().childAlignment = TextAnchor.MiddleLeft;
+
+            Sprite logo = AssetDatabase.LoadAssetAtPath<Sprite>(LogoAssetPath);
+            RectTransform logoRect = CreateRectTransform("Title Logo", row.transform, new Vector2(logoHeight * logoAspect, logoHeight));
+            Image logoImage = logoRect.gameObject.AddComponent<Image>();
+            logoImage.sprite = logo;
+            logoImage.color = Color.white;
+            logoImage.preserveAspect = true;
+            logoImage.raycastTarget = false;
+            ApplySupersampledUiMaterial(logoImage);
+            LayoutElement logoLayout = logoRect.gameObject.AddComponent<LayoutElement>();
+            logoLayout.minHeight = logoLayout.preferredHeight = logoHeight;
+            logoLayout.minWidth = logoLayout.preferredWidth = logoHeight * logoAspect;
+            logoLayout.flexibleWidth = 0.0f;
+
+            RectTransform spacer = CreateRectTransform("Header Spacer", row.transform, Vector2.zero);
+            spacer.gameObject.AddComponent<LayoutElement>().flexibleWidth = 1.0f;
+            return row;
         }
 
         static void SetPreferredWidth(GameObject targetObject, float width, float flexibleWidth)
@@ -703,6 +791,146 @@ namespace GaussianSplatting.Editor
             labelRect.offsetMin = new Vector2(8.0f, 4.0f); labelRect.offsetMax = new Vector2(-8.0f, -4.0f);
             TryAddVrChatUiShape(rectTransform.gameObject);
             return button;
+        }
+
+        const string SocialTextureFolder = "Assets/VRChatGaussianSplatting/Resources/Textures/Social/";
+
+        static void CreateSocialSection(GaussianSplatRendererUI ui, Transform iconParent, Transform canvas)
+        {
+            string[] keys = { "x", "github", "github_sponsors", "booth", "patreon", "gumroad" };
+            string[] urls = {
+                "https://x.com/Michael_Moroz_",
+                "https://github.com/MichaelMoroz/VRChatGaussianSplatting",
+                "https://github.com/sponsors/MichaelMoroz",
+                "https://misham.booth.pm/",
+                "https://patreon.com/misha_m",
+                "https://4446040403950.gumroad.com/",
+            };
+            string[] events = {
+                nameof(GaussianSplatRendererUI.OpenSocialX),
+                nameof(GaussianSplatRendererUI.OpenSocialGithub),
+                nameof(GaussianSplatRendererUI.OpenSocialSponsors),
+                nameof(GaussianSplatRendererUI.OpenSocialBooth),
+                nameof(GaussianSplatRendererUI.OpenSocialPatreon),
+                nameof(GaussianSplatRendererUI.OpenSocialGumroad),
+            };
+
+            Sprite[] qrSprites = new Sprite[keys.Length];
+            for (int i = 0; i < keys.Length; i++)
+            {
+                Sprite icon = AssetDatabase.LoadAssetAtPath<Sprite>(SocialTextureFolder + keys[i] + ".png");
+                qrSprites[i] = AssetDatabase.LoadAssetAtPath<Sprite>(SocialTextureFolder + "qr_" + keys[i] + ".png");
+                Button iconButton = CreateIconButton("Social " + keys[i], iconParent, icon, 25.0f);
+                AddUdonSharpButtonEvent(iconButton, ui, events[i]);
+            }
+
+            // Floating window with its own opaque plate, centered on the menu and pushed physically forward
+            // along the canvas normal so it hovers in front of the menu in 3D. Hidden until an icon is clicked.
+            RectTransform window = CreateRectTransform("Social Window", canvas, new Vector2(480.0f, 620.0f));
+            window.anchorMin = window.anchorMax = new Vector2(0.5f, 0.5f);
+            window.pivot = new Vector2(0.5f, 0.5f);
+            window.anchoredPosition3D = new Vector3(0.0f, 0.0f, -120.0f);
+            window.SetAsLastSibling();
+            Material windowBackground = CreateOpaqueBackgroundMaterial("GaussianSplatUIWindowBackground", new Color(0.16f, 0.20f, 0.32f, 1.0f));
+            CreateOpaqueBackgroundPlate(window, window.sizeDelta, windowBackground);
+
+            GameObject content = CreateVerticalGroup("Window Content", window, new RectOffset(24, 24, 20, 20), 14.0f, TextAnchor.UpperCenter);
+            RectTransform contentRect = content.GetComponent<RectTransform>();
+            contentRect.anchorMin = Vector2.zero; contentRect.anchorMax = Vector2.one;
+            contentRect.offsetMin = Vector2.zero; contentRect.offsetMax = Vector2.zero;
+            VerticalLayoutGroup contentLayout = content.GetComponent<VerticalLayoutGroup>();
+            if (contentLayout != null) { contentLayout.childForceExpandWidth = false; contentLayout.childForceExpandHeight = false; contentLayout.childAlignment = TextAnchor.UpperCenter; }
+
+            CreateTextElement("Window Title", content.transform, "Scan or copy the link", 18, TextAnchor.MiddleCenter);
+
+            RectTransform qrRect = CreateRectTransform("Social QR", content.transform, new Vector2(400.0f, 400.0f));
+            Image qrImage = qrRect.gameObject.AddComponent<Image>();
+            qrImage.color = Color.white;
+            qrImage.preserveAspect = true;
+            ApplySupersampledUiMaterial(qrImage);
+            LayoutElement qrLayout = qrRect.gameObject.AddComponent<LayoutElement>();
+            qrLayout.preferredWidth = qrLayout.minWidth = 400.0f;
+            qrLayout.preferredHeight = qrLayout.minHeight = 400.0f;
+            qrLayout.flexibleWidth = 0.0f;
+            if (qrSprites.Length > 0 && qrSprites[0] != null) qrImage.sprite = qrSprites[0];
+
+            TMP_InputField urlField = CreateUrlField("Social URL", content.transform);
+            urlField.text = urls[0];
+            SetPreferredWidth(urlField.gameObject, 432.0f, 0.0f);
+
+            Button closeButton = CreateButtonElement("Social Close", content.transform, "Close", new Color(0.3f, 0.16f, 0.14f, 1.0f), 180.0f, 0.0f);
+            AddUdonSharpButtonEvent(closeButton, ui, nameof(GaussianSplatRendererUI.CloseSocial));
+
+            window.gameObject.SetActive(false);
+            ui.socialPanel = window.gameObject;
+            ui.socialQrImage = qrImage;
+            ui.socialUrlField = urlField;
+            ui.socialQrSprites = qrSprites;
+            ui.socialUrls = urls;
+        }
+
+        static Button CreateIconButton(string objectName, Transform parent, Sprite icon, float size)
+        {
+            RectTransform rectTransform = CreateRectTransform(objectName, parent, new Vector2(size, size));
+            Image image = rectTransform.gameObject.AddComponent<Image>();
+            image.sprite = icon;
+            image.color = Color.white;
+            image.preserveAspect = true;
+            ApplySupersampledUiMaterial(image);
+            Button button = rectTransform.gameObject.AddComponent<Button>();
+            ColorBlock colors = button.colors;
+            colors.normalColor = Color.white;
+            colors.highlightedColor = new Color(0.82f, 0.82f, 0.82f, 1.0f);
+            colors.pressedColor = new Color(0.62f, 0.62f, 0.62f, 1.0f);
+            colors.selectedColor = Color.white;
+            colors.disabledColor = new Color(1.0f, 1.0f, 1.0f, 0.4f);
+            button.colors = colors;
+            LayoutElement layoutElement = rectTransform.gameObject.AddComponent<LayoutElement>();
+            layoutElement.preferredWidth = layoutElement.minWidth = size;
+            layoutElement.preferredHeight = layoutElement.minHeight = size;
+            layoutElement.flexibleWidth = 0.0f;
+            TryAddVrChatUiShape(rectTransform.gameObject);
+            return button;
+        }
+
+        static TMP_InputField CreateUrlField(string objectName, Transform parent)
+        {
+            RectTransform rectTransform = CreateRectTransform(objectName, parent, new Vector2(0.0f, 30.0f));
+            Image background = rectTransform.gameObject.AddComponent<Image>();
+            background.color = new Color(0.16f, 0.16f, 0.18f, 1.0f);
+            ApplySupersampledUiMaterial(background);
+            LayoutElement layoutElement = rectTransform.gameObject.AddComponent<LayoutElement>();
+            layoutElement.preferredHeight = layoutElement.minHeight = 30.0f;
+            layoutElement.flexibleWidth = 1.0f;
+
+            RectTransform textArea = CreateRectTransform("Text Area", rectTransform, Vector2.zero);
+            textArea.anchorMin = Vector2.zero; textArea.anchorMax = Vector2.one;
+            textArea.offsetMin = new Vector2(10.0f, 4.0f); textArea.offsetMax = new Vector2(-10.0f, -4.0f);
+            textArea.gameObject.AddComponent<RectMask2D>();
+
+            RectTransform textRect = CreateRectTransform("Text", textArea, Vector2.zero);
+            textRect.anchorMin = Vector2.zero; textRect.anchorMax = Vector2.one;
+            textRect.offsetMin = Vector2.zero; textRect.offsetMax = Vector2.zero;
+            TextMeshProUGUI text = textRect.gameObject.AddComponent<TextMeshProUGUI>();
+            text.font = GetUiTextMeshProFont();
+            text.fontSize = 12.0f;
+            text.color = Color.white;
+            text.alignment = TextAlignmentOptions.Left;
+            text.enableWordWrapping = false;
+            text.overflowMode = TextOverflowModes.Overflow;
+            text.richText = false;
+
+            TMP_InputField inputField = rectTransform.gameObject.AddComponent<TMP_InputField>();
+            inputField.textViewport = textArea;
+            inputField.textComponent = text;
+            inputField.fontAsset = GetUiTextMeshProFont();
+            inputField.pointSize = 12.0f;
+            inputField.readOnly = true;
+            inputField.richText = false;
+            inputField.lineType = TMP_InputField.LineType.SingleLine;
+            inputField.restoreOriginalTextOnEscape = false;
+            TryAddVrChatUiShape(rectTransform.gameObject);
+            return inputField;
         }
 
         static Slider CreateSliderElement(string objectName, Transform parent, float minValue, float maxValue, bool wholeNumbers)

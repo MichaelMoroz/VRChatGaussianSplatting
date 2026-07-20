@@ -43,10 +43,10 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
     const float GalleryEntryCountFontSize = 12.0f;
     const float GalleryEntryDescriptionFontSize = 12.0f;
     const float SliderChangeThreshold = 0.0001f;
-    public const string DefaultSubtitleEnglish = "Github: https://github.com/MichaelMoroz/VRChatGaussianSplatting\nDeveloped by misha_m";
-    public const string DefaultSubtitleJapanese = "Github: https://github.com/MichaelMoroz/VRChatGaussianSplatting\n開発: misha_m";
+    public const string DefaultSubtitleEnglish = "Developed by misha_m";
+    public const string DefaultSubtitleJapanese = "開発: misha_m";
     public const float SubtitleFontSize = 10.0f;
-    public const float SubtitlePreferredHeight = 36.0f;
+    public const float SubtitlePreferredHeight = 15.0f;
     public const float CustomSubtitlePreferredHeight = 28.0f;
 
     public GaussianSplatRenderer gaussianSplatRenderer;
@@ -82,6 +82,48 @@ public class GaussianSplatRendererUI : UdonSharpBehaviour
     public TextMeshProUGUI galleryMasterLockLabel;  // toggle button text ("ON"/"OFF")
     [SerializeField, UdonSynced] int _gallerySelectedIndex;
     string _galleryMasterName = "";                 // cached so RefreshUI doesn't scan players every frame
+
+    [Header("Social Links")]
+    public GameObject socialPanel;                  // QR + URL container, toggled by the icon buttons
+    public UnityEngine.UI.Image socialQrImage;      // shows the selected link's QR code
+    public TMPro.TMP_InputField socialUrlField;     // read-only, selectable/copyable URL
+    public Sprite[] socialQrSprites;                // QR sprites, index-aligned with socialUrls
+    public string[] socialUrls;                     // link URLs (VRChat can't open external URLs, so QR + copy is the route)
+    int _socialSelected = -1;
+
+    public void OpenSocialX() { ToggleSocial(0); }
+    public void OpenSocialGithub() { ToggleSocial(1); }
+    public void OpenSocialSponsors() { ToggleSocial(2); }
+    public void OpenSocialBooth() { ToggleSocial(3); }
+    public void OpenSocialPatreon() { ToggleSocial(4); }
+    public void OpenSocialGumroad() { ToggleSocial(5); }
+
+    public void CloseSocial()
+    {
+        _socialSelected = -1;
+        if (socialPanel != null) socialPanel.SetActive(false);
+    }
+
+    void ToggleSocial(int index)
+    {
+        if (socialPanel == null) return;
+        if (_socialSelected == index && socialPanel.activeSelf)
+        {
+            _socialSelected = -1;
+            socialPanel.SetActive(false);
+            return;
+        }
+        _socialSelected = index;
+        if (socialQrImage != null && socialQrSprites != null && index >= 0 && index < socialQrSprites.Length)
+        {
+            socialQrImage.sprite = socialQrSprites[index];
+        }
+        if (socialUrlField != null && socialUrls != null && index >= 0 && index < socialUrls.Length)
+        {
+            socialUrlField.text = socialUrls[index];
+        }
+        socialPanel.SetActive(true);
+    }
 
     [SerializeField] float gaussianScaleStep = 0.1f;
     [SerializeField] float cameraQuantizationStep = 0.05f;
