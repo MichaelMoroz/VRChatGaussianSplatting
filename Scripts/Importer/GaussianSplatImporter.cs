@@ -402,6 +402,51 @@ namespace GaussianSplatting
             };
         }
 
+        // Highest band fully covered by coeffCount coefficients (inverse of SHCoeffCountForBand).
+        public static SHBand SHBandForCoeffCount(int coeffCount)
+        {
+            if (coeffCount >= SHCoeffCount) return SHBand.SH3;
+            if (coeffCount >= 8) return SHBand.SH2;
+            if (coeffCount >= 3) return SHBand.SH1;
+            return SHBand.SH0;
+        }
+
+        // Cap on what the LOD importer will bake as SH: stored splats x coefficients, i.e. two 8K SH textures.
+        // Past it the SH textures need many GB and the per-cluster averaging is prohibitively slow, so the import
+        // steps down a band. Shared with the wizard so its pre-import estimate uses the same threshold.
+        public const long MaxLODImportSHTexels = 2L * 8192 * 8192;
+
+        // Highest band that both the source carries and the SH texel cap allows at storedSplatCount. Steps down a
+        // whole band at a time: a partial band would store coefficients the shader's band setting never reads.
+        public static SHBand ResolveLODImportSHBand(int availableCoeffCount, int storedSplatCount)
+        {
+            SHBand band = SHBandForCoeffCount(availableCoeffCount);
+            while (band > SHBand.SH0 && (long)storedSplatCount * SHCoeffCountForBand(band) > MaxLODImportSHTexels)
+            {
+                band--;
+            }
+            return band;
+        }
+
+        // Reports SH imported below the requested Max SH Band because the source file carries fewer coefficients.
+        public static void WarnSHBandLimitedBySource(string sourceName, SHBand requestedBand, int fileCoeffCount)
+        {
+            int requestedCoeffCount = SHCoeffCountForBand(requestedBand);
+            if (requestedCoeffCount <= 0 || fileCoeffCount >= requestedCoeffCount)
+            {
+                return;
+            }
+
+            if (fileCoeffCount <= 0)
+            {
+                Debug.LogWarning($"[GaussianSplat] '{sourceName}': Import Spherical Harmonics is on with Max SH Band {requestedBand}, but the source carries no SH coefficients (no f_rest_* properties). Importing DC-only color.");
+            }
+            else
+            {
+                Debug.LogWarning($"[GaussianSplat] '{sourceName}': Max SH Band {requestedBand} needs {requestedCoeffCount} coefficients but the source only carries {fileCoeffCount} ({SHBandForCoeffCount(fileCoeffCount)}). Importing at {SHBandForCoeffCount(fileCoeffCount)}.");
+            }
+        }
+
         public static bool IsSupportedImportSourcePath(string path)
         {
             string extension = Path.GetExtension(path);
@@ -848,6 +893,10 @@ namespace GaussianSplatting
 
                 int requestedSHCoeffCount = options.importSphericalHarmonics ? SHCoeffCountForBand(options.defaultSHBand) : 0;
                 int importedSHCoeffCount = Mathf.Min(requestedSHCoeffCount, layout.shCoeffCount);
+                if (options.importSphericalHarmonics)
+                {
+                    WarnSHBandLimitedBySource(Path.GetFileName(sourceFile), options.defaultSHBand, layout.shCoeffCount);
+                }
                 bool willAttemptBC7Compression = options.compressColorAlphaToBC7 || (options.shCompression == SHCompression.BC7 && importedSHCoeffCount > 0);
                 if (willAttemptBC7Compression && !SystemInfo.SupportsTextureFormat(TextureFormat.BC7))
                     throw new InvalidOperationException("BC7 compression is not supported by the current editor graphics device. Disable BC7 compression or import on a system with BC7 support.");
@@ -903,9 +952,7 @@ namespace GaussianSplatting
                     sharedShRange = new Vector3(rng4.x, rng4.y, rng4.z);
                 }
                 const float shRangeEpsilon = 1e-8f;
-                SHBand effectiveDefaultSHBand = importedSHCoeffCount >= 15 ? SHBand.SH3
-                    : importedSHCoeffCount >= 8 ? SHBand.SH2
-                    : importedSHCoeffCount >= 3 ? SHBand.SH1 : SHBand.SH0;
+                SHBand effectiveDefaultSHBand = SHBandForCoeffCount(importedSHCoeffCount);
 
                 TextureLayout splatLayout = ChoosePotTextureLayout(n);
                 TextureLayout shLayout = importedSHCoeffCount > 0
@@ -1479,6 +1526,7 @@ namespace GaussianSplatting.Editor.Importers
             public Color[] colors;
             public Bounds bounds;
             public int splatCount;
+            public int shCoeffCount;   // SH coefficients the source carries (0 = none); valid once splatCount > 0
             public string error;
         }
 
@@ -1952,6 +2000,7 @@ namespace GaussianSplatting.Editor.Importers
                 }
 
                 preview.splatCount = splatCount;
+                preview.shCoeffCount = StreamedSplatReader.DetectSHCoeffCount(offsets);
                 int previewCount = Mathf.Min(MaxPreviewSplats, splatCount);
                 preview.positions = new Vector3[previewCount];
                 preview.colors = new Color[previewCount];
@@ -2521,6 +2570,72 @@ namespace GaussianSplatting.Editor.Importers
             return Mathf.Clamp(Mathf.RoundToInt(_previewData.splatCount * ratio), 0, _previewData.splatCount);
         }
 
+        // Surfaces the two limits that make the importer store less SH than asked for -- a source that carries
+        // fewer bands, and (combined modes) the stored-splats x coefficients cap -- before the import runs.
+        void DrawSHLimitWarnings(ImportEntry entry)
+        {
+            if (_previewData == null || _previewData.splatCount <= 0)
+            {
+                return;
+            }
+
+            int requestedCoeffCount = GaussianSplatImporter.SHCoeffCountForBand(entry.shBand);
+            if (requestedCoeffCount <= 0)
+            {
+                return;
+            }
+
+            int fileCoeffCount = _previewData.shCoeffCount;
+            if (fileCoeffCount <= 0)
+            {
+                EditorGUILayout.HelpBox(GSEditorText.T(
+                    "The source carries no SH coefficients (no f_rest_* properties); this splat will import DC-only regardless of the band.",
+                    "ソースに SH 係数 (f_rest_* プロパティ) がありません。バンド設定に関わらず DC のみでインポートされます。"), MessageType.Warning);
+                return;
+            }
+
+            SHBand fileBand = GaussianSplatImporter.SHBandForCoeffCount(fileCoeffCount);
+            if (fileCoeffCount < requestedCoeffCount)
+            {
+                EditorGUILayout.HelpBox(GSEditorText.T(
+                    $"The source only carries {fileCoeffCount} SH coefficients ({fileBand}); this splat will import at {fileBand}, not {entry.shBand}.",
+                    $"ソースは SH 係数を {fileCoeffCount} 個 ({fileBand}) しか持ちません。{entry.shBand} ではなく {fileBand} でインポートされます。"), MessageType.Warning);
+            }
+
+            // Combined modes bake SH per stored splat, so the computed-LOD pyramid counts against the cap too.
+            int effectiveCoeffCount = Mathf.Min(fileCoeffCount, requestedCoeffCount);
+            int estimatedSourceCount = EstimateSelectedImportSplatCount(entry);
+            if (!entry.importAsLOD || estimatedSourceCount <= 0)
+            {
+                return;
+            }
+
+            int storedCount = EstimateStoredLodSplatCount(estimatedSourceCount, entry.lodChunkSize, entry.lodComputeSplats, entry.lodResamplePercent, entry.lodReusePercent);
+            SHBand cappedBand = GaussianSplatImporter.ResolveLODImportSHBand(effectiveCoeffCount, storedCount);
+            int cappedCoeffCount = GaussianSplatImporter.SHCoeffCountForBand(cappedBand);
+            if (cappedCoeffCount >= effectiveCoeffCount)
+            {
+                return;
+            }
+
+            long shTexels = (long)storedCount * effectiveCoeffCount;
+            string outcomeEn = cappedCoeffCount > 0
+                ? $"This splat will import at {cappedBand} instead."
+                : "No SH band fits at this stored splat count, so this splat will import DC-only.";
+            string outcomeJa = cappedCoeffCount > 0
+                ? $"代わりに {cappedBand} でインポートされます。"
+                : "この保存 Splat 数では収まる SH バンドがないため、DC のみでインポートされます。";
+            string lodNoteEn = entry.lodComputeSplats
+                ? $" Computed LOD raises the stored count above the {estimatedSourceCount:N0} source splats; without it the import stores {estimatedSourceCount:N0}."
+                : string.Empty;
+            string lodNoteJa = entry.lodComputeSplats
+                ? $" 計算 LOD により保存数がソースの {estimatedSourceCount:N0} splat を超えています。無効にすると {estimatedSourceCount:N0} が保存されます。"
+                : string.Empty;
+            EditorGUILayout.HelpBox(GSEditorText.T(
+                $"{GaussianSplatImporter.SHBandForCoeffCount(effectiveCoeffCount)} needs {storedCount:N0} stored splats x {effectiveCoeffCount} coefficients = {shTexels:N0} SH texels, over the import cap of {GaussianSplatImporter.MaxLODImportSHTexels:N0}. {outcomeEn}{lodNoteEn}",
+                $"{GaussianSplatImporter.SHBandForCoeffCount(effectiveCoeffCount)} は 保存 {storedCount:N0} splat x 係数 {effectiveCoeffCount} = SH テクセル {shTexels:N0} を要し、インポート上限 {GaussianSplatImporter.MaxLODImportSHTexels:N0} を超えます。{outcomeJa}{lodNoteJa}"), MessageType.Warning);
+        }
+
         string GetComputedLodSplatEstimateLabel(ImportEntry entry)
         {
             int estimatedSourceCount = EstimateSelectedImportSplatCount(entry);
@@ -3013,10 +3128,11 @@ namespace GaussianSplatting.Editor.Importers
                 EditorGUILayout.HelpBox(GSEditorText.T(
                     "Imports higher-order SH coefficient textures only up to the selected max band and sets the imported material to that band. If the selected band has no non-zero coefficients in the file, the importer falls back to the highest lower non-zero band.",
                     "選択した最大バンドまでの高次 SH 係数テクスチャだけをインポートし、インポートされたマテリアルをそのバンドに設定します。選択したバンドに非ゼロ係数がない場合は、より低い非ゼロの最大バンドにフォールバックします。"), MessageType.Info);
+                DrawSHLimitWarnings(entry);
                 entry.shCompression = (GaussianSplatImporter.SHCompression)EditorGUILayout.EnumPopup(GSEditorText.T("SH Compression", "SH 圧縮"), entry.shCompression);
                 EditorGUILayout.HelpBox(GSEditorText.T(
-                    "SH texture format (LOD and non-LOD): None = RGB565 (largest), BC1 = 4bpp (smallest), BC7 = 8bpp. Compression is lossy but SH error is small. (LOD only: SH is kept while the whole scene's fused SH fits one texture; oversized splats fall back to DC.)",
-                    "SH テクスチャ形式 (LOD・非 LOD 共通): None = RGB565 (最大)、BC1 = 4bpp (最小)、BC7 = 8bpp。圧縮は不可逆ですが SH の誤差は小さいです。(LOD のみ: SH はシーン全体の統合 SH が 1 テクスチャに収まる場合のみ保持され、超過する Splat は DC にフォールバックします。)"), MessageType.Info);
+                    "SH texture format (LOD and non-LOD): None = RGB565 (largest), BC1 = 4bpp (smallest), BC7 = 8bpp. Compression is lossy but SH error is small. (LOD only: the import steps down to the highest band that fits its SH cap, and the scene's fused SH must fit one texture; objects past that fall back to DC.)",
+                    "SH テクスチャ形式 (LOD・非 LOD 共通): None = RGB565 (最大)、BC1 = 4bpp (最小)、BC7 = 8bpp。圧縮は不可逆ですが SH の誤差は小さいです。(LOD のみ: インポートは SH 上限に収まる最大バンドまで自動的に下げられ、さらにシーン全体の統合 SH は 1 テクスチャに収まる必要があります。超過するオブジェクトは DC にフォールバックします。)"), MessageType.Info);
             }
             else
             {
