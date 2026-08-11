@@ -4,6 +4,24 @@
 
 Gaussian splatting for VRChat worlds: runtime camera-sorted rendering through Udon, a splat importer, an in-world gallery and control UI, automatic editor Scene-view sorting, and editor tools for terrain colliders and re-importing.
 
+<h2 align="center">Support</h2>
+
+<p align="center">If you want to support this project you can do so here:</p>
+
+<p align="center">
+  <a href="https://mishamm.gumroad.com/"><img src="Resources/Textures/Social/gumroad.png" width="44" alt="Gumroad"></a>
+  <a href="https://misham.booth.pm/"><img src="Resources/Textures/Social/booth.png" width="44" alt="BOOTH"></a>
+  <a href="https://www.patreon.com/cw/misha_m"><img src="Resources/Textures/Social/patreon.png" width="44" alt="Patreon"></a>
+  <a href="https://github.com/sponsors/MichaelMoroz"><img src="Resources/Textures/Social/github_sponsors.png" width="44" alt="GitHub Sponsors"></a>
+</p>
+
+<p align="center">
+  <a href="https://mishamm.gumroad.com/">Gumroad</a> ·
+  <a href="https://misham.booth.pm/">BOOTH</a> ·
+  <a href="https://www.patreon.com/cw/misha_m">Patreon</a> ·
+  <a href="https://github.com/sponsors/MichaelMoroz">GitHub Sponsors</a>
+</p>
+
 ## Features
 
 - Sorted-only runtime rendering through `GaussianSplatRenderer`
@@ -206,6 +224,24 @@ The shader can integrate with VRC Light Volumes through the `VRC Light Volumes` 
 ![サンプルシーンビュー](image.png)
 
 VRChat ワールド向けのガウシアンスプラッティング：Udon によるランタイムのカメラソートレンダリング、スプラットインポーター、ワールド内ギャラリー＆コントロール UI、エディタ Scene ビューの自動ソート、地形コライダーや再インポートのためのエディタツール。
+
+<h2 align="center">支援について</h2>
+
+<p align="center">このプロジェクトを支援したい場合は、こちらからお願いします：</p>
+
+<p align="center">
+  <a href="https://mishamm.gumroad.com/"><img src="Resources/Textures/Social/gumroad.png" width="44" alt="Gumroad"></a>
+  <a href="https://misham.booth.pm/"><img src="Resources/Textures/Social/booth.png" width="44" alt="BOOTH"></a>
+  <a href="https://www.patreon.com/cw/misha_m"><img src="Resources/Textures/Social/patreon.png" width="44" alt="Patreon"></a>
+  <a href="https://github.com/sponsors/MichaelMoroz"><img src="Resources/Textures/Social/github_sponsors.png" width="44" alt="GitHub Sponsors"></a>
+</p>
+
+<p align="center">
+  <a href="https://mishamm.gumroad.com/">Gumroad</a> ·
+  <a href="https://misham.booth.pm/">BOOTH</a> ·
+  <a href="https://www.patreon.com/cw/misha_m">Patreon</a> ·
+  <a href="https://github.com/sponsors/MichaelMoroz">GitHub Sponsors</a>
+</p>
 
 ## 機能
 
