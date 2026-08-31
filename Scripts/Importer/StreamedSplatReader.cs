@@ -1,4 +1,4 @@
-#if UNITY_EDITOR && !COMPILER_UDONSHARP
+﻿#if UNITY_EDITOR && !COMPILER_UDONSHARP
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -142,37 +142,53 @@ namespace GaussianSplatting
             shRange = new Vector4(Mathf.Max(mx.x - mn.x, 1e-8f), Mathf.Max(mx.y - mn.y, 1e-8f), Mathf.Max(mx.z - mn.z, 1e-8f), 0.0f);
         }
 
-        // Largest SH band whose every f_rest coefficient/channel is present in the file.
-        public static int DetectSHCoeffCount(Dictionary<string, int> offsets)
+        // INRIA PLYs always separate the SH channels by 15 coefficients, even when fewer bands were
+        // exported; other exporters (LichtFeld Studio) pack them back to back at the exported count.
+        // Both layouts are channel-major: every coefficient of R, then of G, then of B.
+        public const int InriaSHChannelStride = 15;
+        static readonly int[] SHBandCoeffCounts = { 15, 8, 3 };
+
+        // Largest SH band whose every f_rest coefficient/channel is present in the file, plus the
+        // per-channel stride the file packs them at. Returns 0 when there is no usable SH.
+        public static int DetectSHCoeffCount(Dictionary<string, int> offsets, out int channelStride)
         {
-            int[] bandCoeffCounts = { 15, 8, 3 };
-            for (int b = 0; b < bandCoeffCounts.Length; b++)
+            channelStride = InriaSHChannelStride;
+
+            // The layouts differ only in how far the gapless f_rest run reaches: a stride-15 file stops
+            // at its own coefficient count, a consecutive one at three times it. 45 means both agree.
+            int run = 0;
+            while (offsets.ContainsKey($"f_rest_{run}")) run++;
+            if (run == 0) return 0;
+
+            if (run != InriaSHChannelStride * 3 && run % 3 == 0 && run / 3 >= SHBandCoeffCounts[SHBandCoeffCounts.Length - 1])
             {
-                int coeffCount = bandCoeffCounts[b];
+                channelStride = run / 3;
+                for (int b = 0; b < SHBandCoeffCounts.Length; b++)
+                {
+                    if (SHBandCoeffCounts[b] <= channelStride) return SHBandCoeffCounts[b];
+                }
+                return 0;
+            }
 
-                // Test original format (INRIA) where channels are always separated by 15
-                bool completeInria = true;
-                for (int coeff = 0; coeff < coeffCount && completeInria; coeff++)
+            for (int b = 0; b < SHBandCoeffCounts.Length; b++)
+            {
+                int coeffCount = SHBandCoeffCounts[b];
+                bool complete = true;
+                for (int coeff = 0; coeff < coeffCount && complete; coeff++)
                 {
                     for (int channel = 0; channel < 3; channel++)
                     {
-                        if (!offsets.ContainsKey($"f_rest_{coeff + channel * 15}")) { completeInria = false; break; }
+                        if (!offsets.ContainsKey($"f_rest_{coeff + channel * InriaSHChannelStride}")) { complete = false; break; }
                     }
                 }
-                if (completeInria) return coeffCount;
-
-                // Test consecutive format (e.g. LichtFeld) where channels are packed consecutively
-                bool completeConsecutive = true;
-                for (int coeff = 0; coeff < coeffCount && completeConsecutive; coeff++)
-                {
-                    for (int channel = 0; channel < 3; channel++)
-                    {
-                        if (!offsets.ContainsKey($"f_rest_{coeff + channel * coeffCount}")) { completeConsecutive = false; break; }
-                    }
-                }
-                if (completeConsecutive) return coeffCount;
+                if (complete) return coeffCount;
             }
             return 0;
+        }
+
+        public static int DetectSHCoeffCount(Dictionary<string, int> offsets)
+        {
+            return DetectSHCoeffCount(offsets, out _);
         }
 
         public static PLYLayout ReadPLYLayout(string plyPath)
@@ -204,16 +220,8 @@ namespace GaussianSplatting
                 splatOffsets[i] = offsets[required[i]];
             }
 
-            int shCoeffCount = DetectSHCoeffCount(offsets);
+            int shCoeffCount = DetectSHCoeffCount(offsets, out int channelStride);
             int[] shOffsets = new int[shCoeffCount * 3];
-
-            // Determine if the file uses a stride of 15 or consecutive packing
-            int channelStride = 15;
-            if (shCoeffCount > 0 && !offsets.ContainsKey($"f_rest_{0 + 2 * 15}"))
-            {
-                channelStride = shCoeffCount;
-            }
-
             for (int coeff = 0; coeff < shCoeffCount; coeff++)
             {
                 for (int channel = 0; channel < 3; channel++)

@@ -250,32 +250,19 @@ namespace GaussianSplatting.Editor
 
         static SHBand InferAvailableShBand(List<(string, PLYFileReader.ElementType)> attributes)
         {
-            int coefficientTriplets = 0;
-            for (int coefficient = 0; coefficient < 15; coefficient++)
-            {
-                bool hasTriplet = HasFloatAttribute(attributes, "f_rest_" + coefficient)
-                    && HasFloatAttribute(attributes, "f_rest_" + (coefficient + 15))
-                    && HasFloatAttribute(attributes, "f_rest_" + (coefficient + 30));
+            int coefficientCount = StreamedSplatReader.DetectSHCoeffCount(StreamedSplatReader.BuildFloatAttributeOffsets(attributes));
 
-                if (!hasTriplet)
-                {
-                    continue;
-                }
-
-                coefficientTriplets++;
-            }
-
-            if (coefficientTriplets >= 15)
+            if (coefficientCount >= 15)
             {
                 return SHBand.SH3;
             }
 
-            if (coefficientTriplets >= 8)
+            if (coefficientCount >= 8)
             {
                 return SHBand.SH2;
             }
 
-            if (coefficientTriplets >= 3)
+            if (coefficientCount >= 3)
             {
                 return SHBand.SH1;
             }
