@@ -143,37 +143,37 @@ namespace GaussianSplatting
         }
 
         // Largest SH band whose every f_rest coefficient/channel is present in the file.
-public static int DetectSHCoeffCount(Dictionary<string, int> offsets)
-{
-    int[] bandCoeffCounts = { 15, 8, 3 };
-    for (int b = 0; b < bandCoeffCounts.Length; b++)
-    {
-        int coeffCount = bandCoeffCounts[b];
-        
-        // Test original format (INRIA) where channels are always separated by 15
-        bool completeInria = true;
-        for (int coeff = 0; coeff < coeffCount && completeInria; coeff++)
+        public static int DetectSHCoeffCount(Dictionary<string, int> offsets)
         {
-            for (int channel = 0; channel < 3; channel++)
+            int[] bandCoeffCounts = { 15, 8, 3 };
+            for (int b = 0; b < bandCoeffCounts.Length; b++)
             {
-                if (!offsets.ContainsKey($"f_rest_{coeff + channel * 15}")) { completeInria = false; break; }
-            }
-        }
-        if (completeInria) return coeffCount;
+                int coeffCount = bandCoeffCounts[b];
 
-        // Test consecutive format (e.g. LichtFeld) where channels are packed consecutively
-        bool completeConsecutive = true;
-        for (int coeff = 0; coeff < coeffCount && completeConsecutive; coeff++)
-        {
-            for (int channel = 0; channel < 3; channel++)
-            {
-                if (!offsets.ContainsKey($"f_rest_{coeff + channel * coeffCount}")) { completeConsecutive = false; break; }
+                // Test original format (INRIA) where channels are always separated by 15
+                bool completeInria = true;
+                for (int coeff = 0; coeff < coeffCount && completeInria; coeff++)
+                {
+                    for (int channel = 0; channel < 3; channel++)
+                    {
+                        if (!offsets.ContainsKey($"f_rest_{coeff + channel * 15}")) { completeInria = false; break; }
+                    }
+                }
+                if (completeInria) return coeffCount;
+
+                // Test consecutive format (e.g. LichtFeld) where channels are packed consecutively
+                bool completeConsecutive = true;
+                for (int coeff = 0; coeff < coeffCount && completeConsecutive; coeff++)
+                {
+                    for (int channel = 0; channel < 3; channel++)
+                    {
+                        if (!offsets.ContainsKey($"f_rest_{coeff + channel * coeffCount}")) { completeConsecutive = false; break; }
+                    }
+                }
+                if (completeConsecutive) return coeffCount;
             }
+            return 0;
         }
-        if (completeConsecutive) return coeffCount;
-    }
-    return 0;
-}
 
         public static PLYLayout ReadPLYLayout(string plyPath)
         {
@@ -204,24 +204,24 @@ public static int DetectSHCoeffCount(Dictionary<string, int> offsets)
                 splatOffsets[i] = offsets[required[i]];
             }
 
-int shCoeffCount = DetectSHCoeffCount(offsets);
-int[] shOffsets = new int[shCoeffCount * 3];
+            int shCoeffCount = DetectSHCoeffCount(offsets);
+            int[] shOffsets = new int[shCoeffCount * 3];
 
-// Determine if the file uses a stride of 15 or consecutive packing
-int channelStride = 15;
-if (shCoeffCount > 0 && !offsets.ContainsKey($"f_rest_{0 + 2 * 15}"))
-{
-    channelStride = shCoeffCount;
-}
+            // Determine if the file uses a stride of 15 or consecutive packing
+            int channelStride = 15;
+            if (shCoeffCount > 0 && !offsets.ContainsKey($"f_rest_{0 + 2 * 15}"))
+            {
+                channelStride = shCoeffCount;
+            }
 
-for (int coeff = 0; coeff < shCoeffCount; coeff++)
-{
-    for (int channel = 0; channel < 3; channel++)
-    {
-        shOffsets[coeff * 3 + channel] = offsets.TryGetValue($"f_rest_{coeff + channel * channelStride}", out int o) ? o : -1;
-    }
-}
-return new PLYLayout { count = count, stride = stride, splatOffsets = splatOffsets, shOffsets = shOffsets, shCoeffCount = shCoeffCount };
+            for (int coeff = 0; coeff < shCoeffCount; coeff++)
+            {
+                for (int channel = 0; channel < 3; channel++)
+                {
+                    shOffsets[coeff * 3 + channel] = offsets.TryGetValue($"f_rest_{coeff + channel * channelStride}", out int o) ? o : -1;
+                }
+            }
+            return new PLYLayout { count = count, stride = stride, splatOffsets = splatOffsets, shOffsets = shOffsets, shCoeffCount = shCoeffCount };
         }
 
         public static Dictionary<string, int> BuildFloatAttributeOffsets(List<(string, PLYFileReader.ElementType)> attributes)
