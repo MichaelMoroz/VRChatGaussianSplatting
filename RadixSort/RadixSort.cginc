@@ -30,3 +30,11 @@ v2f vertHistogram (appdata_img v) {
     o.pos = UnityObjectToClipPos(v.vertex * float4(_HistogramScale, 1.0, 1.0));
     return o;
 }
+
+// Digit j of a group's digit pack: 4 bits each, 6 per float channel as exact ints.
+uint DigitAt(float4 pack, uint j) {
+    uint channel = j / 6u;
+    uint shift = (j - channel * 6u) * 4u;
+    uint bits = channel == 0u ? (uint)round(pack.x) : (channel == 1u ? (uint)round(pack.y) : (uint)round(pack.z));
+    return (bits >> shift) & 15u;
+}

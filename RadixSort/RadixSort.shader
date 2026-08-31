@@ -27,12 +27,9 @@ Shader "Misha/RadixSort"
             //#pragma enable_d3d11_debug_symbols
             #include "RadixSort.cginc"
 
-            float PackHistogramCounts(uint4 counts)
-            {
-                return (float)(counts.x | (counts.y << 5u) | (counts.z << 10u) | (counts.w << 15u));
-            }
-
-            // Build all 16 digit counts for a 16-key group with one pass over the keys.
+            // Record the 16 group digits themselves (4 bits each, 6 per float channel as
+            // exact ints) with one pass over the keys; later passes decode counts and
+            // in-group positions from the pack instead of re-reading the keys.
             float4 frag (v2f i) : SV_Target {
                 uint2 pixel = floor(i.pos.xy);
                 uint groupIndex = UVToIndex(pixel);
@@ -48,28 +45,20 @@ Shader "Misha/RadixSort"
 
                 uint groupElementCount = min(groupElements, elementCount - keyIndex);
                 uint mask = ((1u << _BitsPerStep) - 1u);
-                uint4 counts0 = 0u;
-                uint4 counts1 = 0u;
-                uint4 counts2 = 0u;
-                uint4 counts3 = 0u;
+                uint3 acc = uint3(0u, 0u, 0u);
 
                 [unroll(16)]
-                for(uint i = 0u; i < groupElementCount; ++i) {
-                    uint groupKeyIndex = keyIndex + i;
-                    uint2 groupPixel = IndexToUV(groupKeyIndex);
-                    uint key = asuint(_KeyValues[groupPixel].y);
+                for(uint j = 0u; j < groupElementCount; ++j) {
+                    uint key = asuint(_KeyValues[IndexToUV(keyIndex + j)].y);
                     uint digit = (key >> _CurrentBit) & mask;
-                    counts0 += uint4(digit == 0u, digit == 1u, digit == 2u, digit == 3u);
-                    counts1 += uint4(digit == 4u, digit == 5u, digit == 6u, digit == 7u);
-                    counts2 += uint4(digit == 8u, digit == 9u, digit == 10u, digit == 11u);
-                    counts3 += uint4(digit == 12u, digit == 13u, digit == 14u, digit == 15u);
+                    uint channel = j / 6u;
+                    uint shift = (j - channel * 6u) * 4u;
+                    if (channel == 0u) acc.x |= digit << shift;
+                    else if (channel == 1u) acc.y |= digit << shift;
+                    else acc.z |= digit << shift;
                 }
 
-                return float4(
-                    PackHistogramCounts(counts0),
-                    PackHistogramCounts(counts1),
-                    PackHistogramCounts(counts2),
-                    PackHistogramCounts(counts3));
+                return float4((float)acc.x, (float)acc.y, (float)acc.z, 0.0);
             }
             ENDCG
         }
@@ -85,30 +74,7 @@ Shader "Misha/RadixSort"
             //#pragma enable_d3d11_debug_symbols
             #include "RadixSort.cginc"
 
-            uint UnpackHistogramCount(float4 packedHistogram, uint digitIndex)
-            {
-                uint packedGroup = digitIndex >> 2u;
-                uint packed = 0u;
-                if (packedGroup == 0u)
-                {
-                    packed = (uint)round(packedHistogram.x);
-                }
-                else if (packedGroup == 1u)
-                {
-                    packed = (uint)round(packedHistogram.y);
-                }
-                else if (packedGroup == 2u)
-                {
-                    packed = (uint)round(packedHistogram.z);
-                }
-                else
-                {
-                    packed = (uint)round(packedHistogram.w);
-                }
-                return (packed >> ((digitIndex & 3u) * 5u)) & 31u;
-            }
-
-            // Expand the packed group histograms into the scalar digit/group layout expected by mip prefix sums.
+            // Expand the digit-pack histograms into the scalar digit/group layout expected by mip prefix sums.
             float frag (v2f i) : SV_Target {
                 uint2 pixel = floor(i.pos.xy);
                 uint morton = UVToIndex(pixel);
@@ -121,8 +87,18 @@ Shader "Misha/RadixSort"
 
                 if(digitIndex >= (1u << _BitsPerStep) || groupIndex >= groupCount) return 0.0;
 
-                uint2 histogramPixel = IndexToUV(groupIndex);
-                return (float)UnpackHistogramCount(_Histograms[histogramPixel], digitIndex);
+                uint keyIndex = groupIndex << (uint)_GroupSize;
+                uint elementCount = uint(_ElementCount);
+                if(keyIndex >= elementCount) return 0.0;
+                uint groupElementCount = min(1u << _GroupSize, elementCount - keyIndex);
+
+                float4 pack = _Histograms[IndexToUV(groupIndex)];
+                uint count = 0u;
+                [unroll(16)]
+                for(uint j = 0u; j < groupElementCount; ++j) {
+                    count += uint(DigitAt(pack, j) == digitIndex);
+                }
+                return (float)count;
             }
             ENDCG
         }
@@ -140,42 +116,40 @@ Shader "Misha/RadixSort"
             #pragma fragment frag
             //#pragma enable_d3d11_debug_symbols
             #include "RadixSort.cginc"
-            
-            // Do binary search for the key value at the given sorted index.
+
+            // Binary search the prefix-sum mips for the key at the given sorted index, then
+            // locate it inside its group from the digit pack: one histogram load and one
+            // keyvalue load instead of scanning the group's keys.
             float2 frag (v2f i) : SV_Target {
                 uint2 pixel = floor(i.pos.xy);
                 uint index = UVToIndex(pixel);
                 uint elementCount = uint(_ElementCount);
                 if(index >= elementCount) return float2(1e10, 1e10); // Return a large value if index is out of bounds
 
-                // Do binary search for the key value in the prefix sum by summing/going over the mips 
                 uint _ImageSize = _KeyValues_TexelSize.z;
                 uint prefixWidth = (_ImageSize << (_BitsPerStep >> 1)) >> (_GroupSize >> 1);
-                uint elementsLog2 = _ImageElementsLog2;
-                uint groupsLog2 = elementsLog2 - _GroupSize;
-                uint count;
+                uint groupsLog2 = (uint)_ImageElementsLog2 - _GroupSize;
+                float count;
                 int2 activePixel = ActiveTexelIndexToUV(_PrefixSums, prefixWidth, index, count);
                 uint activeIndex = UVToIndex(activePixel);
                 uint digitIndex = activeIndex >> groupsLog2;
-                uint keyIndex = (activeIndex - (digitIndex << groupsLog2)) << _GroupSize;
+                uint groupIndex = activeIndex - (digitIndex << groupsLog2);
+                uint keyIndex = groupIndex << _GroupSize;
+                uint groupElementCount = min(1u << _GroupSize, elementCount - keyIndex);
 
-                // Find the final key value in the group
-                float2 keyValue = float2(1e10, 1e10);
-                uint groupElements = 1u << _GroupSize;
-                uint groupElementCount = min(groupElements, elementCount - keyIndex);
-                uint mask = ((1u << _BitsPerStep) - 1u);
+                // Slot of the (index - count)-th occurrence of digitIndex inside the group.
+                float4 pack = _Histograms[IndexToUV(groupIndex)];
+                uint occurrence = index - (uint)count;
+                uint matches = 0u;
+                uint slot = 0u;
                 [unroll(16)]
-                for(uint i = 0u; i < groupElementCount; ++i) {
-                    uint groupIndex = keyIndex + i;
-                    uint2 groupPixel = IndexToUV(groupIndex);
-                    keyValue = _KeyValues[groupPixel];
-                    uint key = asuint(keyValue.y);
-                    uint digit = (key >> _CurrentBit) & mask;
-                    count += uint(digit == digitIndex);
-                    if(count > index) break;
+                for(uint j = 0u; j < groupElementCount; ++j) {
+                    bool match = DigitAt(pack, j) == digitIndex;
+                    if(match && matches == occurrence) slot = j;
+                    matches += uint(match);
                 }
 
-                return keyValue;
+                return _KeyValues[IndexToUV(keyIndex + slot)];
             }
             ENDCG
         }

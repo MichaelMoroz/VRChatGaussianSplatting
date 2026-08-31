@@ -43,6 +43,9 @@ float CountActiveTexels(Texture2D<float> _Texels, int3 uv) {
     return CountActiveTexels(_Texels, uv, int2(0, 0));
 }
 
+// Binary search for the base-level texel containing sorted position `index`, descending
+// the mip pyramid two levels per step: 15 independent loads per step instead of 3
+// dependent 2x2 steps, halving the serial load chain.
 int2 ActiveTexelIndexToUV(Texture2D<float> _Texels, float height, float index, out float activePrevTexelSum) {
     float maxLod = round(log2(height));
     int3 uv = int3(0, 0, maxLod);
@@ -53,25 +56,48 @@ int2 ActiveTexelIndexToUV(Texture2D<float> _Texels, float height, float index, o
         activePrevTexelSum = countTotal;
         return -1;
     }
-    while (uv.z >= 1)
+    [loop]
+    while (uv.z >= 2)
+    {
+        uv = int3(uv.x << 2, uv.y << 2, uv.z - 2);
+        float counts[16];
+        [unroll] for (int q = 0; q < 4; q++)
+        [unroll] for (int k = 0; k < 4; k++)
+        {
+            // Grandchild counts in Morton order: q is the upper-level child, k the lower.
+            int2 offset = int2(((q & 1) << 1) | (k & 1), (q & 2) | (k >> 1));
+            counts[(q << 2) | k] = CountActiveTexels(_Texels, int3(uv.xy + offset, uv.z));
+        }
+        // First grandchild whose cumulative count exceeds index; scan the running prefix
+        // so zero-count grandchildren cannot re-trigger the comparison.
+        float run = activePrevTexelSum;
+        float chosenSum = activePrevTexelSum;
+        int chosen = 0;
+        [unroll] for (int m = 0; m < 15; m++)
+        {
+            run += counts[m];
+            if (index >= run) { chosen = m + 1; chosenSum = run; }
+        }
+        activePrevTexelSum = chosenSum;
+        int cq = chosen >> 2, ck = chosen & 3;
+        uv.xy += int2(((cq & 1) << 1) | (ck & 1), (cq & 2) | (ck >> 1));
+    }
+    // Odd mip count leaves one ordinary 2x2 step.
+    if (uv.z == 1)
     {
         uv += int3(uv.xy, -1);
         float count00 = CountActiveTexels(_Texels, uv);
         float count01 = CountActiveTexels(_Texels, uv, int2(1, 0));
         float count10 = CountActiveTexels(_Texels, uv, int2(0, 1));
-        bool in00 = index < (activePrevTexelSum + count00);
-        bool in01 = index < (activePrevTexelSum + count00 + count01);
-        bool in10 = index < (activePrevTexelSum + count00 + count01 + count10);
-        if (in00)
+        if (index < activePrevTexelSum + count00)
         {
-            uv.xy += int2(0, 0);
         }
-        else if (in01)
+        else if (index < activePrevTexelSum + count00 + count01)
         {
             uv.xy += int2(1, 0);
             activePrevTexelSum += count00;
         }
-        else if (in10)
+        else if (index < activePrevTexelSum + count00 + count01 + count10)
         {
             uv.xy += int2(0, 1);
             activePrevTexelSum += count00 + count01;
